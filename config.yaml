@@ -61,7 +61,7 @@ big_stock_move_pct: 7.5
 # Unusual volume: alert when a KSE-100/watchlist stock trades this multiple of its 10-day average
 unusual_volume_x: 3.0
 # PSX company filings: company pages checked per run (top-10 by index weight + watchlist every run)
-psx_filings_per_run: 30
+psx_filings_per_run: 20
 
 # Sector-relevant commodities and regional cues (shown in the morning brief)
 commodities:

@@ -51,7 +51,7 @@ def main() -> None:
 
     cfg = load_config()
     if args.cmd == "run":
-        run_once(cfg, args.dry_run)
+        run_once(cfg, args.dry_run)  # never raises: errors are contained and reported privately
     elif args.cmd == "brief":
         run_once(cfg, args.dry_run, force_brief=args.name)
     elif args.cmd == "loop":

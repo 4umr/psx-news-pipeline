@@ -85,14 +85,14 @@ def sbp_changes(new: dict, state: State) -> list[Alert]:
         pr_new, pr_old = new.get("policy_rate"), old.get("policy_rate")
         if pr_new is not None and pr_old is not None and pr_new != pr_old:
             from . import street
-            move = "CUT" if pr_new < pr_old else "HIKE"
+            move = "cut" if pr_new < pr_old else "hike"
             called = street.score_mpc(state, round((pr_new - pr_old) * 100))
             alerts.append(Alert(
                 header("🚨", f"SBP Policy Rate {move}", "Breaking · State Bank of Pakistan") + "\n"
                 f"🏦 Policy rate: <b>{pr_old:.2f}% ➜ {pr_new:.2f}%</b> {bps(pr_new, pr_old)}\n\n"
-                f"📌 <b>Why it matters:</b> The policy rate sets bank lending/deposit rates and T-bill "
+                f"💡 The policy rate sets bank lending/deposit rates and T-bill "
                 f"yields; cuts usually support equity valuations, hikes weigh on them.\n"
-                f"🏭 <b>Sectors in focus:</b> Banks · Cement · Autos · Steel · Fertilizer\n"
+                f"🏭 In focus: Banks · Cement · Autos · Steel · Fertilizer\n"
                 + (f"\n{called}\n" if called else "") +
                 f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 10, f"sbp:pr:{pr_new}",
                 tags=["SBP", "PolicyRate", "InterestRates"]))
@@ -106,7 +106,7 @@ def sbp_changes(new: dict, state: State) -> list[Alert]:
                 f"{arrow(d_sbp)} SBP reserves: <b>{usd_bn(r_new['sbp'])}</b> ({d_sbp:+,.0f}m WoW)\n"
                 f"{arrow(d_tot)} Total liquid: <b>{usd_bn(r_new['total'])}</b> ({d_tot:+,.0f}m WoW)\n"
                 f"▫️ Commercial banks: {usd_bn(r_new['banks'])}\n\n"
-                f"📌 <b>Why it matters:</b> Rising reserves support the rupee and investor confidence; "
+                f"💡 Rising reserves support the rupee and investor confidence; "
                 f"falling reserves add external pressure.\n"
                 f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 9, f"sbp:res:{r_new['as_on']}",
                 tags=["Reserves", "SBP", "PKR"]))
@@ -118,7 +118,7 @@ def sbp_changes(new: dict, state: State) -> list[Alert]:
                     header("📜", f"{name} Auction Result", f"Auction of {n['as_on']}") + "\n"
                     f"Cut-off yields (change vs previous auction):\n{tenor_line(n['yields'], o.get('yields'))}\n"
                     f"🏦 Policy rate: {fmt_num(new.get('policy_rate'))}%\n\n"
-                    f"📌 <b>Why it matters:</b> Cut-off yields show where the market expects rates "
+                    f"💡 Cut-off yields show where the market expects rates "
                     f"to go — falling yields often front-run policy rate cuts.\n"
                     f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 9, f"sbp:{key}:{n['as_on']}",
                     tags=["TBills" if key == "mtb" else "PIB", "Yields", "SBP"]))
@@ -246,7 +246,7 @@ def fipi_alert(now, state: State) -> list[Alert]:
     sectors = fipi_sectors(now)
     text = (header("🌍", "Investor Flows · FIPI / LIPI", f"{now:%A %d %b %Y}") + "\n" + fipi_block(data, rate) +
             (f"\n\n{sectors}" if sectors else "") +
-            f"\n\n📌 <b>Why it matters:</b> Sustained foreign buying or selling is a key driver of PSX direction.\n"
+            f"\n\n💡 Sustained foreign buying or selling is a key driver of PSX direction.\n"
             f"🔗 {link(SCS_URL + 'FIPILIPI.aspx', 'SCS Trade / NCCPL')}")
     return [Alert(text, 8, key, tags=["FIPI", "ForeignFlows"])]
 
@@ -297,12 +297,12 @@ def kse_moves(now, state: State, cfg: dict) -> tuple[list[Alert], list[dict]]:
         return stock_alerts, view
     pos, neg = contributors(view)
     icon = "🚀" if pct > 0 else "🚨"
-    direction = "UP" if pct > 0 else "DOWN"
+    direction = "up" if pct > 0 else "down"
     text = (header(icon, f"KSE-100 {direction} {abs(pct):.2f}% intraday", f"Market alert · {now:%H:%M} PKT") + "\n"
             f"📈 KSE-100: <b>{cur:,.0f}</b> ({cur - pre:+,.0f} pts)\n\n"
             f"🟢 <b>Lifting:</b> {contrib_line(pos)}\n"
             f"🔴 <b>Dragging:</b> {contrib_line(neg)}\n\n"
-            f"📌 Check the news feed for the trigger before reacting.\n"
+            f"💡 Check the news feed for the trigger before reacting.\n"
             f"🔗 {link(SCS_URL + 'MarketStatistics/MS_IndexView.aspx', 'SCS Trade index view')}")
     return [Alert(text, 10 if abs(pct) >= 3 else 9, f"kse:{hit}", tags=["KSE100", "MarketAlert"])] + stock_alerts, view
 
@@ -378,7 +378,7 @@ def stock_moves(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
         lines.append(f"{arrow(pct)} {star}<b>{esc(code)}</b> {pct:+.2f}% → Rs {cur:,.2f}{note}")
     text = (header("⚡", "Big stock moves", f"KSE-100 / watchlist · {now:%H:%M} PKT") + "\n"
             + "\n".join(lines) +
-            "\n\n📌 Large single-stock moves often follow company news — check announcements before reacting."
+            "\n\n💡 Large single-stock moves often follow company news — check announcements before reacting."
             + (f"\n👁️ = on your watchlist" if any(h[3] for h in hits) else ""))
     return [Alert(text, 8, "stocks", tags=["StockAlert", "KSE100"])]
 
@@ -420,7 +420,7 @@ def pbs_releases(state: State) -> list[Alert]:
             alerts.append(Alert(
                     header("🛒", "Weekly SPI (Sensitive Price Indicator)", f"Week ended {d['week']} · PBS") + "\n"
                     f"{trend(d['wow'])} SPI: <b>{d['index']:.2f}</b> ({d['wow']:+.2f}% WoW)\n\n"
-                    f"📌 <b>Why it matters:</b> SPI tracks weekly prices of essential items — an early "
+                    f"💡 SPI tracks weekly prices of essential items — an early "
                     f"signal for monthly CPI and the SBP's rate path.\n"
                     f"🔗 {link(url, 'Pakistan Bureau of Statistics')}", 8, f"spi:{d['week']}",
                     tags=["SPI", "Inflation"]))
@@ -444,9 +444,9 @@ def _cpi_alert(d: dict, url: str, state: State) -> Alert:
     from . import street
     if called := street.score_cpi(state, g["yoy"]):
         lines += ["", called]
-    lines += ["", "📌 <b>Why it matters:</b> Inflation is the main input for the SBP's next rate decision; "
+    lines += ["", "💡 Inflation is the main input for the SBP's next rate decision; "
               "a positive real rate gives room for cuts, a negative one pressure for hikes.",
-              "🏭 <b>Sectors in focus:</b> Banks · Cement · FMCG · Autos",
+              "🏭 In focus: Banks · Cement · FMCG · Autos",
               f"🔗 {link(url, 'Pakistan Bureau of Statistics')} · {link(d['doc'], 'full review')}"]
     return Alert("\n".join(lines), 10, f"cpi:{g['month']}", tags=["CPI", "Inflation", "SBP"])
 
@@ -489,9 +489,9 @@ def mpc_watch(now, state: State) -> list[Alert]:
         from . import street
         if calls := street.pending_calls(state, "mpc"):
             ctx.append(f"🧠 Street calls: {calls}")
-        return [Alert(header("🏦", "MPC meeting tomorrow", f"{nxt:%A %d %B %Y} · SBP Monetary Policy Committee")
+        return [Alert(header("🏦", "SBP MPC meeting tomorrow", f"{nxt:%A %d %B %Y} · SBP Monetary Policy Committee")
                       + "\n" + "\n".join(ctx) +
-                      "\n\n📌 The decision is usually announced in the afternoon/evening — we'll alert you "
+                      "\n\n💡 The decision is usually announced in the afternoon/evening — we'll alert you "
                       "the moment it's out.\n🔗 " + link("https://www.sbp.org.pk/our-operations/monetary-policy",
                                                          "SBP MPC calendar"),
                       9, k, tags=["SBP", "MPC", "PolicyRate"])]
@@ -536,7 +536,7 @@ def mpc_hold_check(now, state: State) -> None:
 # ---------------------------------------------------------------- PSX company filings
 NOISE = re.compile(r"transmission of|unclaimed|e-?dividend|zakat|change of (registered )?address|dividend warrant|"
                    r"credit of|duplicate|lost share|cdc|annual general meeting|notice of agm|closed period|"
-                   r"resolutions passed|proxy", re.I)
+                   r"resolutions passed|proxy|video recording|dissemination of", re.I)
 
 
 def psx_filings(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
@@ -581,20 +581,28 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
     state.data["psx_known"] = sorted(known)
     if not fresh:
         return []
-    lines = []
+    lines, done = [], set()
     for sym, f in fresh:
+        if (sym, f["title"].lower()) in done:  # same notice filed twice (e.g. daily buy-back reports)
+            continue
+        done.add((sym, f["title"].lower()))
         r = px.get(sym, {})
         price = ""
         if r.get("CurrentPrice") and r.get("LDCP"):
             pct = (r["CurrentPrice"] / r["LDCP"] - 1) * 100
             price = f" · Rs {r['CurrentPrice']:,.2f} ({pct:+.1f}%)"
         star = "👁️" if sym in wl else "⭐"
-        tag = "📢 " if "material" in f["title"].lower() else ""
-        doc = f" · {link(f['url'], '📄 filing')}" if f["url"] else ""
-        lines.append(f"{star} <b>{esc(sym)}</b> — {tag}{esc(f['title'][:140])}{price}{doc}")
-    text = (header("📢", "PSX company filings", f"{len(fresh)} new · straight from PSX") + "\n"
+        title = f["title"]
+        if re.search(r"disclosure of interest", title, re.I):
+            title = "👤 Insider dealing disclosure (director / executive / major shareholder traded shares)"
+        elif "material" in title.lower():
+            title = "📢 " + title
+        doc = f" · {link(f['url'], 'view filing')}" if f["url"] else ""
+        detail = " · ".join(x for x in (price.lstrip(" ·"), doc.lstrip(" ·")) if x)
+        lines.append(f"{star} <b>{esc(sym)}</b> — {esc(title[:140])}" + (f"\n      {detail}" if detail else ""))
+    text = (header("📢", "New company filings on PSX", "Straight from the exchange") + "\n"
             + "\n".join(lines) +
-            "\n\n📌 Company disclosures often reach PSX before the news media — open the filing for full details.")
+            "\n\n💡 Company disclosures often reach PSX before the news media — open the filing for full details.")
     return [Alert(text, 9, "psxfilings", tags=["PSXFilings", "MaterialInformation"])]
 
 
@@ -635,7 +643,7 @@ def unusual_volume(now, state: State, cfg: dict, kse100: set[str]) -> list[Alert
             pct = f" · price {chg / (close - chg) * 100:+.1f}%"
         lines.append(f"🔎 <b>{esc(code)}</b> {vol / 1e6:,.2f}m shares — <b>{x:.1f}×</b> its 10-day average{pct}")
     text = (header("🔎", "Unusual volume", f"KSE-100 / watchlist · {now:%H:%M} PKT") + "\n" + "\n".join(lines) +
-            "\n\n📌 Volume spikes often come before or with news — check filings and headlines.")
+            "\n\n💡 Volume spikes often come before or with news — check filings and headlines.")
     return [Alert(text, 8, "volume", tags=["UnusualVolume", "KSE100"])]
 
 
@@ -677,7 +685,7 @@ def global_moves(mk: dict, state: State, cfg: dict) -> list[Alert]:
         alerts.append(Alert(
             header("🌐", f"{name} {fmt_pct(d['pct'], 1)}", "Global market move") + "\n"
             f"{arrow(d['pct'])} {esc(name)}: <b>{val}</b> ({fmt_pct(d['pct'], 1)} today)\n\n"
-            f"📌 <b>Why it matters:</b> {GLOBAL_WHY.get(sym, '')}", 8, k, tags=["GlobalMarkets"]))
+            f"💡 {GLOBAL_WHY.get(sym, '')}", 8, k, tags=["GlobalMarkets"]))
     if alerts:
         log.info("global alerts: %d", len(alerts))
     return alerts

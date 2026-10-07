@@ -16,11 +16,14 @@ class State:
     def __init__(self, path: Path = STATE_PATH):
         self.path = path
         self.data: dict = {}
-        if path.exists():
-            try:
-                self.data = json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                self.data = {}
+        bak = path.with_suffix(".bak")
+        for candidate in (path, bak):  # fall back to the previous good copy if the file is damaged
+            if candidate.exists():
+                try:
+                    self.data = json.loads(candidate.read_text(encoding="utf-8"))
+                    break
+                except (json.JSONDecodeError, OSError):
+                    continue
         self.is_new = not self.data
         self.data.setdefault("seen", {})
         self.data.setdefault("titles", [])
@@ -71,6 +74,11 @@ class State:
         closes = d["kse_closes"]
         d["kse_closes"] = dict(sorted(closes.items())[-30:])
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists():  # keep the previous good copy
+            try:
+                self.path.with_suffix(".bak").write_bytes(self.path.read_bytes())
+            except OSError:
+                pass
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         tmp.replace(self.path)

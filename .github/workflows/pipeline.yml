@@ -2,8 +2,8 @@ name: PSX News Pipeline
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # every 5 minutes, 24/7 (GitHub may delay runs by a few minutes)
-  workflow_dispatch:         # "Run workflow" button for manual runs
+    - cron: "*/5 * * * *"   # every 5 minutes, 24/7 (GitHub may delay runs; cron-job.org can trigger faster)
+  workflow_dispatch:         # "Run workflow" button and external 2-minute trigger
     inputs:
       command:
         description: "What to do"
@@ -19,14 +19,18 @@ on:
           - about
           - chats
 
+# Never run two at once (prevents double posting); a newer trigger waits for the current run.
 concurrency:
   group: psx-pipeline
   cancel-in-progress: false
 
+permissions:
+  contents: write   # needed only to keep the backup copy of the state in the 'state' branch
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -35,15 +39,28 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - run: pip install -r requirements.txt
+      - name: Install
+        run: pip install -r requirements.txt || (sleep 20 && pip install -r requirements.txt)
 
-      # Restore the latest saved state (what was already sent, last indicator values)
+      # 1) Primary memory: GitHub cache (what was already sent, last indicator values)
       - name: Restore state
+        id: cache
         uses: actions/cache/restore@v4
         with:
           path: state/state.json
           key: psx-state-v2-${{ github.run_id }}
           restore-keys: psx-state-v2-
+
+      # 2) Fallback memory: the 'state' branch backup (if the cache was evicted or GitHub lost it)
+      - name: Restore state from backup branch
+        if: steps.cache.outputs.cache-matched-key == ''
+        run: |
+          mkdir -p state
+          if git fetch --depth=1 origin state 2>/dev/null; then
+            git show FETCH_HEAD:state.json > state/state.json && echo "Restored state from backup branch"
+          else
+            echo "No backup yet (first run)"
+          fi
 
       - name: Run pipeline
         env:
@@ -54,8 +71,41 @@ jobs:
         run: python -m pipeline ${{ inputs.command || 'run' }}
 
       - name: Save state
-        if: always()
+        if: always() && hashFiles('state/state.json') != ''
         uses: actions/cache/save@v4
         with:
           path: state/state.json
           key: psx-state-v2-${{ github.run_id }}
+
+      # Back up the state to the 'state' branch about every 15 minutes (single commit, no history growth).
+      # This also counts as repository activity, so GitHub never pauses the schedule.
+      - name: Back up state
+        if: always() && hashFiles('state/state.json') != ''
+        run: |
+          m=$(date -u +%M)
+          if [ $((10#$m % 15)) -lt 3 ] || [ "${{ steps.cache.outputs.cache-matched-key }}" = "" ]; then
+            tmp=$(mktemp -d)
+            cp state/state.json "$tmp/state.json"
+            cd "$tmp"
+            git init -q -b state
+            git config user.name "pipeline-bot"
+            git config user.email "pipeline-bot@users.noreply.github.com"
+            git add state.json
+            git commit -qm "state backup $(date -u +%FT%TZ)"
+            git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" state \
+              && echo "State backed up" || echo "Backup push failed (will retry next time)"
+          fi
+
+      # If the whole run failed (e.g. GitHub/PyPI outage), tell the owner privately — at most every 3 hours.
+      - name: Notify owner on failure
+        if: failure()
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ADMIN: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+        run: |
+          h=$(date -u +%H); m=$(date -u +%M)
+          if [ -n "$ADMIN" ] && [ $((10#$h % 3)) -eq 0 ] && [ $((10#$m)) -lt 10 ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+              -d chat_id="${ADMIN}" \
+              --data-urlencode text="⚠️ PSX pipeline: a run failed. It will keep retrying automatically. Details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > /dev/null
+          fi

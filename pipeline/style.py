@@ -1,4 +1,4 @@
-"""Shared message styling: headers, dividers, hashtags and the branded footer.
+"""Shared message styling: clean headlines, sections and a one-line branded signature.
 
 Messages are designed to read well in Telegram AND survive copy-paste /
 forwarding to WhatsApp (structure is carried by emojis and line breaks,
@@ -8,12 +8,13 @@ from __future__ import annotations
 
 from .common import esc, link
 
-DIV = "━━━━━━━━━━━━━━━━━━"
+DIV = "────────────"
 
 
 def header(icon: str, title: str, sub: str = "") -> str:
-    line = f"{icon} <b>{esc(title.upper())}</b>"
-    return f"{line}\n{esc(sub)}\n{DIV}" if sub else f"{line}\n{DIV}"
+    """Friendly headline: icon + bold title, with an optional quiet subtitle line."""
+    line = f"{icon} <b>{esc(title)}</b>"
+    return f"{line}\n<i>{esc(sub)}</i>\n" if sub else f"{line}\n"
 
 
 def section(icon: str, title: str) -> str:
@@ -31,19 +32,16 @@ def hashtags(tags: list[str]) -> str:
 
 
 def footer(cfg: dict, tags: list[str] | None = None, compact: bool = False) -> str:
+    """One quiet signature line: brand · author · disclaimer (+ Join link). `tags` kept for compatibility."""
     b = cfg.get("brand", {})
-    parts = []
-    if tags:
-        parts.append(hashtags(tags + ["PSX"]))
-    parts.append(DIV)
     by = f"by {esc(b.get('author', ''))}" + (f", {esc(b.get('title'))}" if b.get("title") else "")
-    brand_line = f"🇵🇰 <b>{esc(b.get('name', ''))}</b> · {by}"
-    if b.get("channel_link") and not compact:
-        brand_line += f" · {link(b['channel_link'], 'Join')}"
-    parts.append(brand_line)
+    line = f"🇵🇰 {esc(b.get('name', ''))} · {by}"
     if cfg.get("disclaimer") and (cfg.get("disclaimer_on_alerts") or not compact):
-        parts.append(f"<i>ℹ️ {esc(cfg['disclaimer'])}</i>")
-    return "\n" + "\n".join(parts)
+        line += " · info only, not investment advice"
+    out = f"\n\n<i>{line}</i>"
+    if b.get("channel_link"):
+        out += f"\n👉 {link(b['channel_link'], 'Join ' + b.get('name', 'the channel'))}"
+    return out
 
 
 def to_whatsapp(text: str, cfg: dict) -> str:

@@ -89,6 +89,18 @@ python -m pipeline run        # one full pass
 - **Add a search:** add a line under `google_news:`
 - **Disclaimer text:** `disclaimer:`
 
+## Built to run unattended
+Everything runs on GitHub's servers, so your laptop or phone can be off for days.
+- **Isolated components:** if one source or feature breaks, only that part is skipped. You get a private warning after 3 failures in a row, and a "Recovered" note when it's fixed.
+- **Progress always saved:** even on a crash, so nothing is posted twice.
+- **Two copies of memory:** the GitHub cache, plus a backup in the `state` branch that's restored automatically if the cache is lost.
+- **Retries:** messages that fail to send are retried for up to 6 hours.
+- **Bad-data guard:** impossible numbers are never posted to the channel; you're told privately instead.
+- **Pinned library versions:** an update elsewhere can't silently break the code.
+- **Failure alert:** if a whole run fails (e.g. a GitHub outage), you get a private alert, at most every 3 hours.
+- **Daily health report** in your private chat at 23:45 PKT: number of runs, messages sent and source health.
+- **Never paused:** the regular state backups and the monthly keepalive stop GitHub pausing the schedule after 60 days.
+
 ## Speed and reliability notes
 - GitHub's 5-minute schedule usually runs every 5–15 minutes; at busy times it can be later. For alerts within 1–2 minutes, run `python -m pipeline loop --every 90` on any always-on machine (an old laptop, or a free Oracle Cloud "Always Free" VM).
 - The first run records what already exists and does **not** flood the channel with old news.

@@ -51,19 +51,24 @@ def _news_alerts(items: list[NewsItem], state: State, cfg: dict) -> tuple[list[N
 
 
 # ---------------------------------------------------------------- formatting
+def _split_label(label: str) -> tuple[str, str]:
+    """'⛽ Fuel / Energy Prices' -> ('⛽', 'Fuel / Energy Prices')"""
+    parts = label.split(" ", 1)
+    return (parts[0], parts[1]) if len(parts) == 2 and not parts[0].isalnum() else ("📰", label)
+
+
 def _fmt_instant(it: NewsItem, cfg: dict) -> str:
     when = to_pkt(it.published) or now_pkt()
-    kicker = "BREAKING" if it.score >= 10 else "IMPORTANT"
-    icon = "🚨" if it.score >= 10 else "🔴"
+    icon, topic = _split_label(it.label)
+    tag = "🚨 <b>Breaking</b>" if it.score >= 10 else "🔴 <b>Important</b>"
     m = meta(cfg, it.topic)
-    lines = [header(icon, f"{kicker} · {it.label.split(' ', 1)[-1]}", f"{when:%a %d %b · %H:%M} PKT"),
-             f"<b>{esc(it.title)}</b>", ""]
+    lines = [f"{tag} · {icon} {esc(topic)}", "", f"<b>{esc(it.title)}</b>", ""]
     if it.why:
-        lines.append(f"📌 <b>Why it matters:</b> {esc(it.why)}")
+        lines.append(f"💡 {esc(it.why)}")
     if m.get("sectors"):
-        lines.append(f"🏭 <b>Sectors in focus:</b> {esc(' · '.join(m['sectors']))}")
-    lines.append(f"🔗 Source: {link(it.url, it.source)}")
-    return "\n".join(lines) + footer(cfg, m.get("tags", []), compact=True)
+        lines.append(f"🏭 In focus: {esc(' · '.join(m['sectors']))}")
+    lines.append(f"🔗 {link(it.url, it.source)} · {when:%H:%M} PKT")
+    return "\n".join(lines) + footer(cfg, compact=True)
 
 
 def _fmt_digest(items: list[dict], cfg: dict) -> str:
@@ -75,28 +80,20 @@ def _fmt_digest(items: list[dict], cfg: dict) -> str:
         if len(g) < per_topic:
             g.append(it)
     items = [i for g in groups.values() for i in g]
-    blocks, tags = [], []
+    blocks = []
     for label, its in groups.items():
-        rows = []
-        for it in its:
-            dot = "🟠" if it["sc"] >= 6 else "🟡"
-            rows.append(f"{dot} {esc(it['t'])} — {link(it['u'], it['s'])}")
+        rows = [f"• {esc(it['t'])} — {link(it['u'], it['s'])}" for it in its]
         blocks.append(f"<b>{esc(label)}</b>\n" + "\n".join(rows))
-        tags += meta(cfg, its[0].get("topic", "")).get("tags", [])[:1]
-    return (header("📰", "PSX News Wrap", f"{now_pkt():%a %d %b · %H:%M} PKT · {len(items)} stories") + "\n"
-            + "\n\n".join(blocks) + footer(cfg, tags[:5], compact=True))
+    return (header("📰", "News wrap", f"{now_pkt():%a %d %b · %H:%M} PKT · {len(items)} stories") + "\n"
+            + "\n\n".join(blocks) + footer(cfg, compact=True))
 
 
 def _fmt_compact(d: dict, cfg: dict) -> str:
     """One headline, posted the moment it's found (instant news mode)."""
-    dot = "🟠" if d["sc"] >= 6 else "🟡"
     when = datetime.fromtimestamp(d.get("pub") or d["ts"], tz=now_pkt().tzinfo)
-    tags = meta(cfg, d.get("topic", "")).get("tags", [])[:2]
-    b = cfg.get("brand", {})
-    tag_line = " ".join(f"#{t}" for t in tags + ["PSX"])
-    return (f"{dot} <i>{esc(d['l'])}</i>\n<b>{esc(d['t'])}</b>\n"
-            f"🔗 {link(d['u'], d['s'])} · {when:%H:%M} PKT\n"
-            f"{tag_line}\n🇵🇰 <b>{esc(b.get('name', ''))}</b> · <i>info only, not advice</i>")
+    icon, topic = _split_label(d["l"])
+    return (f"{icon} <b>{esc(d['t'])}</b>\n"
+            f"<i>{esc(topic)}</i> · {link(d['u'], d['s'])} · {when:%H:%M}")
 
 
 def _with_footer(a: Alert, cfg: dict) -> str:
@@ -216,24 +213,108 @@ def _health(cfg: dict, state: State, sender: Sender, ok: dict[str, bool]) -> Non
                                   "If this lasts more than a day, the website may have changed.")
 
 
+def _safe(state: State, errors: list, name: str, fn, *args, default=None):
+    """Run one component; if it crashes, log it, remember it, and let the rest of the run continue."""
+    try:
+        return fn(*args)
+    except Exception as e:  # noqa: BLE001
+        log.exception("component failed: %s", name)
+        errors.append(f"{name}: {type(e).__name__}: {str(e)[:120]}")
+        return default
+
+
+def _component_health(state: State, sender: Sender, errors: list[str]) -> None:
+    """Private warning when the same component crashes 3 runs in a row (code/site changed)."""
+    h = state.data.setdefault("comp_errors", {})
+    failed = {e.split(":", 1)[0]: e for e in errors}
+    for name in list(h):
+        if name not in failed:
+            if h[name] >= 3:
+                sender.send_admin(f"✅ <b>Recovered:</b> {esc(name)} is working again.")
+            del h[name]
+    for name, err in failed.items():
+        h[name] = h.get(name, 0) + 1
+        if h[name] == 3:
+            sender.send_admin(f"⚠️ <b>Component error</b> (3 runs in a row): {esc(err)}\n"
+                              "Everything else keeps running. This usually means a website changed its layout.")
+
+
+def _stats(state: State, now: datetime, sender: Sender, errors: list[str]) -> None:
+    st = state.data.setdefault("stats", {})
+    day = st.setdefault(f"{now:%Y-%m-%d}", {"runs": 0, "msgs": 0, "errors": 0})
+    day["runs"] += 1
+    day["msgs"] += sender.sent
+    day["errors"] += len(errors)
+    for d in sorted(st)[:-10]:
+        del st[d]
+
+
+def _daily_report(cfg: dict, state: State, sender: Sender, now: datetime) -> None:
+    """23:45 PKT private 'system is alive' report with today's numbers and source health."""
+    if not sender.admin or (now.hour, now.minute) < (23, 45) or state.flag(f"report:{now:%Y-%m-%d}"):
+        return
+    state.set_flag(f"report:{now:%Y-%m-%d}")
+    day = state.data.get("stats", {}).get(f"{now:%Y-%m-%d}", {})
+    bad = [k for k, v in state.data.get("health", {}).items() if v >= 3]
+    comp = list(state.data.get("comp_errors", {}))
+    outbox = len(state.data.get("outbox", []))
+    sbp_s = state.snap("sbp") or {}
+    lines = [f"🩺 <b>Daily system report</b> · {now:%a %d %b}",
+             f"Runs today: <b>{day.get('runs', 0)}</b> · Messages sent: <b>{day.get('msgs', 0)}</b> · "
+             f"Component errors: {day.get('errors', 0)}",
+             f"Sources: {'✅ all healthy' if not bad else '⚠️ down: ' + esc(', '.join(bad))}",
+             f"Components: {'✅ OK' if not comp else '⚠️ failing: ' + esc(', '.join(comp))}",
+             f"Undelivered (retrying): {outbox}",
+             f"Last SBP data: policy {sbp_s.get('policy_rate', 'n/a')}% · reserves as on "
+             f"{(sbp_s.get('reserves') or {}).get('as_on', 'n/a')}",
+             f"Street forecasts tracked: {len(state.data.get('street', {}).get('forecasts', []))}"]
+    if day.get("runs", 0) < 30:
+        lines.append("ℹ️ Fewer runs than expected — GitHub's free scheduler may be slow today; "
+                     "the 2-minute cron-job.org trigger fixes this.")
+    sender.send_admin("\n".join(lines))
+
+
 def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -> None:
     t0 = time.time()
     state = State()
     sender = Sender(dry_run)
-    bootstrap = state.is_new
     now = now_pkt()
+    errors: list[str] = []
+    try:
+        _run(cfg, state, sender, now, errors, force_brief, t0)
+    except Exception as e:  # noqa: BLE001 — last line of defence: never lose progress
+        log.exception("run crashed")
+        errors.append(f"run: {type(e).__name__}: {str(e)[:120]}")
+    finally:
+        if not state.data.pop("_bootstrap_failed", False):
+            _safe(state, errors, "health", _component_health, state, sender, errors)
+            _stats(state, now, sender, errors)
+            _safe(state, errors, "daily report", _daily_report, cfg, state, sender, now)
+            if sender.failed:
+                state.data["outbox"] = (state.data.get("outbox", []) + sender.failed)[-20:]
+            state.save()
+        log.info("run finished in %.1fs, messages=%d, component errors=%d",
+                 time.time() - t0, sender.sent, len(errors))
+
+
+def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, force_brief, t0: float) -> None:
+    bootstrap = state.is_new
     if bootstrap:
         log.info("First run: recording current state silently (no flood of old news)")
 
+    def S(name, fn, *a, default=None):
+        return _safe(state, errors, name, fn, *a, default=default)
+
     with ThreadPoolExecutor(max_workers=5) as ex:
-        f_news = ex.submit(news.collect, cfg)
-        f_sbp = ex.submit(sbp.fetch)
-        f_res = ex.submit(scs.results)
-        f_mk = ex.submit(markets.snapshot, list(cfg["global_markets"]))
-        f_view = ex.submit(scs.kse100_view)
+        f_news = ex.submit(S, "news feeds", news.collect, cfg, default=[])
+        f_sbp = ex.submit(S, "SBP", sbp.fetch, default=({}, []))
+        f_res = ex.submit(S, "SCS results", scs.results, default=[])
+        f_mk = ex.submit(S, "global markets", markets.snapshot, list(cfg["global_markets"]), default={})
+        f_view = ex.submit(S, "KSE-100 view", scs.kse100_view, default=[])
         sbp_snap, sbp_items = f_sbp.result()
         mk = f_mk.result()
-        kse_symbols = {r.get("company_code") for r in f_view.result()}
+        view_now = f_view.result()
+        kse_symbols = {r.get("company_code") for r in view_now}
         news_items = f_news.result()
 
     _health(cfg, state, sender, {
@@ -241,27 +322,28 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
         "PSX data (SCS Trade)": bool(kse_symbols),
         "News feeds": len(news_items) >= 100,
         "Global markets": len(mk) >= 5,
+        "Telegram channel delivery": not state.data.get("channel_fail", False),
     })
 
-    street.capture(sbp_items + news_items, state)   # brokerage forecasts for the accuracy scoreboard
+    S("street capture", street.capture, sbp_items + news_items, state)
 
     alerts: list[Alert] = []
-    alerts += watchers.pbs_releases(state)     # before news: marks the PBS posts as handled
-    alerts += watchers.mpc_watch(now, state)
-    watchers.mpc_hold_check(now, state)
-    view_now = f_view.result()
-    alerts += watchers.psx_filings(now, state, cfg, view_now)
-    alerts += watchers.unusual_volume(now, state, cfg, kse_symbols)
-    alerts += watchers.sbp_changes(sbp_snap, state)
-    alerts += watchers.corporate_results(f_res.result(), state, kse_symbols)
-    alerts += watchers.fipi_alert(now, state)
-    kse_alerts, view = watchers.kse_moves(now, state, cfg)
+    alerts += S("PBS releases", watchers.pbs_releases, state, default=[])  # before news: marks PBS posts handled
+    alerts += S("MPC calendar", watchers.mpc_watch, now, state, default=[])
+    S("MPC hold check", watchers.mpc_hold_check, now, state)
+    alerts += S("PSX filings", watchers.psx_filings, now, state, cfg, view_now, default=[])
+    alerts += S("unusual volume", watchers.unusual_volume, now, state, cfg, kse_symbols, default=[])
+    alerts += S("SBP changes", watchers.sbp_changes, sbp_snap, state, default=[])
+    alerts += S("corporate results", watchers.corporate_results, f_res.result(), state, kse_symbols, default=[])
+    alerts += S("FIPI", watchers.fipi_alert, now, state, default=[])
+    kse_alerts, view = S("KSE moves", watchers.kse_moves, now, state, cfg, default=([], []))
     alerts += kse_alerts
-    alerts += watchers.global_moves(mk, state, cfg)
-    watchers.record_close(now, state)
+    view = view or view_now
+    alerts += S("global moves", watchers.global_moves, mk, state, cfg, default=[])
+    S("record close", watchers.record_close, now, state)
 
     # official items first so their links win over re-reports
-    instant, digest = _news_alerts(sbp_items + news_items, state, cfg)
+    instant, digest = S("news scoring", _news_alerts, sbp_items + news_items, state, cfg, default=([], []))
 
     if bootstrap:
         for name in briefs.due(cfg, state, now, grace_hours=24):
@@ -271,14 +353,14 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
             # Telegram not reachable (wrong chat id / bot not admin): don't record
             # the first run, so the welcome + snapshot are retried next time.
             log.error("Telegram delivery failed — first run will be retried next time")
+            state.data["_bootstrap_failed"] = True
             return
-        _send_brief("morning", cfg, state, mk, view, sender, title="Market Snapshot")
+        S("snapshot brief", lambda: _send_brief("morning", cfg, state, mk, view, sender, title="Market Snapshot"))
         state.data["last_digest"] = int(time.time())
-        state.save()
         log.info("bootstrap done in %.1fs", time.time() - t0)
         return
 
-    sender.retry_outbox(state.data.pop("outbox", []))
+    S("outbox retry", sender.retry_outbox, state.data.pop("outbox", []))
 
     wa_mode = cfg.get("brand", {}).get("whatsapp_copy", "important")
 
@@ -293,26 +375,25 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
             continue
         msg = _with_footer(a, cfg)
         sender.send(msg, preview=a.preview)
-        wa(msg, a.priority >= 9)
+        S("whatsapp copy", wa, msg, a.priority >= 9)
     for it in instant:
         msg = _fmt_instant(it, cfg)
         sender.send(msg)
-        wa(msg, it.score >= 10)
+        S("whatsapp copy", wa, msg, it.score >= 10)
     _queue_digest(digest, state)
     if cfg.get("news_mode", "instant") == "instant":
-        n_digest = _flush_instant(cfg, state, sender, now)
-    else:
-        n_digest = _flush_digest(cfg, state, sender) if _digest_due(cfg, state, now) else 0
+        S("news posts", _flush_instant, cfg, state, sender, now)
+    elif _digest_due(cfg, state, now):
+        S("news digest", _flush_digest, cfg, state, sender)
 
     names = [force_brief] if force_brief else briefs.due(cfg, state, now)
     for name in names:
-        text = _send_brief(name, cfg, state, mk, view, sender)
+        text = S(f"{name} brief", _send_brief, name, cfg, state, mk, view, sender)
         if text:
-            wa(text, True)
-        state.data["briefs"][name] = f"{now:%Y-%m-%d}"
+            S("whatsapp copy", wa, text, True)
+            state.data["briefs"][name] = f"{now:%Y-%m-%d}"  # only mark sent if it actually built
 
-    if sender.failed:
-        state.data["outbox"] = sender.failed[-20:]
-    state.save()
-    log.info("run done in %.1fs: %d alerts, %d instant news, %d queued, %d in digest, briefs=%s, messages=%d",
-             time.time() - t0, len(alerts), len(instant), len(digest), n_digest, names, sender.sent)
+    # remember whether the channel accepted messages (bot removed / token revoked -> admin warning)
+    if sender.channel_attempts:
+        state.data["channel_fail"] = not sender.channel_ok
+    log.info("run: %d alerts, %d instant news, %d queued, briefs=%s", len(alerts), len(instant), len(digest), names)

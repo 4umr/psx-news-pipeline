@@ -44,6 +44,8 @@ class Sender:
         self.admin = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
         self.sent = 0
         self.failed: list[dict] = []   # messages to retry next run (outbox)
+        self.channel_attempts = 0      # posts attempted to the channel this run
+        self.channel_ok = True         # False if Telegram refused (bot removed / token revoked)
         if self.dry:
             self.preview = ROOT / "out" / "preview.txt"
             self.preview.parent.mkdir(exist_ok=True)
@@ -133,8 +135,12 @@ class Sender:
                     # Malformed HTML — resend as plain text rather than lose it
                     payload.pop("parse_mode", None)
                     continue
+                if chat != self.admin:
+                    self.channel_attempts += 1
                 if not r.ok:
                     log.error("Telegram error %s: %s", r.status_code, r.text[:200])
+                    if chat != self.admin and r.status_code in (400, 401, 403) and "parse" not in r.text.lower():
+                        self.channel_ok = False
                     if r.status_code >= 500 and chat != self.admin:
                         self.failed.append({"chat": chat, "text": text, "ts": int(time.time())})
                     return False
