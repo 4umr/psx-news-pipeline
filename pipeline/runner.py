@@ -45,6 +45,8 @@ def _news_alerts(items: list[NewsItem], state: State, cfg: dict) -> tuple[list[N
                 continue
             n_global += 1
         digest.append(i)
+    if cfg.get("news_mode", "instant") == "instant":
+        return instant, digest[:60]  # overflow is queued and posted over the next runs
     return instant, digest[: cfg["max_digest_items"]]
 
 
@@ -85,6 +87,18 @@ def _fmt_digest(items: list[dict], cfg: dict) -> str:
             + "\n\n".join(blocks) + footer(cfg, tags[:5], compact=True))
 
 
+def _fmt_compact(d: dict, cfg: dict) -> str:
+    """One headline, posted the moment it's found (instant news mode)."""
+    dot = "🟠" if d["sc"] >= 6 else "🟡"
+    when = datetime.fromtimestamp(d.get("pub") or d["ts"], tz=now_pkt().tzinfo)
+    tags = meta(cfg, d.get("topic", "")).get("tags", [])[:2]
+    b = cfg.get("brand", {})
+    tag_line = " ".join(f"#{t}" for t in tags + ["PSX"])
+    return (f"{dot} <i>{esc(d['l'])}</i>\n<b>{esc(d['t'])}</b>\n"
+            f"🔗 {link(d['u'], d['s'])} · {when:%H:%M} PKT\n"
+            f"{tag_line}\n🇵🇰 <b>{esc(b.get('name', ''))}</b> · <i>info only, not advice</i>")
+
+
 def _with_footer(a: Alert, cfg: dict) -> str:
     return a.text + footer(cfg, a.tags, compact=True)
 
@@ -92,17 +106,8 @@ def _with_footer(a: Alert, cfg: dict) -> str:
 # ---------------------------------------------------------------- digest batching
 def _digest_due(cfg: dict, state: State, now: datetime) -> bool:
     pending = state.data.setdefault("pending", [])
-    if not pending:
+    if not pending or _in_quiet_hours(cfg, now):
         return False
-    q = cfg.get("digest_quiet_hours")
-    if q:
-        start, end = q
-        if start > end:  # window crosses midnight, e.g. 23:30 -> 07:30
-            quiet = in_window(now, start, "23:59") or in_window(now, "00:00", end)
-        else:
-            quiet = in_window(now, start, end)
-        if quiet:
-            return False
     last = state.data.get("last_digest", 0)
     return time.time() - last >= cfg.get("digest_every_minutes", 30) * 60
 
@@ -111,7 +116,32 @@ def _queue_digest(items: list[NewsItem], state: State) -> None:
     pending = state.data.setdefault("pending", [])
     for it in items:
         pending.append({"t": it.title, "u": it.url, "s": it.source, "sc": it.score,
-                        "l": it.label, "topic": it.topic, "ts": int(time.time())})
+                        "l": it.label, "topic": it.topic, "ts": int(time.time()),
+                        "pub": int(it.published.timestamp()) if it.published else None})
+
+
+def _in_quiet_hours(cfg: dict, now: datetime) -> bool:
+    q = cfg.get("digest_quiet_hours")
+    if not q:
+        return False
+    start, end = q
+    if start > end:  # crosses midnight
+        return in_window(now, start, "23:59") or in_window(now, "00:00", end)
+    return in_window(now, start, end)
+
+
+def _flush_instant(cfg: dict, state: State, sender: Sender, now: datetime) -> int:
+    """Instant mode: post queued headlines one by one, best first, within the per-run budget."""
+    if _in_quiet_hours(cfg, now):
+        return 0
+    pending = [p for p in state.data.get("pending", []) if time.time() - p["ts"] < 12 * 3600]
+    pending.sort(key=lambda p: (-p["sc"], p["ts"]))
+    budget = cfg.get("max_news_posts_per_run", 15)
+    send, keep = pending[:budget], pending[budget:]
+    for d in send:
+        sender.send(_fmt_compact(d, cfg))
+    state.data["pending"] = keep
+    return len(send)
 
 
 def _flush_digest(cfg: dict, state: State, sender: Sender) -> int:
@@ -260,7 +290,10 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
         sender.send(msg)
         wa(msg, it.score >= 10)
     _queue_digest(digest, state)
-    n_digest = _flush_digest(cfg, state, sender) if _digest_due(cfg, state, now) else 0
+    if cfg.get("news_mode", "instant") == "instant":
+        n_digest = _flush_instant(cfg, state, sender, now)
+    else:
+        n_digest = _flush_digest(cfg, state, sender) if _digest_due(cfg, state, now) else 0
 
     names = [force_brief] if force_brief else briefs.due(cfg, state, now)
     for name in names:

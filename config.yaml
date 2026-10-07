@@ -21,11 +21,14 @@ brand:
 disclaimer: "For information only — not investment advice."
 disclaimer_on_alerts: true
 
-# News digest batching: instant alerts always go out immediately; lower-priority
-# news is collected and sent as one digest at most every N minutes.
-digest_every_minutes: 30
-# No digests in this window (PKT) — they're held and sent after it ends.
-digest_quiet_hours: ["23:30", "07:30"]
+# How news is delivered:
+#   instant = every relevant headline is posted on its own as soon as it's found (default)
+#   digest  = lower-priority news is grouped into one "News Wrap" every digest_every_minutes
+news_mode: instant
+max_news_posts_per_run: 15     # Telegram channel limit safety; extra items go out next run
+digest_every_minutes: 30       # only used in digest mode
+# Hold lower-priority news during these hours (PKT), e.g. ["23:30", "07:30"]. Empty = 24/7.
+digest_quiet_hours: []
 
 # Ignore news older than this (stops old feed items flooding the channel)
 max_item_age_hours: 18
@@ -87,6 +90,15 @@ feeds:
   - {name: "ProPakistani", url: "https://propakistani.pk/category/business/feed/", pk: true}
   - {name: "Arab News PK", url: "https://www.arabnews.pk/rss.xml", pk: false}
   - {name: "PBS", url: "https://www.pbs.gov.pk/feed/", pk: true, official: true}
+  - {name: "APP", url: "https://www.app.com.pk/business/feed/", pk: true}
+  - {name: "APP", url: "https://www.app.com.pk/feed/", pk: true}
+  - {name: "Business Recorder", url: "https://www.brecorder.com/feeds/pakistan", pk: true}
+  - {name: "Business Recorder", url: "https://www.brecorder.com/feeds/business-finance", pk: false}
+  - {name: "Geo News", url: "https://www.geo.tv/rss/1/2", pk: true}
+  - {name: "ARY News", url: "https://arynews.tv/category/business/feed/", pk: true}
+  - {name: "Dawn", url: "https://www.dawn.com/feeds/home", pk: true}
+  - {name: "Express Tribune", url: "https://tribune.com.pk/feed/pakistan", pk: true}
+  - {name: "The Nation", url: "https://www.nation.com.pk/rss/business", pk: true}
 
 # Google News searches (Pakistan edition, last 24h). Catches Reuters,
 # Bloomberg, Mettis, Profit, Geo, Gulf News etc. that have no usable RSS.

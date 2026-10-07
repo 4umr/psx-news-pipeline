@@ -176,8 +176,18 @@ def find_chats() -> None:
         for k in ("message", "channel_post", "my_chat_member", "edited_channel_post"):
             if k in u:
                 c = u[k]["chat"]
-                found[c["id"]] = f'{c.get("type")}: {c.get("title") or c.get("username") or c.get("first_name")}'
+                found[c["id"]] = (c.get("type"), c.get("title") or c.get("username") or c.get("first_name") or "")
     if not found:
-        print("No chats yet. Post something in your channel (with the bot as admin), then run again.")
-    for cid, name in found.items():
-        print(f"{cid}  ->  {name}")
+        print("No chats yet. Open your bot in Telegram, press START (or send 'hi'), then run this again "
+              "within 24 hours.")
+    for cid, (kind, name) in found.items():
+        if kind == "private":
+            # Don't print personal ids in (public) logs — send the id to that person instead.
+            http().post(f"https://api.telegram.org/bot{token}/sendMessage", timeout=20, json={
+                "chat_id": cid,
+                "text": f"👋 Your personal chat ID is: {cid}\n\nCopy this number into the GitHub secret "
+                        f"TELEGRAM_ADMIN_CHAT_ID to receive private health alerts and WhatsApp-ready copies."})
+            masked = str(cid)[:2] + "*" * max(len(str(cid)) - 4, 0) + str(cid)[-2:]
+            print(f"{masked}  ->  private chat (full id sent to that person in Telegram)")
+        else:
+            print(f"{cid}  ->  {kind}: {name}")

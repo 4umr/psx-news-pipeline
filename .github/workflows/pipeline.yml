@@ -17,6 +17,7 @@ on:
           - brief close
           - brief week_ahead
           - about
+          - chats
 
 concurrency:
   group: psx-pipeline
