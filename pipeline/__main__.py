@@ -64,6 +64,7 @@ def main() -> None:
             sys.exit(1)
         ok = s.send("✅ Test message from your PSX News Pipeline.")
         print("Sent!" if ok else "Failed — check the token, chat id, and that the bot is an admin of the channel.")
+        sys.exit(0 if ok else 1)
     elif args.cmd == "chats":
         find_chats()
 

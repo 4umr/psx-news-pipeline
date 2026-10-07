@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: "*/5 * * * *"   # every 5 minutes, 24/7 (GitHub may delay runs by a few minutes)
   workflow_dispatch:         # "Run workflow" button for manual runs
+    inputs:
+      command:
+        description: "What to do"
+        type: choice
+        default: run
+        options:
+          - run
+          - test
+          - brief morning
+          - brief close
+          - brief week_ahead
 
 concurrency:
   group: psx-pipeline
@@ -28,19 +39,19 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: state/state.json
-          key: psx-state-${{ github.run_id }}
-          restore-keys: psx-state-
+          key: psx-state-v2-${{ github.run_id }}
+          restore-keys: psx-state-v2-
 
       - name: Run pipeline
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TZ: Asia/Karachi
-        run: python -m pipeline run
+        run: python -m pipeline ${{ inputs.command || 'run' }}
 
       - name: Save state
         if: always()
         uses: actions/cache/save@v4
         with:
           path: state/state.json
-          key: psx-state-${{ github.run_id }}
+          key: psx-state-v2-${{ github.run_id }}

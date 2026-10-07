@@ -104,7 +104,7 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
     if bootstrap:
         for name in briefs.due(cfg, state, now, grace_hours=24):
             state.data["briefs"][name] = f"{now:%Y-%m-%d}"
-        sender.send("✅ <b>PSX News Pipeline is live</b>\n\n"
+        ok = sender.send("✅ <b>PSX News Pipeline is live</b>\n\n"
                     "You will receive:\n"
                     "🚨 Instant alerts — SBP policy rate, T-bill/PIB auction results, reserves, CPI/SPI, "
                     "IMF, fuel prices, budget/tax, geopolitics, KSE-100 big moves, oil/gold/dollar shocks\n"
@@ -114,6 +114,11 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
                     "Google News (Reuters, Bloomberg, Mettis, Profit…)\n"
                     "☀️ Morning brief 08:45 · 🔔 Closing wrap 17:15 · 📅 Week ahead Sunday 19:00\n\n"
                     "Here is the current snapshot 👇")
+        if not ok:
+            # Telegram not reachable (wrong chat id / bot not admin): don't record
+            # the first run, so the welcome + snapshot are retried next time.
+            log.error("Telegram delivery failed — first run will be retried next time")
+            return
         sender.send(briefs.morning(cfg, state, mk, title="📸 <b>MARKET SNAPSHOT</b>"))
         state.save()
         log.info("bootstrap done in %.1fs", time.time() - t0)
