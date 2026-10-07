@@ -217,8 +217,9 @@ def fipi_sectors(day) -> str:
     buy = [r for r in reversed(rows[-3:]) if r["FLNetValueUSD"] > 0.005]
     sell = [r for r in rows[:3] if r["FLNetValueUSD"] < -0.005]
     from .briefs import _sector_name
-    name = lambda r: esc(_sector_name(r["FLSectorName"].replace("(mn$)", "").replace(" And ", " & ")  # noqa: E731
-                                      .replace(" AND ", " & ").strip()))
+    name = lambda r: esc(_sector_name(re.sub(r"\s+and\s+", " & ",  # noqa: E731
+                                             re.sub(r"\s+", " ", r["FLSectorName"].replace("(mn$)", "")),
+                                             flags=re.I).strip()))
     out = ["🏭 <b>Foreigners by sector (USD m)</b>"]
     if buy:
         out.append("🟢 Bought: " + " · ".join(f"{name(r)} {r['FLNetValueUSD']:+.2f}" for r in buy))
