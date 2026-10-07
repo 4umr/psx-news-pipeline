@@ -11,6 +11,7 @@ on:
         default: run
         options:
           - run
+          - test --admin-only
           - test
           - brief morning
           - brief close

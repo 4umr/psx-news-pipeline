@@ -39,7 +39,8 @@ def main() -> None:
     b = sub.add_parser("brief")
     b.add_argument("name", choices=["morning", "close", "week_ahead"])
     b.add_argument("--dry-run", action="store_true")
-    sub.add_parser("test")
+    tp = sub.add_parser("test")
+    tp.add_argument("--admin-only", action="store_true", help="only message the private admin chat")
     sub.add_parser("chats")
     ab = sub.add_parser("about")
     ab.add_argument("--dry-run", action="store_true")
@@ -65,14 +66,17 @@ def main() -> None:
         if s.dry:
             print("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set (.env or environment).")
             sys.exit(1)
-        ok = s.send("✅ Test message from your PSX News Pipeline.")
-        print("Channel: sent!" if ok else "Channel: FAILED — check the token, chat id, and that the bot is an admin of the channel.")
+        ok = True
+        if not args.admin_only:
+            ok = s.send("✅ Test message from your PSX News Pipeline.")
+            print("Channel: sent!" if ok else "Channel: FAILED — check the token, chat id, and that the bot is an admin of the channel.")
         if s.admin:
             a = s.send_admin("✅ Private admin alerts are working. Health warnings and WhatsApp-ready copies will arrive here.")
             print("Admin chat: sent!" if a else "Admin chat: FAILED — message your bot once from your own account, then check the id.")
             ok &= a
         else:
             print("Admin chat: not configured (TELEGRAM_ADMIN_CHAT_ID).")
+            ok = ok and not args.admin_only
         sys.exit(0 if ok else 1)
     elif args.cmd == "chats":
         find_chats()
