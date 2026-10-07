@@ -5,3 +5,4 @@ lxml>=5.0
 PyYAML>=6.0
 yfinance>=0.2.50
 python-dotenv>=1.0
+matplotlib>=3.8

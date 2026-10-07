@@ -111,6 +111,7 @@ class Alert:
     priority: int = 9            # >= min_score_instant -> sent standalone
     key: str = ""                # dedupe key
     preview: bool = False        # Telegram link preview
+    tags: list = field(default_factory=list)
     extra: dict = field(default_factory=dict)
 
 

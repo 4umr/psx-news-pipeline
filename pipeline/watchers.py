@@ -6,6 +6,7 @@ from datetime import timedelta
 from .common import Alert, arrow, esc, fmt_num, fmt_pct, in_window, link, log, now_pkt
 from .sources import scs
 from .state import State
+from .style import header
 
 SBP_URL = "https://www.sbp.org.pk/"
 SCS_URL = "https://www.scstrade.com/"
@@ -45,34 +46,39 @@ def sbp_changes(new: dict, state: State) -> list[Alert]:
         if pr_new is not None and pr_old is not None and pr_new != pr_old:
             move = "CUT" if pr_new < pr_old else "HIKE"
             alerts.append(Alert(
-                f"🚨🏦 <b>SBP POLICY RATE {move}</b>\n"
-                f"Policy rate: <b>{pr_old:.2f}% → {pr_new:.2f}%</b> {bps(pr_new, pr_old)}\n"
-                f"💡 Policy rate sets bank lending/deposit rates and T-bill yields; "
-                f"cuts usually support equity valuations, hikes weigh on them.\n"
-                f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 10, f"sbp:pr:{pr_new}"))
+                header("🚨", f"SBP Policy Rate {move}", "Breaking · State Bank of Pakistan") + "\n"
+                f"🏦 Policy rate: <b>{pr_old:.2f}% ➜ {pr_new:.2f}%</b> {bps(pr_new, pr_old)}\n\n"
+                f"📌 <b>Why it matters:</b> The policy rate sets bank lending/deposit rates and T-bill "
+                f"yields; cuts usually support equity valuations, hikes weigh on them.\n"
+                f"🏭 <b>Sectors in focus:</b> Banks · Cement · Autos · Steel · Fertilizer\n"
+                f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 10, f"sbp:pr:{pr_new}",
+                tags=["SBP", "PolicyRate", "InterestRates"]))
 
         r_new, r_old = new.get("reserves"), old.get("reserves")
         if r_new and r_old and r_new.get("as_on") != r_old.get("as_on"):
             d_sbp = (r_new["sbp"] or 0) - (r_old["sbp"] or 0)
             d_tot = (r_new["total"] or 0) - (r_old["total"] or 0)
             alerts.append(Alert(
-                f"💵 <b>SBP Forex Reserves</b> (as on {esc(r_new['as_on'])})\n"
-                f"{arrow(d_sbp)} SBP: <b>{usd_bn(r_new['sbp'])}</b> ({d_sbp:+,.0f}m)\n"
-                f"{arrow(d_tot)} Total liquid: <b>{usd_bn(r_new['total'])}</b> ({d_tot:+,.0f}m)\n"
-                f"Banks: {usd_bn(r_new['banks'])}\n"
-                f"💡 Rising reserves support the rupee and investor confidence; falling reserves add external pressure.\n"
-                f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 9, f"sbp:res:{r_new['as_on']}"))
+                header("💵", "SBP Forex Reserves", f"Weekly update · as on {r_new['as_on']}") + "\n"
+                f"{arrow(d_sbp)} SBP reserves: <b>{usd_bn(r_new['sbp'])}</b> ({d_sbp:+,.0f}m WoW)\n"
+                f"{arrow(d_tot)} Total liquid: <b>{usd_bn(r_new['total'])}</b> ({d_tot:+,.0f}m WoW)\n"
+                f"▫️ Commercial banks: {usd_bn(r_new['banks'])}\n\n"
+                f"📌 <b>Why it matters:</b> Rising reserves support the rupee and investor confidence; "
+                f"falling reserves add external pressure.\n"
+                f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 9, f"sbp:res:{r_new['as_on']}",
+                tags=["Reserves", "SBP", "PKR"]))
 
         for key, name in (("mtb", "T-Bill (MTB)"), ("pib", "Fixed-rate PIB")):
             n, o = new.get(key), old.get(key)
             if n and o and n.get("as_on") != o.get("as_on") and n.get("yields"):
                 alerts.append(Alert(
-                    f"📜 <b>{name} Auction Result</b> ({esc(n['as_on'])})\n"
-                    f"Cut-off yields vs previous auction:\n{tenor_line(n['yields'], o.get('yields'))}\n"
-                    f"Policy rate: {fmt_num(new.get('policy_rate'))}%\n"
-                    f"💡 Cut-off yields show where the market expects rates to go — "
-                    f"falling yields often front-run policy rate cuts.\n"
-                    f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 9, f"sbp:{key}:{n['as_on']}"))
+                    header("📜", f"{name} Auction Result", f"Auction of {n['as_on']}") + "\n"
+                    f"Cut-off yields (change vs previous auction):\n{tenor_line(n['yields'], o.get('yields'))}\n"
+                    f"🏦 Policy rate: {fmt_num(new.get('policy_rate'))}%\n\n"
+                    f"📌 <b>Why it matters:</b> Cut-off yields show where the market expects rates "
+                    f"to go — falling yields often front-run policy rate cuts.\n"
+                    f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 9, f"sbp:{key}:{n['as_on']}",
+                    tags=["TBills" if key == "mtb" else "PIB", "Yields", "SBP"]))
     merged = {**old, **new}
     state.set_snap("sbp", merged)
     return alerts
@@ -115,10 +121,10 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str]) -> list[
         lines.append(f"{star}<b>{esc(code)}</b> {period}: {' · '.join(bits) or 'see filing'} {doc}".rstrip())
     more = f"\n…and {len(fresh) - limit} more" if len(fresh) > limit else ""
     has_major = any(r.get("company_code") in kse100 for r in fresh)
-    text = (f"📊 <b>Corporate Results / Payouts</b> ({len(fresh)} new)\n"
-            f"⭐ KSE-100 · EPS in Rs · 📄 = PSX filing\n\n" + "\n".join(lines) + more +
-            f"\n\n🔗 {link(SCS_URL + 'MarketStatistics/MS_Announcements.aspx', 'SCS Trade')} · PDFs from PSX")
-    return [Alert(text, 8 if has_major else 7, "results")]
+    text = (header("📊", "Corporate Results & Payouts", f"{len(fresh)} new announcement(s)") + "\n"
+            f"⭐ KSE-100 company · EPS in Rs · 📄 PSX filing\n\n" + "\n".join(lines) + more +
+            f"\n\n🔗 {link(SCS_URL + 'MarketStatistics/MS_Announcements.aspx', 'SCS Trade')} · filings from PSX")
+    return [Alert(text, 8 if has_major else 7, "results", tags=["Results", "Dividends", "Corporate"])]
 
 
 # ---------------------------------------------------------------- FIPI
@@ -148,10 +154,10 @@ def fipi_alert(now, state: State) -> list[Alert]:
     state.set_flag(key)
     state.set_snap("fipi_last", data)
     rate = ((state.snap("sbp") or {}).get("usdpkr") or {}).get("m2m") or 280.0
-    text = (f"🌍 <b>Foreign / Local Investor Flows</b> — {now:%a %d %b}\n" + fipi_block(data, rate) +
-            f"\n💡 Sustained foreign buying/selling is a key driver of PSX direction.\n"
+    text = (header("🌍", "Investor Flows · FIPI / LIPI", f"{now:%A %d %b %Y}") + "\n" + fipi_block(data, rate) +
+            f"\n\n📌 <b>Why it matters:</b> Sustained foreign buying or selling is a key driver of PSX direction.\n"
             f"🔗 {link(SCS_URL + 'FIPILIPI.aspx', 'SCS Trade / NCCPL')}")
-    return [Alert(text, 8, key)]
+    return [Alert(text, 8, key, tags=["FIPI", "ForeignFlows"])]
 
 
 # ---------------------------------------------------------------- KSE-100 moves
@@ -193,13 +199,14 @@ def kse_moves(now, state: State, cfg: dict) -> tuple[list[Alert], list[dict]]:
         return [], view
     pos, neg = contributors(view)
     icon = "🚀" if pct > 0 else "🚨"
-    text = (f"{icon} <b>KSE-100 {'UP' if pct > 0 else 'DOWN'} {abs(pct):.2f}% intraday</b>\n"
-            f"Index: <b>{cur:,.0f}</b> ({cur - pre:+,.0f} pts) · {now:%H:%M} PKT\n"
-            f"🟢 Lifting: {contrib_line(pos)}\n"
-            f"🔴 Dragging: {contrib_line(neg)}\n"
-            f"💡 Check the news feed for the trigger before reacting.\n"
+    direction = "UP" if pct > 0 else "DOWN"
+    text = (header(icon, f"KSE-100 {direction} {abs(pct):.2f}% intraday", f"Market alert · {now:%H:%M} PKT") + "\n"
+            f"📈 KSE-100: <b>{cur:,.0f}</b> ({cur - pre:+,.0f} pts)\n\n"
+            f"🟢 <b>Lifting:</b> {contrib_line(pos)}\n"
+            f"🔴 <b>Dragging:</b> {contrib_line(neg)}\n\n"
+            f"📌 Check the news feed for the trigger before reacting.\n"
             f"🔗 {link(SCS_URL + 'MarketStatistics/MS_IndexView.aspx', 'SCS Trade index view')}")
-    return [Alert(text, 10 if abs(pct) >= 3 else 9, f"kse:{hit}")], view
+    return [Alert(text, 10 if abs(pct) >= 3 else 9, f"kse:{hit}", tags=["KSE100", "MarketAlert"])], view
 
 
 def record_close(now, state: State) -> list[dict]:
@@ -248,8 +255,9 @@ def global_moves(mk: dict, state: State, cfg: dict) -> list[Alert]:
         state.set_flag(k)
         val = f"{unit}{d['last']:,.2f}" if unit == "$" else f"{d['last']:,.2f}{unit if unit == '%' else ''}"
         alerts.append(Alert(
-            f"🌍 <b>{esc(name)} {fmt_pct(d['pct'], 1)}</b> → {val}\n"
-            f"💡 {GLOBAL_WHY.get(sym, '')}", 8, k))
+            header("🌐", f"{name} {fmt_pct(d['pct'], 1)}", "Global market move") + "\n"
+            f"{arrow(d['pct'])} {esc(name)}: <b>{val}</b> ({fmt_pct(d['pct'], 1)} today)\n\n"
+            f"📌 <b>Why it matters:</b> {GLOBAL_WHY.get(sym, '')}", 8, k, tags=["GlobalMarkets"]))
     if alerts:
         log.info("global alerts: %d", len(alerts))
     return alerts

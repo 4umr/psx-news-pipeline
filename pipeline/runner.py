@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 from . import briefs, watchers
-from .common import Alert, NewsItem, esc, hours_ago, link, log, now_pkt, to_pkt
+from .common import Alert, NewsItem, esc, hours_ago, in_window, link, log, now_pkt, to_pkt
 from .scoring import Scorer, is_duplicate, title_tokens
 from .sources import markets, news, sbp, scs
 from .state import State
+from .style import DIV, footer, header, meta
 from .telegram import Sender
 
 
@@ -46,28 +48,91 @@ def _news_alerts(items: list[NewsItem], state: State, cfg: dict) -> tuple[list[N
     return instant, digest[: cfg["max_digest_items"]]
 
 
+# ---------------------------------------------------------------- formatting
 def _fmt_instant(it: NewsItem, cfg: dict) -> str:
-    icon = "🚨" if it.score >= 10 else "🔴"
     when = to_pkt(it.published) or now_pkt()
-    why = f"\n💡 {esc(it.why)}" if it.why else ""
-    disc = f"\n<i>{esc(cfg['disclaimer'])}</i>" if cfg.get("disclaimer_on_alerts") and cfg.get("disclaimer") else ""
-    return (f"{icon} <b>{esc(it.label)}</b>\n<b>{esc(it.title)}</b>{why}\n"
-            f"🔗 {link(it.url, it.source)} · {when:%H:%M} PKT{disc}")
+    kicker = "BREAKING" if it.score >= 10 else "IMPORTANT"
+    icon = "🚨" if it.score >= 10 else "🔴"
+    m = meta(cfg, it.topic)
+    lines = [header(icon, f"{kicker} · {it.label.split(' ', 1)[-1]}", f"{when:%a %d %b · %H:%M} PKT"),
+             f"<b>{esc(it.title)}</b>", ""]
+    if it.why:
+        lines.append(f"📌 <b>Why it matters:</b> {esc(it.why)}")
+    if m.get("sectors"):
+        lines.append(f"🏭 <b>Sectors in focus:</b> {esc(' · '.join(m['sectors']))}")
+    lines.append(f"🔗 Source: {link(it.url, it.source)}")
+    return "\n".join(lines) + footer(cfg, m.get("tags", []), compact=True)
 
 
-def _fmt_digest(items: list[NewsItem], cfg: dict) -> str:
-    lines = []
+def _fmt_digest(items: list[dict], cfg: dict) -> str:
+    # group by topic label, groups ordered by their best score
+    groups: dict[str, list[dict]] = {}
+    per_topic = cfg.get("max_per_topic_in_digest", 3)
+    for it in sorted(items, key=lambda i: -i["sc"]):
+        g = groups.setdefault(it["l"], [])
+        if len(g) < per_topic:
+            g.append(it)
+    items = [i for g in groups.values() for i in g]
+    blocks, tags = [], []
+    for label, its in groups.items():
+        rows = []
+        for it in its:
+            dot = "🟠" if it["sc"] >= 6 else "🟡"
+            rows.append(f"{dot} {esc(it['t'])} — {link(it['u'], it['s'])}")
+        blocks.append(f"<b>{esc(label)}</b>\n" + "\n".join(rows))
+        tags += meta(cfg, its[0].get("topic", "")).get("tags", [])[:1]
+    return (header("📰", "PSX News Wrap", f"{now_pkt():%a %d %b · %H:%M} PKT · {len(items)} stories") + "\n"
+            + "\n\n".join(blocks) + footer(cfg, tags[:5], compact=True))
+
+
+def _with_footer(a: Alert, cfg: dict) -> str:
+    return a.text + footer(cfg, a.tags, compact=True)
+
+
+# ---------------------------------------------------------------- digest batching
+def _digest_due(cfg: dict, state: State, now: datetime) -> bool:
+    pending = state.data.setdefault("pending", [])
+    if not pending:
+        return False
+    q = cfg.get("digest_quiet_hours")
+    if q:
+        start, end = q
+        if start > end:  # window crosses midnight, e.g. 23:30 -> 07:30
+            quiet = in_window(now, start, "23:59") or in_window(now, "00:00", end)
+        else:
+            quiet = in_window(now, start, end)
+        if quiet:
+            return False
+    last = state.data.get("last_digest", 0)
+    return time.time() - last >= cfg.get("digest_every_minutes", 30) * 60
+
+
+def _queue_digest(items: list[NewsItem], state: State) -> None:
+    pending = state.data.setdefault("pending", [])
     for it in items:
-        dot = "🟠" if it.score >= 6 else "🟡"
-        lines.append(f"{dot} <i>{esc(it.label)}</i>\n<b>{esc(it.title)}</b> — {link(it.url, it.source)}")
-    disc = f"\n\n<i>{esc(cfg['disclaimer'])}</i>" if cfg.get("disclaimer_on_alerts") and cfg.get("disclaimer") else ""
-    return f"📰 <b>PSX News Update</b> · {now_pkt():%H:%M} PKT\n\n" + "\n\n".join(lines) + disc
+        pending.append({"t": it.title, "u": it.url, "s": it.source, "sc": it.score,
+                        "l": it.label, "topic": it.topic, "ts": int(time.time())})
 
 
-def _with_disclaimer(text: str, cfg: dict) -> str:
-    if cfg.get("disclaimer_on_alerts") and cfg.get("disclaimer"):
-        return f"{text}\n<i>{esc(cfg['disclaimer'])}</i>"
-    return text
+def _flush_digest(cfg: dict, state: State, sender: Sender) -> int:
+    pending = state.data.get("pending", [])
+    # drop anything that waited more than 12h (e.g. long outage) and keep the best
+    fresh = [p for p in pending if time.time() - p["ts"] < 12 * 3600]
+    fresh.sort(key=lambda p: -p["sc"])
+    batch = fresh[: cfg.get("max_digest_items", 15) + 5]
+    state.data["pending"] = []
+    state.data["last_digest"] = int(time.time())
+    if batch:
+        sender.send(_fmt_digest(batch, cfg))
+    return len(batch)
+
+
+# ---------------------------------------------------------------- briefs
+def _send_brief(name: str, cfg: dict, state: State, mk: dict, view, sender: Sender, **kw) -> None:
+    text, card, caption = briefs.BUILDERS[name](cfg, state, mk, view, **kw)
+    if card:
+        sender.send_photo(card, caption, name=name)
+    sender.send(text)
 
 
 def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -> None:
@@ -104,41 +169,41 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
     if bootstrap:
         for name in briefs.due(cfg, state, now, grace_hours=24):
             state.data["briefs"][name] = f"{now:%Y-%m-%d}"
-        ok = sender.send("✅ <b>PSX News Pipeline is live</b>\n\n"
-                    "You will receive:\n"
-                    "🚨 Instant alerts — SBP policy rate, T-bill/PIB auction results, reserves, CPI/SPI, "
-                    "IMF, fuel prices, budget/tax, geopolitics, KSE-100 big moves, oil/gold/dollar shocks\n"
-                    "📊 Corporate results & payouts (EPS, dividends, bonus) with PSX filing PDFs\n"
-                    "🌍 Daily foreign/local investor flows (FIPI/LIPI)\n"
-                    "📰 News updates from Business Recorder, Dawn, Tribune, The News, ProPakistani, "
-                    "Google News (Reuters, Bloomberg, Mettis, Profit…)\n"
-                    "☀️ Morning brief 08:45 · 🔔 Closing wrap 17:15 · 📅 Week ahead Sunday 19:00\n\n"
-                    "Here is the current snapshot 👇")
+        b = cfg.get("brand", {})
+        ok = sender.send(
+            header("✅", f"{b.get('name', 'PSX')} news service is live") + "\n"
+            "Your PSX market intelligence feed — automatic, 24/7, with sources.\n\n"
+            "🚨 <b>Instant alerts</b> — SBP policy rate, T-bill/PIB auctions, reserves, CPI/SPI, IMF, "
+            "fuel prices, budget/tax, ratings, geopolitics, KSE-100 big moves, oil/gold/dollar shocks\n"
+            "📊 <b>Corporate</b> — results, dividends, bonus shares with PSX filings\n"
+            "🌍 <b>Investor flows</b> — daily foreign/local (FIPI/LIPI)\n"
+            "📰 <b>News wrap</b> — every 30 min when there's news\n"
+            "☀️ <b>Morning brief</b> 08:45 · 🔔 <b>Closing wrap</b> 17:15 · 📅 <b>Week ahead</b> Sun 19:00\n\n"
+            "Current market snapshot below 👇" + footer(cfg, ["PSX", "PakistanInvestors"]))
         if not ok:
             # Telegram not reachable (wrong chat id / bot not admin): don't record
             # the first run, so the welcome + snapshot are retried next time.
             log.error("Telegram delivery failed — first run will be retried next time")
             return
-        sender.send(briefs.morning(cfg, state, mk, title="📸 <b>MARKET SNAPSHOT</b>"))
+        _send_brief("morning", cfg, state, mk, view, sender, title="Market Snapshot")
+        state.data["last_digest"] = int(time.time())
         state.save()
         log.info("bootstrap done in %.1fs", time.time() - t0)
         return
 
     alerts.sort(key=lambda a: -a.priority)
     for a in alerts:
-        sender.send(_with_disclaimer(a.text, cfg), preview=a.preview)
+        sender.send(_with_footer(a, cfg), preview=a.preview)
     for it in instant:
         sender.send(_fmt_instant(it, cfg))
-    if digest:
-        sender.send(_fmt_digest(digest, cfg))
+    _queue_digest(digest, state)
+    n_digest = _flush_digest(cfg, state, sender) if _digest_due(cfg, state, now) else 0
 
     names = [force_brief] if force_brief else briefs.due(cfg, state, now)
     for name in names:
-        builder = briefs.BUILDERS[name]
-        text = builder(cfg, state, mk, view) if name == "close" else builder(cfg, state, mk)
-        sender.send(text)
+        _send_brief(name, cfg, state, mk, view, sender)
         state.data["briefs"][name] = f"{now:%Y-%m-%d}"
 
     state.save()
-    log.info("run done in %.1fs: %d alerts, %d instant news, %d digest, briefs=%s, messages=%d",
-             time.time() - t0, len(alerts), len(instant), len(digest), names, sender.sent)
+    log.info("run done in %.1fs: %d alerts, %d instant news, %d queued, %d in digest, briefs=%s, messages=%d",
+             time.time() - t0, len(alerts), len(instant), len(digest), n_digest, names, sender.sent)

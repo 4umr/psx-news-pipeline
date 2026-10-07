@@ -1,7 +1,9 @@
 """Telegram delivery (Bot API). Falls back to printing when no token is set."""
 from __future__ import annotations
 
+import html
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -11,15 +13,20 @@ from .common import ROOT, http, log
 MAX_LEN = 4000  # Telegram limit is 4096
 
 
+def _vis(text: str) -> int:
+    """Length Telegram counts: tags and link URLs are not part of the limit."""
+    return len(html.unescape(re.sub(r"<[^>]+>", "", text)))
+
+
 def _split(text: str) -> list[str]:
-    if len(text) <= MAX_LEN:
+    if _vis(text) <= MAX_LEN:
         return [text]
     # Split on blank lines first so a news item / section is never cut in half
     parts, cur = [], ""
     for para in text.split("\n\n"):
-        chunks = [para] if len(para) < MAX_LEN else para.split("\n")
+        chunks = [para] if _vis(para) < MAX_LEN else para.split("\n")
         for chunk in chunks:
-            if cur and len(cur) + len(chunk) + 2 > MAX_LEN:
+            if cur and _vis(cur) + _vis(chunk) + 2 > MAX_LEN:
                 parts.append(cur.rstrip())
                 cur = ""
             cur += chunk + ("\n\n" if chunk is para else "\n")
@@ -52,6 +59,39 @@ class Sender:
                 continue
             for chat in self.chats:
                 ok &= self._post(chat, part, preview)
+        return ok
+
+    def send_photo(self, png: bytes, caption: str = "", name: str = "card") -> bool:
+        caption = caption[:1000]
+        if self.dry:
+            path = self.preview.parent / f"{name}.png"
+            path.write_bytes(png)
+            with open(self.preview, "a", encoding="utf-8") as f:
+                f.write(f"\n{'=' * 60}\n[IMAGE {path.name}] {caption}\n")
+            self.sent += 1
+            return True
+        ok = True
+        url = f"https://api.telegram.org/bot{self.token}/sendPhoto"
+        for chat in self.chats:
+            for attempt in range(3):
+                try:
+                    r = http().post(url, data={"chat_id": chat, "caption": caption, "parse_mode": "HTML"},
+                                    files={"photo": (f"{name}.png", png, "image/png")}, timeout=40)
+                    if r.status_code == 429:
+                        time.sleep(min(r.json().get("parameters", {}).get("retry_after", 5), 60))
+                        continue
+                    if not r.ok:
+                        log.error("Telegram photo error %s: %s", r.status_code, r.text[:200])
+                        ok = False
+                    else:
+                        self.sent += 1
+                        time.sleep(1.1)
+                    break
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Telegram photo failed (%s), retrying", e)
+                    time.sleep(2 * (attempt + 1))
+            else:
+                ok = False
         return ok
 
     def _post(self, chat: str, text: str, preview: bool) -> bool:

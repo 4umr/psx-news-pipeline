@@ -10,10 +10,12 @@ This pipeline sends PSX-moving news and indicators to a Telegram channel automat
 | 📉 Market alerts | KSE-100 intraday moves of ±1.5% / 3% / 5%, with the stocks driving it; big moves in oil, gold, DXY, S&P 500, US yields | During market hours / as they happen |
 | 📊 Corporate | New results: EPS, dividend, bonus, right shares, with the PSX filing PDF. ⭐ marks KSE-100 companies | Every run |
 | 🌍 Flows | FIPI / LIPI (foreign and local investors) by investor type | Evening, once published |
-| 📰 News digest | Scored and de-duplicated headlines with links, grouped into one message per run | Every run with new news |
-| ☀️ Morning brief | Last close, FIPI, SBP rates (policy, KIBOR, T-bills, PIBs, reserves, USD/PKR), global markets, today's board meetings and book closures, top headlines | 08:45 Mon–Fri |
-| 🔔 Closing wrap | Indices, index-point contributors, top gainers and losers, rates, global, tomorrow's calendar, key headlines | 17:15 Mon–Fri |
-| 📅 Week ahead | Weekly KSE-100 change, next week's board meetings and payouts, auctions, regular data calendar | Sunday 19:00 |
+| 📰 News wrap | Scored and de-duplicated headlines with links, grouped by topic (max 3 per topic) | Every 30 min when there's news; held 23:30–07:30 |
+| ☀️ Morning brief | 🖼️ Image card + text: at-a-glance, last close, FIPI, SBP rates (policy, KIBOR, T-bills, PIBs, reserves, USD/PKR), global markets, today's board meetings and book closures, top headlines | 08:45 Mon–Fri |
+| 🔔 Closing wrap | 🖼️ Image card + text: indices, index-point contributors chart, top gainers and losers, rates, global, tomorrow's calendar, key headlines | 17:15 Mon–Fri |
+| 📅 Week ahead | 🖼️ Image card + text: weekly KSE-100 change, next week's board meetings and payouts, auctions, regular data calendar | Sunday 19:00 |
+
+Every message carries the **PAKISTAN INVESTORS** branding, hashtags (searchable in Telegram) and the disclaimer, so it can be forwarded as is. Set `brand.channel_link` in `config.yaml` to add a "Join" link.
 
 ### Sources (all free and public)
 - **State Bank of Pakistan** (sbp.org.pk): policy rate, corridor, KIBOR, MTB/PIB cut-offs, reserves, USD/PKR, upcoming auctions, press releases, circulars

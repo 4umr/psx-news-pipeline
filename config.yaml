@@ -5,9 +5,23 @@
 
 timezone: Asia/Karachi
 
+# Branding shown on every message and image card
+brand:
+  name: "PAKISTAN INVESTORS"
+  author: "Umer"
+  title: "Financial Analyst"
+  channel_link: ""     # e.g. https://t.me/+AbCdEf... — shown as "Join" link when set
+  cards: true          # send image cards with morning brief / closing wrap / week ahead
+
 # Messages appended to briefs / digests / alerts
-disclaimer: "ℹ️ For information only — not investment advice."
+disclaimer: "For information only — not investment advice."
 disclaimer_on_alerts: true
+
+# News digest batching: instant alerts always go out immediately; lower-priority
+# news is collected and sent as one digest at most every N minutes.
+digest_every_minutes: 30
+# No digests in this window (PKT) — they're held and sent after it ends.
+digest_quiet_hours: ["23:30", "07:30"]
 
 # Ignore news older than this (stops old feed items flooding the channel)
 max_item_age_hours: 18
@@ -19,6 +33,7 @@ min_score_digest: 4
 max_instant_per_run: 8
 max_digest_items: 15
 max_global_in_digest: 4      # cap non-Pakistan stories per digest
+max_per_topic_in_digest: 3   # e.g. at most 3 petrol-price stories per digest
 
 # ---------------------------------------------------------------------
 # Scheduled briefs (Pakistan time). days: 0=Mon ... 6=Sun
@@ -345,3 +360,39 @@ low_priority_sources: '(times of india|dna india|sunday guardian|ndtv|india toda
 
 # Words that mark an item as noise even if a topic matches
 exclude: '\b(cricket|football|hockey|showbiz|film|drama|celebrity|recipe|horoscope|t20|odi|psl|fashion|wedding|phones?|smartphones?|indian rupee|rbi|sri lanka\w*|bangladesh\w*|nepal)\b'
+
+# ---------------------------------------------------------------------
+# Hashtags (searchable in Telegram) and sectors typically in focus per topic.
+# "Sectors in focus" is context only, not a buy/sell signal.
+# ---------------------------------------------------------------------
+topic_meta:
+  monetary_policy:   {tags: [SBP, PolicyRate, InterestRates], sectors: [Banks, Cement, Autos, Steel, Fertilizer]}
+  imf:               {tags: [IMF, Economy], sectors: [Banks, "E&P", Power]}
+  govt_securities:   {tags: [TBills, PIB, Yields], sectors: [Banks]}
+  inflation:         {tags: [Inflation, CPI], sectors: [Banks, FMCG, Cement]}
+  reserves_external: {tags: [Reserves, CurrentAccount, PKR], sectors: [Banks, "E&P"]}
+  fuel_prices:       {tags: [PetrolPrice, Energy], sectors: [OMCs, Refineries, Power, Autos]}
+  budget_tax:        {tags: [Budget, Tax], sectors: [Banks, "E&P", Cement, Autos]}
+  tax_admin:         {tags: [FBR, Tax], sectors: []}
+  market_shock:      {tags: [KSE100, PSX, MarketAlert], sectors: []}
+  geo_escalation:    {tags: [Geopolitics, Security], sectors: []}
+  geopolitics:       {tags: [Geopolitics], sectors: []}
+  sovereign_rating:  {tags: [CreditRating, Economy], sectors: [Banks]}
+  rupee_shock:       {tags: [PKR, Rupee], sectors: [Textile, IT, Autos, OMCs]}
+  rupee:             {tags: [PKR, Rupee], sectors: [Textile, IT]}
+  external_trade:    {tags: [Exports, Remittances, Trade], sectors: [Textile, IT]}
+  energy_sector:     {tags: [CircularDebt, Energy], sectors: ["E&P", Power, OMCs, Gas]}
+  economy_growth:    {tags: [Economy, GDP], sectors: []}
+  bilateral_finance: {tags: [Economy, Financing], sectors: []}
+  psx_corporate:     {tags: [Corporate, PSX], sectors: []}
+  psx_market:        {tags: [PSX, KSE100], sectors: []}
+  regulation:        {tags: [Regulation, SECP], sectors: []}
+  sector_data:       {tags: [SectorData], sectors: []}
+  politics:          {tags: [Politics], sectors: []}
+  natural_disaster:  {tags: [Weather, Economy], sectors: [Fertilizer, Textile, Cement]}
+  fed_decision:      {tags: [Fed, GlobalMarkets], sectors: []}
+  global_rates:      {tags: [Fed, GlobalMarkets], sectors: []}
+  global_oil:        {tags: [Oil, GlobalMarkets], sectors: ["E&P", OMCs, Refineries]}
+  global_shock:      {tags: [GlobalMarkets], sectors: []}
+  middle_east:       {tags: [MiddleEast, Oil], sectors: ["E&P", OMCs]}
+  official:          {tags: [Official], sectors: []}
