@@ -13,6 +13,7 @@ from datetime import datetime
 import matplotlib
 
 matplotlib.use("Agg")
+matplotlib.rcParams["text.parse_math"] = False  # "$21bn · $26bn" must not become math text
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.patches import FancyBboxPatch  # noqa: E402
 
@@ -132,10 +133,15 @@ def _fmt_global(mk: dict, sym: str, prefix: str = "", suffix: str = "", dec: int
     return f"{prefix}{d['last']:,.{dec}f}{suffix}", d.get("pct")
 
 
-def _rates_items(sbp: dict, mk: dict) -> list[tuple[str, str, float | None]]:
+def _rates_items(sbp: dict, mk: dict, cpi: dict | None = None) -> list[tuple[str, str, float | None]]:
     items: list[tuple[str, str, float | None]] = []
     if sbp.get("policy_rate") is not None:
         items.append(("SBP policy rate", f"{sbp['policy_rate']:.2f}%", None))
+    g = (cpi or {}).get("general")
+    if g:
+        items.append((f"CPI inflation ({g['month'][:3]})", f"{g['yoy']:.1f}%", None))
+        if sbp.get("policy_rate") is not None:
+            items.append(("Real policy rate", f"{sbp['policy_rate'] - g['yoy']:+.1f}%", None))
     if k := sbp.get("kibor"):
         items.append(("6M KIBOR (offer)", f"{k['6M'][1]:.2f}%", None))
     if m := sbp.get("mtb"):
@@ -174,13 +180,18 @@ def _index_tiles(idx: list[dict]) -> list[tuple[str, str, float | None]]:
 
 
 def close_card(cfg: dict, now: datetime, idx: list[dict], view: list[dict], sbp: dict, mk: dict,
-               fipi: dict | None) -> bytes | None:
+               fipi: dict | None, act: list[dict] | None = None, cpi: dict | None = None) -> bytes | None:
     rows = {r["kse_index_type"]: r for r in idx}
     k = rows.get("KSE 100")
     if not k:
         return None
     fig = _new_card(cfg, "PSX Closing Wrap", now)
     sub = f"Day range {k['kse_index_low']:,.0f} – {k['kse_index_high']:,.0f}"
+    if act:
+        up = sum(1 for r in act if (r.get("trading_change") or 0) > 0)
+        dn = sum(1 for r in act if (r.get("trading_change") or 0) < 0)
+        vol = sum(r.get("trading_vol") or 0 for r in act)
+        sub += f"   ·   {up} ▲ / {dn} ▼ stocks   ·   Volume {vol / 1e6:,.0f}m shares"
     _hero(fig, 0.82, "KSE-100 INDEX", k["kse_index_close"], k["kse_index_change"], sub)
     y = _tiles(fig, 0.725, _index_tiles(idx), cols=3)
     _title(fig, y - 0.03, "Biggest index movers (points)")
@@ -191,14 +202,17 @@ def close_card(cfg: dict, now: datetime, idx: list[dict], view: list[dict], sbp:
         f = fipi["summary"].get("FIPI", {})
         if f.get("net") is not None:
             items.append(("Foreign flow (FIPI)", f"{f['net']:+.2f}m $", None))
-    items += _rates_items(sbp, mk)
+    wanted = ["SBP policy rate", "Real policy rate", "3M T-bill cut-off", "USD/PKR (SBP)", "Brent oil", "Gold"]
+    pool = {i[0]: i for i in _rates_items(sbp, mk, cpi)}
+    items += [pool[n] for n in wanted if n in pool]
     _title(fig, y - 0.012, "Flows, rates & global")
     _tiles(fig, y - 0.03, items[:6], cols=3, tile_h=0.07)
     return _png(fig)
 
 
 def morning_card(cfg: dict, now: datetime, idx: list[dict], sbp: dict, mk: dict,
-                 n_board: int = 0, n_bc: int = 0, kicker: str = "Morning Brief") -> bytes | None:
+                 n_board: int = 0, n_bc: int = 0, kicker: str = "Morning Brief",
+                 cpi: dict | None = None, mpc_note: str = "") -> bytes | None:
     rows = {r["kse_index_type"]: r for r in idx}
     k = rows.get("KSE 100")
     fig = _new_card(cfg, kicker, now)
@@ -208,11 +222,15 @@ def morning_card(cfg: dict, now: datetime, idx: list[dict], sbp: dict, mk: dict,
     else:
         y = 0.88
     _title(fig, y - 0.03, "Rates & money market")
-    rates = [i for i in _rates_items(sbp, mk) if i[2] is None]
-    y = _tiles(fig, y - 0.048, rates, cols=3)
+    rates = [i for i in _rates_items(sbp, mk, cpi) if i[2] is None]
+    y = _tiles(fig, y - 0.048, rates[:6], cols=3)
     if t := (sbp.get("mtb") or {}).get("yields"):
         fig.text(0.05, y - 0.02, "T-bill cut-offs: " + "  ·  ".join(f"{a} {b:.2f}%" for a, b in t.items() if b),
                  color=INK_2, fontsize=12.5, va="center")
+        y -= 0.03
+    if r := sbp.get("reserves"):
+        fig.text(0.05, y - 0.02, f"FX reserves: SBP ${r['sbp'] / 1000:.2f}bn  ·  Total ${r['total'] / 1000:.2f}bn"
+                 f"  (as on {r['as_on']})", color=INK_2, fontsize=12.5, va="center")
         y -= 0.03
     _title(fig, y - 0.03, "Global markets")
     glob = []
@@ -224,6 +242,8 @@ def morning_card(cfg: dict, now: datetime, idx: list[dict], sbp: dict, mk: dict,
             glob.append((label, g[0], g[1]))
     y = _tiles(fig, y - 0.048, glob, cols=3)
     notes = []
+    if mpc_note:
+        notes.append(mpc_note)
     if n_board or n_bc:
         notes.append(f"Today: {n_board} board meeting(s) · {n_bc} payout book closure(s)")
     if sbp.get("upcoming_auctions"):

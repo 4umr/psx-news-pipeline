@@ -135,6 +135,53 @@ def _send_brief(name: str, cfg: dict, state: State, mk: dict, view, sender: Send
     sender.send(text)
 
 
+def about_text(cfg: dict) -> str:
+    b = cfg.get("brand", {})
+    sched = cfg.get("briefs", {})
+    t = lambda n, d: sched.get(n, {}).get("time", d)  # noqa: E731
+    return (header("🇵🇰", f"Welcome to {b.get('name', 'PSX')}",
+                   f"Curated by {b.get('author', '')}" + (f", {b['title']}" if b.get("title") else "")) + "\n"
+            "Pakistan Stock Exchange news, data and macro indicators — automatic, 24/7, always with sources.\n\n"
+            "<b>⏰ What you get & when (PKT)</b>\n"
+            f"☀️ <b>{t('morning', '08:45')}</b> Morning brief + market card (Mon–Fri)\n"
+            f"🔔 <b>{t('close', '17:15')}</b> Closing wrap + market card (Mon–Fri)\n"
+            "🌍 <b>Evening</b> Foreign / local investor flows (FIPI/LIPI)\n"
+            f"📅 <b>Sun {t('week_ahead', '19:00')}</b> Week ahead: results calendar, payouts, auctions\n"
+            "📰 <b>Every 30 min</b> News wrap when there's news (paused 23:30–07:30)\n\n"
+            "<b>🚨 Instant alerts, any time</b>\n"
+            "• SBP policy rate decisions & MPC reminders\n"
+            "• T-bill / PIB auction cut-offs (with change in bps)\n"
+            "• SBP reserves (weekly), CPI & SPI inflation (actual figures)\n"
+            "• IMF, budget/tax, fuel & power prices, credit ratings\n"
+            "• KSE-100 moves of ±1.5% / 3% / 5% and big single-stock moves\n"
+            "• Company results, dividends & bonus shares (with PSX filings)\n"
+            "• Oil, gold, dollar & global market shocks · security escalations\n\n"
+            "<b>📚 Sources</b>: SBP · PBS · PSX (via SCS Trade) · NCCPL · forex.pk · Business Recorder · "
+            "Dawn · Express Tribune · The News · ProPakistani · Reuters/Bloomberg & others via Google News\n\n"
+            "Search past posts with hashtags like #SBP #KSE100 #CPI #Results"
+            + footer(cfg, ["PakistanInvestors"]))
+
+
+HEALTH_CHECKS = ("SBP website", "PSX data (SCS Trade)", "News feeds", "Global markets")
+
+
+def _health(cfg: dict, state: State, sender: Sender, ok: dict[str, bool]) -> None:
+    """Warn the owner privately when a source fails 3 runs in a row, and when it recovers."""
+    h = state.data.setdefault("health", {})
+    for name, good in ok.items():
+        n = h.get(name, 0)
+        if good:
+            if n >= 3:
+                sender.send_admin(f"✅ <b>Recovered:</b> {esc(name)} is working again.")
+            h[name] = 0
+        else:
+            h[name] = n + 1
+            if h[name] == 3:
+                sender.send_admin(f"⚠️ <b>Source problem:</b> {esc(name)} has failed 3 runs in a row. "
+                                  "Messages that depend on it are paused; everything else continues. "
+                                  "If this lasts more than a day, the website may have changed.")
+
+
 def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -> None:
     t0 = time.time()
     state = State()
@@ -153,8 +200,18 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
         sbp_snap, sbp_items = f_sbp.result()
         mk = f_mk.result()
         kse_symbols = {r.get("company_code") for r in f_view.result()}
+        news_items = f_news.result()
+
+    _health(cfg, state, sender, {
+        "SBP website": bool(sbp_snap.get("policy_rate")),
+        "PSX data (SCS Trade)": bool(kse_symbols),
+        "News feeds": len(news_items) >= 100,
+        "Global markets": len(mk) >= 5,
+    })
 
     alerts: list[Alert] = []
+    alerts += watchers.pbs_releases(state)     # before news: marks the PBS posts as handled
+    alerts += watchers.mpc_watch(now, state)
     alerts += watchers.sbp_changes(sbp_snap, state)
     alerts += watchers.corporate_results(f_res.result(), state, kse_symbols)
     alerts += watchers.fipi_alert(now, state)
@@ -164,22 +221,12 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
     watchers.record_close(now, state)
 
     # official items first so their links win over re-reports
-    instant, digest = _news_alerts(sbp_items + f_news.result(), state, cfg)
+    instant, digest = _news_alerts(sbp_items + news_items, state, cfg)
 
     if bootstrap:
         for name in briefs.due(cfg, state, now, grace_hours=24):
             state.data["briefs"][name] = f"{now:%Y-%m-%d}"
-        b = cfg.get("brand", {})
-        ok = sender.send(
-            header("✅", f"{b.get('name', 'PSX')} news service is live") + "\n"
-            "Your PSX market intelligence feed — automatic, 24/7, with sources.\n\n"
-            "🚨 <b>Instant alerts</b> — SBP policy rate, T-bill/PIB auctions, reserves, CPI/SPI, IMF, "
-            "fuel prices, budget/tax, ratings, geopolitics, KSE-100 big moves, oil/gold/dollar shocks\n"
-            "📊 <b>Corporate</b> — results, dividends, bonus shares with PSX filings\n"
-            "🌍 <b>Investor flows</b> — daily foreign/local (FIPI/LIPI)\n"
-            "📰 <b>News wrap</b> — every 30 min when there's news\n"
-            "☀️ <b>Morning brief</b> 08:45 · 🔔 <b>Closing wrap</b> 17:15 · 📅 <b>Week ahead</b> Sun 19:00\n\n"
-            "Current market snapshot below 👇" + footer(cfg, ["PSX", "PakistanInvestors"]))
+        ok = sender.send(about_text(cfg))
         if not ok:
             # Telegram not reachable (wrong chat id / bot not admin): don't record
             # the first run, so the welcome + snapshot are retried next time.

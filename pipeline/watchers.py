@@ -1,9 +1,9 @@
 """Data watchers: turn changes in official numbers into instant alerts."""
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
-from .common import Alert, arrow, esc, fmt_num, fmt_pct, in_window, link, log, now_pkt
+from .common import Alert, arrow, esc, fmt_num, fmt_pct, in_window, link, log, now_pkt, now_utc
 from .sources import scs
 from .state import State
 from .style import header
@@ -13,6 +13,13 @@ SCS_URL = "https://www.scstrade.com/"
 
 
 # ---------------------------------------------------------------- formatting
+def trend(x: float | None) -> str:
+    """Neutral direction marker (for inflation etc. where up/down isn't good/bad)."""
+    if not x:
+        return "➡️"
+    return "⬆️" if x > 0 else "⬇️"
+
+
 def bps(new: float | None, old: float | None) -> str:
     if new is None or old is None:
         return ""
@@ -195,8 +202,9 @@ def kse_moves(now, state: State, cfg: dict) -> tuple[list[Alert], list[dict]]:
         if abs(pct) >= th and not state.flag(k):
             state.set_flag(k)
             hit = th
+    stock_alerts = stock_moves(now, state, cfg, view)
     if hit is None:
-        return [], view
+        return stock_alerts, view
     pos, neg = contributors(view)
     icon = "🚀" if pct > 0 else "🚨"
     direction = "UP" if pct > 0 else "DOWN"
@@ -206,7 +214,7 @@ def kse_moves(now, state: State, cfg: dict) -> tuple[list[Alert], list[dict]]:
             f"🔴 <b>Dragging:</b> {contrib_line(neg)}\n\n"
             f"📌 Check the news feed for the trigger before reacting.\n"
             f"🔗 {link(SCS_URL + 'MarketStatistics/MS_IndexView.aspx', 'SCS Trade index view')}")
-    return [Alert(text, 10 if abs(pct) >= 3 else 9, f"kse:{hit}", tags=["KSE100", "MarketAlert"])], view
+    return [Alert(text, 10 if abs(pct) >= 3 else 9, f"kse:{hit}", tags=["KSE100", "MarketAlert"])] + stock_alerts, view
 
 
 def record_close(now, state: State) -> list[dict]:
@@ -225,8 +233,160 @@ def record_close(now, state: State) -> list[dict]:
     closes = state.data["kse_closes"]
     if not closes or abs(list(closes.values())[-1] - close) > 0.01:
         closes[f"{now:%Y-%m-%d}"] = close
+        state.set_snap("kse_session_date", f"{now:%Y-%m-%d}")  # a new session actually traded today
     state.set_snap("kse_last_close", close)
     return idx
+
+
+# ---------------------------------------------------------------- stock moves
+def stock_moves(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
+    """KSE-100 stocks with unusually large moves, plus the user's watchlist (one alert per run)."""
+    if not view:
+        return []
+    big = cfg.get("big_stock_move_pct", 7.5)
+    wl = {s.upper(): float(p) for s, p in (cfg.get("watchlist") or {}).items()}
+    hits = []
+    for r in view:
+        code, cur, ldcp = r.get("company_code"), r.get("CurrentPrice"), r.get("LDCP")
+        if not code or not cur or not ldcp:
+            continue
+        pct = (cur / ldcp - 1) * 100
+        th = min(big, wl.get(code, big))
+        if abs(pct) < th:
+            continue
+        k = f"stk:{now:%Y-%m-%d}:{code}:{'up' if pct > 0 else 'dn'}"
+        if state.flag(k):
+            continue
+        state.set_flag(k)
+        hits.append((code, pct, cur, code in wl))
+    if not hits:
+        return []
+    hits.sort(key=lambda h: -abs(h[1]))
+    lines = []
+    for code, pct, cur, mine in hits:
+        note = " · near circuit" if abs(pct) >= 9.5 else ""
+        star = "👁️ " if mine else ""
+        lines.append(f"{arrow(pct)} {star}<b>{esc(code)}</b> {pct:+.2f}% → Rs {cur:,.2f}{note}")
+    text = (header("⚡", "Big stock moves", f"KSE-100 / watchlist · {now:%H:%M} PKT") + "\n"
+            + "\n".join(lines) +
+            "\n\n📌 Large single-stock moves often follow company news — check announcements before reacting."
+            + (f"\n👁️ = on your watchlist" if any(h[3] for h in hits) else ""))
+    return [Alert(text, 8, "stocks", tags=["StockAlert", "KSE100"])]
+
+
+# ---------------------------------------------------------------- PBS: CPI / SPI with numbers
+def pbs_releases(state: State) -> list[Alert]:
+    from .sources import pbs
+
+    alerts = []
+    rels = []
+    for rel in pbs.releases():
+        t = rel["title"].lower()
+        kind = "cpi" if "inflation report" in t else ("spi" if "sensitive price" in t else None)
+        if kind and rel["url"]:
+            rels.append((kind, rel))
+    epoch = datetime.fromtimestamp(0, tz=timezone.utc)
+    rels.sort(key=lambda kr: kr[1]["published"] or epoch)  # oldest -> newest
+    latest = {k: r["url"] for k, r in rels}                 # newest url per kind
+    for kind, rel in rels:
+        url = rel["url"]
+        fresh = not state.seen(url)
+        is_latest = latest[kind] == url
+        if not fresh and not (is_latest and not state.snap(kind)):
+            continue
+        state.mark(url)  # the generic news item for this release is now redundant
+        recent = rel["published"] is None or (now_utc() - rel["published"]).days < 3
+        if not is_latest and not (fresh and recent):
+            continue
+        d = pbs.cpi_details(url) if kind == "cpi" else pbs.spi_details(url)
+        if not d:
+            continue
+        if is_latest:
+            state.set_snap(kind, d)
+        if not (fresh and recent):
+            continue
+        if kind == "cpi":
+            alerts.append(_cpi_alert(d, url, state))
+        else:
+            alerts.append(Alert(
+                    header("🛒", "Weekly SPI (Sensitive Price Indicator)", f"Week ended {d['week']} · PBS") + "\n"
+                    f"{trend(d['wow'])} SPI: <b>{d['index']:.2f}</b> ({d['wow']:+.2f}% WoW)\n\n"
+                    f"📌 <b>Why it matters:</b> SPI tracks weekly prices of essential items — an early "
+                    f"signal for monthly CPI and the SBP's rate path.\n"
+                    f"🔗 {link(url, 'Pakistan Bureau of Statistics')}", 8, f"spi:{d['week']}",
+                    tags=["SPI", "Inflation"]))
+    return alerts
+
+
+def _cpi_alert(d: dict, url: str, state: State) -> Alert:
+    g = d["general"]
+    lines = [header("📈", f"CPI Inflation · {g['month']}", "Official release · Pakistan Bureau of Statistics"),
+             f"{trend(g['yoy'] - g['prev_yoy'])} National CPI: <b>{g['yoy']:.1f}% YoY</b> "
+             f"(previous month {g['prev_yoy']:.1f}%) · MoM {g['mom']:+.1f}%"]
+    for k in ("urban", "rural"):
+        if v := d.get(k):
+            lines.append(f"▫️ {k.title()}: {v['yoy']:.1f}% YoY (prev {v['prev_yoy']:.1f}%)")
+    if d.get("spi_yoy") is not None:
+        lines.append(f"▫️ SPI: {d['spi_yoy']:.1f}% YoY · WPI: {d.get('wpi_yoy', 0):.1f}% YoY")
+    pr = (state.snap("sbp") or {}).get("policy_rate")
+    if pr is not None:
+        real = pr - g["yoy"]
+        lines.append(f"🏦 Real policy rate: <b>{real:+.1f}%</b> (policy {pr:.2f}% − CPI {g['yoy']:.1f}%)")
+    lines += ["", "📌 <b>Why it matters:</b> Inflation is the main input for the SBP's next rate decision; "
+              "a positive real rate gives room for cuts, a negative one pressure for hikes.",
+              "🏭 <b>Sectors in focus:</b> Banks · Cement · FMCG · Autos",
+              f"🔗 {link(url, 'Pakistan Bureau of Statistics')} · {link(d['doc'], 'full review')}"]
+    return Alert("\n".join(lines), 10, f"cpi:{g['month']}", tags=["CPI", "Inflation", "SBP"])
+
+
+# ---------------------------------------------------------------- MPC calendar
+def mpc_watch(now, state: State) -> list[Alert]:
+    """Refresh SBP's MPC calendar daily; remind the evening before a meeting."""
+    from .sources.sbp import mpc_calendar
+
+    today = f"{now:%Y-%m-%d}"
+    snap = state.snap("mpc") or {}
+    if snap.get("fetched") != today:
+        dates = mpc_calendar()
+        if dates:
+            snap = {"fetched": today, "dates": dates}
+            state.set_snap("mpc", snap)
+    nxt = next_mpc(state, now)
+    if not nxt:
+        return []
+    days = (nxt - now.date()).days
+    k = f"mpc_remind:{nxt}"
+    if days == 1 and now.hour >= 18 and not state.flag(k):
+        state.set_flag(k)
+        pr = (state.snap("sbp") or {}).get("policy_rate")
+        cpi = (state.snap("cpi") or {}).get("general")
+        ctx = []
+        if pr is not None:
+            ctx.append(f"🏦 Current policy rate: <b>{pr:.2f}%</b>")
+        if cpi:
+            ctx.append(f"📈 Latest CPI: {cpi['yoy']:.1f}% YoY ({cpi['month']})")
+            if pr is not None:
+                ctx.append(f"⚖️ Real policy rate: {pr - cpi['yoy']:+.1f}%")
+        m = (state.snap("sbp") or {}).get("mtb")
+        if m and m["yields"].get("3-M"):
+            ctx.append(f"📜 3M T-bill cut-off: {m['yields']['3-M']:.2f}% ({m['as_on']})")
+        return [Alert(header("🏦", "MPC meeting tomorrow", f"{nxt:%A %d %B %Y} · SBP Monetary Policy Committee")
+                      + "\n" + "\n".join(ctx) +
+                      "\n\n📌 The decision is usually announced in the afternoon/evening — we'll alert you "
+                      "the moment it's out.\n🔗 " + link("https://www.sbp.org.pk/our-operations/monetary-policy",
+                                                         "SBP MPC calendar"),
+                      9, k, tags=["SBP", "MPC", "PolicyRate"])]
+    return []
+
+
+def next_mpc(state: State, now):
+    from datetime import date
+
+    for d in (state.snap("mpc") or {}).get("dates", []):
+        dd = date.fromisoformat(d)
+        if dd >= now.date():
+            return dd
+    return None
 
 
 # ---------------------------------------------------------------- global markets

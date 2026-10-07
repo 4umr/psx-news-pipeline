@@ -49,6 +49,14 @@ briefs:
 kse100_move_alerts_pct: [1.5, 3.0, 5.0]      # intraday KSE-100 move vs prev close
 market_hours: {start: "09:15", end: "16:45"} # window for intraday checks (PKT)
 
+# Alert when any KSE-100 stock moves this much intraday (PSX circuit is ~10%)
+big_stock_move_pct: 7.5
+# Your watchlist: KSE-100 symbol -> alert threshold in % (alerts once per day per direction)
+watchlist:
+  # OGDC: 4
+  # MEBL: 4
+  # HUBC: 4
+
 global_markets:
   # symbol: [display name, unit/prefix, alert threshold % daily move]
   "BZ=F":     ["Brent oil", "$", 3.0]

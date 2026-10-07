@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from . import watchers as w
 from .common import arrow, esc, fmt_num, fmt_pct, link, log, now_pkt, parse_hhmm
-from .sources import scs
+from .sources import forex, scs
 from .state import State
 from .style import DIV, footer, header, section
 
@@ -86,6 +86,47 @@ def sbp_block(s: dict) -> str:
     if a := upcoming_auctions(s.get("upcoming_auctions", "")):
         lines.append(f"🗓️ Next auctions: {esc(a)}")
     return "\n".join(lines)
+
+
+def macro_block(state: State, fx: dict | None = None) -> str:
+    """CPI, real rate, next MPC and open-market FX — the macro context in one block."""
+    lines = []
+    s = state.snap("sbp") or {}
+    cpi = (state.snap("cpi") or {}).get("general")
+    if cpi:
+        lines.append(f"📈 CPI ({esc(cpi['month'])}): <b>{cpi['yoy']:.1f}% YoY</b> (prev {cpi['prev_yoy']:.1f}%) · MoM {cpi['mom']:+.1f}%")
+        if s.get("policy_rate") is not None:
+            lines.append(f"⚖️ Real policy rate: <b>{s['policy_rate'] - cpi['yoy']:+.1f}%</b>")
+    if spi := state.snap("spi"):
+        lines.append(f"🛒 Weekly SPI ({esc(spi['week'])}): {spi['index']:.2f} ({spi['wow']:+.2f}% WoW)")
+    nxt = w.next_mpc(state, now_pkt())
+    if nxt:
+        days = (nxt - now_pkt().date()).days
+        when = "TODAY" if days == 0 else ("tomorrow" if days == 1 else f"in {days} days")
+        lines.append(f"🗓️ Next MPC meeting: <b>{nxt:%a %d %b}</b> ({when})")
+    if fx and (u := fx.get("USD")):
+        inter = (s.get("usdpkr") or {}).get("m2m")
+        spread = f" · spread vs interbank {u['sell'] - inter:+.2f}" if inter else ""
+        lines.append(f"💵 Open market USD: {u['buy']:.2f} / {u['sell']:.2f}{spread}")
+        others = [f"{k} {fx[k]['sell']:.2f}" for k in ("SAR", "AED", "GBP", "EUR") if k in fx]
+        if others:
+            lines.append(f"   Other (selling): {' · '.join(others)}")
+    return "\n".join(lines)
+
+
+def breadth_block(act: list[dict]) -> str:
+    if not act:
+        return ""
+    up = sum(1 for r in act if (r.get("trading_change") or 0) > 0)
+    dn = sum(1 for r in act if (r.get("trading_change") or 0) < 0)
+    unch = len(act) - up - dn
+    vol = sum(r.get("trading_vol") or 0 for r in act)
+    lead = sorted(act, key=lambda r: -(r.get("trading_vol") or 0))[:5]
+    leaders = " · ".join(f"{esc(r['company_code'])} {r['trading_vol'] / 1e6:.1f}m" for r in lead)
+    return (f"{section('🔢', 'Market breadth & volume')}\n"
+            f"🟢 {up} advanced · 🔴 {dn} declined · ⚪ {unch} unchanged\n"
+            f"📦 Total volume: <b>{vol / 1e6:,.1f}m shares</b>\n"
+            f"🔥 Volume leaders: {leaders}")
 
 
 def global_block(mk: dict, cfg: dict) -> str:
@@ -166,6 +207,13 @@ def glance(idx: list[dict], state: State, mk: dict) -> str:
     if f and (net := f["summary"].get("FIPI", {}).get("net")) is not None:
         out.append(f"Foreigners were net {'buyers' if net > 0 else 'sellers'} of ${abs(net):.2f}m ({f['date']})")
     s = state.snap("sbp") or {}
+    cpi = (state.snap("cpi") or {}).get("general")
+    if cpi and s.get("policy_rate") is not None:
+        out.append(f"CPI {cpi['yoy']:.1f}% YoY ({cpi['month']}) → real policy rate {s['policy_rate'] - cpi['yoy']:+.1f}%")
+    nxt = w.next_mpc(state, now_pkt())
+    if nxt and (nxt - now_pkt().date()).days <= 7:
+        days = (nxt - now_pkt().date()).days
+        out.append("SBP MPC decision due TODAY" if days == 0 else f"Next SBP MPC meeting {nxt:%a %d %b} ({days} day(s))")
     if s.get("policy_rate") is not None and (m := s.get("mtb")):
         y3 = m["yields"].get("3-M")
         if y3:
@@ -177,6 +225,15 @@ def glance(idx: list[dict], state: State, mk: dict) -> str:
 
 
 # ---------------------------------------------------------------- briefs
+def _mpc_note(state: State) -> str:
+    nxt = w.next_mpc(state, now_pkt())
+    if not nxt:
+        return ""
+    days = (nxt - now_pkt().date()).days
+    when = "TODAY" if days == 0 else ("tomorrow" if days == 1 else f"in {days} days")
+    return f"Next SBP MPC meeting: {nxt:%a %d %b} ({when})"
+
+
 def _safe_card(fn, *a, **kw):
     try:
         return fn(*a, **kw)
@@ -190,11 +247,13 @@ def morning(cfg: dict, state: State, mk: dict, view=None, title: str = "Morning 
     idx = scs.indices()
     cal, n_board, n_bc = calendar_block(now, 1)
     g = glance(idx, state, mk)
+    macro = macro_block(state, forex.open_market())
     text = (header("☀️", f"PSX {title}", f"{now:%A, %d %B %Y}") + "\n"
             + (f"{section('⚡', 'At a glance')}\n{g}\n\n" if g else "")
             + f"{section('📈', 'PSX — last close')}\n{psx_block(idx)}"
             f"{fipi_section(state)}\n\n"
             f"{section('🏦', 'SBP · Rates · PKR')}\n{sbp_block(state.snap('sbp') or {})}\n\n"
+            + (f"{section('🧭', 'Macro · Inflation · MPC · Open market')}\n{macro}\n\n" if macro else "") +
             f"{section('🌐', 'Global markets')}\n{global_block(mk, cfg)}\n\n"
             f"{section('📅', 'Today on the corporate calendar')}\n{cal}\n\n"
             f"{section('📰', 'Top headlines (last 16h)')}\n{headlines_block(state, 16)}"
@@ -202,26 +261,39 @@ def morning(cfg: dict, state: State, mk: dict, view=None, title: str = "Morning 
     card = None
     if cfg.get("brand", {}).get("cards", True):
         from .cards import morning_card
-        card = _safe_card(morning_card, cfg, now, idx, state.snap("sbp") or {}, mk, n_board, n_bc, kicker=title)
+        card = _safe_card(morning_card, cfg, now, idx, state.snap("sbp") or {}, mk, n_board, n_bc, kicker=title,
+                          cpi=state.snap("cpi"), mpc_note=_mpc_note(state))
     return text, card, f"☀️ <b>PSX {esc(title)}</b> · {now:%d %b %Y} — full details below 👇"
 
 
 def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
     now = now_pkt()
+    nxt = now + timedelta(days=1 if now.weekday() < 4 else 7 - now.weekday())
+    session = state.snap("kse_session_date")
+    if session and session != f"{now:%Y-%m-%d}":
+        # No new trading session recorded today -> market holiday; don't republish old numbers
+        cal, _, _ = calendar_block(nxt, 1)
+        text = (header("🏖️", "PSX closed today", f"{now:%A, %d %B %Y}") + "\n"
+                f"No trading session today (public holiday / market closure). Last close data is unchanged.\n\n"
+                f"{section('📅', f'Next session · {nxt:%a %d %b}')}\n{cal}"
+                + footer(cfg, ["PSX"]))
+        return text, None, ""
     idx = scs.indices()
     view = view or scs.kse100_view()
-    nxt = now + timedelta(days=1 if now.weekday() < 4 else 7 - now.weekday())
     fipi_today = (state.snap("fipi_last") or {}).get("date") == f"{now:%Y-%m-%d}"
     cal, _, _ = calendar_block(nxt, 1)
+    act = scs.daily_activity()
     g = glance(idx, state, mk) if fipi_today else glance(idx, _NoFipi(state), mk)
     text = (header("🔔", "PSX Closing Wrap", f"{now:%A, %d %B %Y}") + "\n"
             + (f"{section('⚡', 'At a glance')}\n{g}\n\n" if g else "")
             + f"{section('📈', 'Indices')}\n{psx_block(idx)}\n\n"
+            + (f"{breadth_block(act)}\n\n" if act else "") +
             f"{movers_block(view)}"
             + (fipi_section(state) if fipi_today else
                "\n\n🌍 FIPI/LIPI for today will be posted as soon as NCCPL publishes it.")
-            + f"\n\n{section('🏦', 'Rates · PKR')}\n{sbp_block(state.snap('sbp') or {})}\n\n"
-            f"{section('🌐', 'Global')}\n{global_block(mk, cfg)}\n\n"
+            + f"\n\n{section('🏦', 'Rates · PKR')}\n{sbp_block(state.snap('sbp') or {})}\n"
+            + (f"{macro_block(state, forex.open_market())}\n" if state.snap("cpi") else "") +
+            f"\n{section('🌐', 'Global')}\n{global_block(mk, cfg)}\n\n"
             f"{section('📅', f'Next session · {nxt:%a %d %b}')}\n{cal}\n\n"
             f"{section('📰', 'Key headlines today')}\n{headlines_block(state, 10, 10)}"
             + footer(cfg, ["ClosingWrap", "KSE100"]))
@@ -229,7 +301,7 @@ def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
     if cfg.get("brand", {}).get("cards", True):
         from .cards import close_card
         card = _safe_card(close_card, cfg, now, idx, view, state.snap("sbp") or {}, mk,
-                          state.snap("fipi_last") if fipi_today else None)
+                          state.snap("fipi_last") if fipi_today else None, act, state.snap("cpi"))
     return text, card, f"🔔 <b>PSX Closing Wrap</b> · {now:%d %b %Y} — full details below 👇"
 
 
@@ -259,6 +331,8 @@ def week_ahead(cfg: dict, state: State, mk: dict, view=None):
             f"{week}"
             f"{section('🗓️', 'Corporate calendar (next 7 days)')}\n{cal}\n\n"
             f"{section('🏦', 'Rates snapshot')}\n{sbp_block(state.snap('sbp') or {})}\n\n"
+            + (f"{section('🧭', 'Macro · Inflation · MPC · Open market')}\n{macro_block(state, forex.open_market())}\n\n"
+               if state.snap("cpi") or state.snap("mpc") else "") +
             f"{section('🔁', 'Regular data releases to watch')}\n"
             f"   • SBP reserves — every Thursday\n"
             f"   • PBS SPI (weekly inflation) — every Friday\n"
@@ -272,7 +346,8 @@ def week_ahead(cfg: dict, state: State, mk: dict, view=None):
     card = None
     if cfg.get("brand", {}).get("cards", True):
         from .cards import morning_card
-        card = _safe_card(morning_card, cfg, now, scs.indices(), state.snap("sbp") or {}, mk, kicker="Week Ahead")
+        card = _safe_card(morning_card, cfg, now, scs.indices(), state.snap("sbp") or {}, mk, kicker="Week Ahead",
+                          cpi=state.snap("cpi"), mpc_note=_mpc_note(state))
     return text, card, f"📅 <b>PSX Week Ahead</b> · week of {monday:%d %b} — full details below 👇"
 
 

@@ -70,6 +70,28 @@ def _strip_date_prefix(text: str) -> tuple[str, str]:
     return (m.group(2), m.group(1)) if m else (text, "")
 
 
+MPC_PAGE = "https://www.sbp.org.pk/our-operations/monetary-policy"
+
+
+def mpc_calendar() -> list[str]:
+    """MPC meeting dates (YYYY-MM-DD) from SBP's advance calendar table."""
+    try:
+        soup = BeautifulSoup(http().get(MPC_PAGE, timeout=30).content, "lxml")
+    except Exception as e:  # noqa: BLE001
+        log.warning("MPC calendar fetch failed: %s", e)
+        return []
+    dates = []
+    for table in soup.find_all("table"):
+        head = clean_ws(table.get_text(" "))[:200]
+        if "MPC Meeting Date" not in head:
+            continue
+        for tr in table.find_all("tr"):
+            cells = [clean_ws(td.get_text(" ")) for td in tr.find_all("td")]
+            if cells and re.fullmatch(r"\d{1,2}-[A-Za-z]{3}-\d{2}", cells[0]):
+                dates.append(datetime.strptime(cells[0], "%d-%b-%y").strftime("%Y-%m-%d"))
+    return sorted(set(dates))
+
+
 def fetch() -> tuple[dict, list[NewsItem]]:
     """Return (indicator snapshot, news items for press releases & circulars)."""
     try:

@@ -15,6 +15,7 @@ on:
           - brief morning
           - brief close
           - brief week_ahead
+          - about
 
 concurrency:
   group: psx-pipeline
@@ -46,6 +47,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
           TZ: Asia/Karachi
         run: python -m pipeline ${{ inputs.command || 'run' }}
 

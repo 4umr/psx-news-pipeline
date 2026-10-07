@@ -66,6 +66,11 @@ python -m pipeline run        # one full pass
 
 ---
 
+## Optional extras
+- **Private health alerts:** add a repository secret `TELEGRAM_ADMIN_CHAT_ID` containing your *personal* chat id. First message your bot once, then run `python -m pipeline chats` to find your id. If a source (SBP, PSX data, news, global markets) fails 3 runs in a row, you get a private warning, and another message when it recovers. The channel never sees these.
+- **Watchlist:** in `config.yaml`, add symbols under `watchlist:` with a % threshold (e.g. `OGDC: 4`). You'll get an alert when they move that much intraday. Any KSE-100 stock moving 7.5% or more is always alerted.
+- **Pinned intro post:** go to Actions → Run workflow → choose `about`, then pin that message in your channel.
+
 ## Commands
 | Command | What it does |
 |---|---|

@@ -62,6 +62,11 @@ def kse100_view() -> list[dict]:
     return _post("MarketStatistics/MS_IndexView.aspx/chartact")
 
 
+def daily_activity() -> list[dict]:
+    """Every listed stock: open/high/low/close, volume, change (market breadth & volume leaders)."""
+    return _post("MarketStatistics/MS_DailyActivity.aspx/chartact", {"rows": 3000})
+
+
 def indices() -> list[dict]:
     """OHLC + change for KSE-100, KSE-30, KMI-30, KSE All etc."""
     rows = _post("MarketStatistics/MS_DailyActivity.aspx/chartind")

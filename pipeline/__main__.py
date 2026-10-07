@@ -6,6 +6,7 @@
   python -m pipeline brief morning       send a brief now (morning | close | week_ahead)
   python -m pipeline test                send a test message to Telegram
   python -m pipeline chats               list chats the bot can see (find channel id)
+  python -m pipeline about               post the "About this channel" message (to pin)
 """
 from __future__ import annotations
 
@@ -40,6 +41,8 @@ def main() -> None:
     b.add_argument("--dry-run", action="store_true")
     sub.add_parser("test")
     sub.add_parser("chats")
+    ab = sub.add_parser("about")
+    ab.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 
     from .runner import run_once
@@ -67,6 +70,10 @@ def main() -> None:
         sys.exit(0 if ok else 1)
     elif args.cmd == "chats":
         find_chats()
+    elif args.cmd == "about":
+        from .runner import about_text
+        ok = Sender(args.dry_run).send(about_text(cfg))
+        sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

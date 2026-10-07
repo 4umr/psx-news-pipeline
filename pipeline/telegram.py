@@ -40,6 +40,8 @@ class Sender:
         self.token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         self.chats = [c.strip() for c in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if c.strip()]
         self.dry = dry_run or not (self.token and self.chats)
+        # Optional private chat for operational warnings (never sent to the channel)
+        self.admin = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
         self.sent = 0
         if self.dry:
             self.preview = ROOT / "out" / "preview.txt"
@@ -60,6 +62,15 @@ class Sender:
             for chat in self.chats:
                 ok &= self._post(chat, part, preview)
         return ok
+
+    def send_admin(self, text: str) -> bool:
+        """Operational message to the owner's private chat only."""
+        if self.dry:
+            return self.send(f"[ADMIN ONLY] {text}")
+        if not self.admin:
+            log.warning("ADMIN: %s", text)
+            return False
+        return self._post(self.admin, text, False)
 
     def send_photo(self, png: bytes, caption: str = "", name: str = "card") -> bool:
         caption = caption[:1000]
