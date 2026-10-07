@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import briefs, watchers
+from . import briefs, street, watchers
 from .common import Alert, NewsItem, esc, hours_ago, in_window, link, log, now_pkt, to_pkt
 from .scoring import Scorer, is_duplicate, title_tokens
 from .sources import markets, news, sbp, scs
@@ -185,7 +185,10 @@ def about_text(cfg: dict) -> str:
             "• SBP reserves (weekly), CPI & SPI inflation (actual figures)\n"
             "• IMF, budget/tax, fuel & power prices, credit ratings\n"
             "• KSE-100 moves of ±1.5% / 3% / 5% and big single-stock moves\n"
-            "• Company results, dividends & bonus shares (with PSX filings)\n"
+            "• Company results, dividends & bonus shares — with year-on-year EPS growth\n"
+            "• 📢 PSX company filings & material information, straight from PSX\n"
+            "• 🔎 Unusual volume in KSE-100 stocks · ⚡ big single-stock moves\n"
+            "• 🧠 Street View: brokerage forecasts, scored against actual results\n"
             "• Oil, gold, dollar & global market shocks · security escalations\n\n"
             "<b>📚 Sources</b>: SBP · PBS · PSX (via SCS Trade) · NCCPL · forex.pk · Business Recorder · "
             "Dawn · Express Tribune · The News · ProPakistani · Reuters/Bloomberg & others via Google News\n\n"
@@ -240,9 +243,15 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
         "Global markets": len(mk) >= 5,
     })
 
+    street.capture(sbp_items + news_items, state)   # brokerage forecasts for the accuracy scoreboard
+
     alerts: list[Alert] = []
     alerts += watchers.pbs_releases(state)     # before news: marks the PBS posts as handled
     alerts += watchers.mpc_watch(now, state)
+    watchers.mpc_hold_check(now, state)
+    view_now = f_view.result()
+    alerts += watchers.psx_filings(now, state, cfg, view_now)
+    alerts += watchers.unusual_volume(now, state, cfg, kse_symbols)
     alerts += watchers.sbp_changes(sbp_snap, state)
     alerts += watchers.corporate_results(f_res.result(), state, kse_symbols)
     alerts += watchers.fipi_alert(now, state)

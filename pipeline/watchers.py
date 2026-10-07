@@ -1,6 +1,7 @@
 """Data watchers: turn changes in official numbers into instant alerts."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 
 from .common import Alert, arrow, esc, fmt_num, fmt_pct, in_window, link, log, now_pkt, now_utc
@@ -83,13 +84,16 @@ def sbp_changes(new: dict, state: State) -> list[Alert]:
     if old:
         pr_new, pr_old = new.get("policy_rate"), old.get("policy_rate")
         if pr_new is not None and pr_old is not None and pr_new != pr_old:
+            from . import street
             move = "CUT" if pr_new < pr_old else "HIKE"
+            called = street.score_mpc(state, round((pr_new - pr_old) * 100))
             alerts.append(Alert(
                 header("🚨", f"SBP Policy Rate {move}", "Breaking · State Bank of Pakistan") + "\n"
                 f"🏦 Policy rate: <b>{pr_old:.2f}% ➜ {pr_new:.2f}%</b> {bps(pr_new, pr_old)}\n\n"
                 f"📌 <b>Why it matters:</b> The policy rate sets bank lending/deposit rates and T-bill "
                 f"yields; cuts usually support equity valuations, hikes weigh on them.\n"
                 f"🏭 <b>Sectors in focus:</b> Banks · Cement · Autos · Steel · Fertilizer\n"
+                + (f"\n{called}\n" if called else "") +
                 f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 10, f"sbp:pr:{pr_new}",
                 tags=["SBP", "PolicyRate", "InterestRates"]))
 
@@ -157,13 +161,33 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str]) -> list[
             bits.append(f"Right {esc(r['bm_right_per'].strip())}")
         period = esc(r.get("bm_quarter_number") or "")
         doc = link(r["bm_PDFLink"], "📄") if r.get("bm_PDFLink") else ""
-        lines.append(f"{star}<b>{esc(code)}</b> {period}: {' · '.join(bits) or 'see filing'} {doc}".rstrip())
+        yoy = _fy_yoy(code, r) if code in kse100 else ""
+        lines.append(f"{star}<b>{esc(code)}</b> {period}: {' · '.join(bits) or 'see filing'}{yoy} {doc}".rstrip())
     more = f"\n…and {len(fresh) - limit} more" if len(fresh) > limit else ""
     has_major = any(r.get("company_code") in kse100 for r in fresh)
     text = (header("📊", "Corporate Results & Payouts", f"{len(fresh)} new announcement(s)") + "\n"
             f"⭐ KSE-100 company · EPS in Rs · 📄 PSX filing\n\n" + "\n".join(lines) + more +
             f"\n\n🔗 {link(SCS_URL + 'MarketStatistics/MS_Announcements.aspx', 'SCS Trade')} · filings from PSX")
     return [Alert(text, 8 if has_major else 7, "results", tags=["Results", "Dividends", "Corporate"])]
+
+
+def _fy_yoy(code: str, r: dict) -> str:
+    """Full-year EPS vs last year, from the company's PSX page (annual results only)."""
+    m = re.match(r"FY(\d{2})$", (r.get("bm_quarter_number") or "").strip())
+    if not m:
+        return ""
+    try:
+        cur = float((r.get("bm_eps_cum") or r.get("bm_eps_quarter") or "").strip())
+    except ValueError:
+        return ""
+    from .sources import psx
+    page = psx.company(code)
+    prev = (page or {}).get("annual_eps", {}).get(str(2000 + int(m.group(1)) - 1))
+    if prev is None:
+        return ""
+    if prev > 0:
+        return f" · <b>{(cur / prev - 1) * 100:+.0f}% YoY</b> (LY {prev:.2f})"
+    return f" · LY {prev:.2f}"
 
 
 # ---------------------------------------------------------------- FIPI
@@ -181,6 +205,28 @@ def fipi_block(data: dict, usdpkr: float) -> str:
     return "\n".join(out)
 
 
+def fipi_sectors(day) -> str:
+    """Where foreigners bought / sold, by sector (USD m)."""
+    d = day.strftime("%m/%d/%Y")
+    rows = [r for r in scs._post("FIPILIPI.aspx/loadfipisector", {"date1": d, "date2": d})
+            if (r.get("FLTypeNew") or "").strip().upper() == "FIPI" and r.get("FLNetValueUSD") is not None
+            and "all other" not in (r.get("FLSectorName") or "").lower()]
+    if not rows:
+        return ""
+    rows.sort(key=lambda r: r["FLNetValueUSD"])
+    buy = [r for r in reversed(rows[-3:]) if r["FLNetValueUSD"] > 0.005]
+    sell = [r for r in rows[:3] if r["FLNetValueUSD"] < -0.005]
+    from .briefs import _sector_name
+    name = lambda r: esc(_sector_name(r["FLSectorName"].replace("(mn$)", "").replace(" And ", " & ")  # noqa: E731
+                                      .replace(" AND ", " & ").strip()))
+    out = ["🏭 <b>Foreigners by sector (USD m)</b>"]
+    if buy:
+        out.append("🟢 Bought: " + " · ".join(f"{name(r)} {r['FLNetValueUSD']:+.2f}" for r in buy))
+    if sell:
+        out.append("🔴 Sold: " + " · ".join(f"{name(r)} {r['FLNetValueUSD']:+.2f}" for r in sell))
+    return "\n".join(out) if len(out) > 1 else ""
+
+
 def fipi_alert(now, state: State) -> list[Alert]:
     if now.weekday() > 4 or now.hour < 16:
         return []
@@ -196,7 +242,9 @@ def fipi_alert(now, state: State) -> list[Alert]:
     if net is not None:
         daily_rec(state, data["date"])["fipi"] = net
     rate = ((state.snap("sbp") or {}).get("usdpkr") or {}).get("m2m") or 280.0
+    sectors = fipi_sectors(now)
     text = (header("🌍", "Investor Flows · FIPI / LIPI", f"{now:%A %d %b %Y}") + "\n" + fipi_block(data, rate) +
+            (f"\n\n{sectors}" if sectors else "") +
             f"\n\n📌 <b>Why it matters:</b> Sustained foreign buying or selling is a key driver of PSX direction.\n"
             f"🔗 {link(SCS_URL + 'FIPILIPI.aspx', 'SCS Trade / NCCPL')}")
     return [Alert(text, 8, key, tags=["FIPI", "ForeignFlows"])]
@@ -277,8 +325,12 @@ def record_close(now, state: State) -> list[dict]:
         state.set_snap("kse_session_date", f"{now:%Y-%m-%d}")  # a new session actually traded today
         # keep each session's KSE-100 constituent closes for the weekly review
         px = {r["company_code"]: r["CurrentPrice"] for r in scs.kse100_view() if r.get("CurrentPrice")}
+        rec = daily_rec(state, f"{now:%Y-%m-%d}")
         if px:
-            daily_rec(state, f"{now:%Y-%m-%d}")["px"] = px
+            rec["px"] = px
+        vol = {r["company_code"]: r["trading_vol"] for r in scs.daily_activity() if r.get("trading_vol")}
+        if vol:
+            rec["vol"] = vol  # history for the unusual-volume detector
     state.set_snap("kse_last_close", close)
     return idx
 
@@ -388,6 +440,9 @@ def _cpi_alert(d: dict, url: str, state: State) -> Alert:
     if pr is not None:
         real = pr - g["yoy"]
         lines.append(f"🏦 Real policy rate: <b>{real:+.1f}%</b> (policy {pr:.2f}% − CPI {g['yoy']:.1f}%)")
+    from . import street
+    if called := street.score_cpi(state, g["yoy"]):
+        lines += ["", called]
     lines += ["", "📌 <b>Why it matters:</b> Inflation is the main input for the SBP's next rate decision; "
               "a positive real rate gives room for cuts, a negative one pressure for hikes.",
               "🏭 <b>Sectors in focus:</b> Banks · Cement · FMCG · Autos",
@@ -411,6 +466,11 @@ def mpc_watch(now, state: State) -> list[Alert]:
     if not nxt:
         return []
     days = (nxt - now.date()).days
+    if days == 0:  # remember the pre-decision rate, to score 'hold' calls the next morning
+        at = state.snap("policy_rate_at") or {}
+        if str(nxt) not in at and (pr0 := (state.snap("sbp") or {}).get("policy_rate")) is not None:
+            at[str(nxt)] = pr0
+            state.set_snap("policy_rate_at", at)
     k = f"mpc_remind:{nxt}"
     if days == 1 and now.hour >= 18 and not state.flag(k):
         state.set_flag(k)
@@ -423,9 +483,11 @@ def mpc_watch(now, state: State) -> list[Alert]:
             ctx.append(f"📈 Latest CPI: {cpi['yoy']:.1f}% YoY ({cpi['month']})")
             if pr is not None:
                 ctx.append(f"⚖️ Real policy rate: {pr - cpi['yoy']:+.1f}%")
-        m = (state.snap("sbp") or {}).get("mtb")
-        if m and m["yields"].get("3-M"):
-            ctx.append(f"📜 3M T-bill cut-off: {m['yields']['3-M']:.2f}% ({m['as_on']})")
+        if sig := rate_signal(state.snap("sbp") or {}):
+            ctx.append(sig)
+        from . import street
+        if calls := street.pending_calls(state, "mpc"):
+            ctx.append(f"🧠 Street calls: {calls}")
         return [Alert(header("🏦", "MPC meeting tomorrow", f"{nxt:%A %d %B %Y} · SBP Monetary Policy Committee")
                       + "\n" + "\n".join(ctx) +
                       "\n\n📌 The decision is usually announced in the afternoon/evening — we'll alert you "
@@ -433,6 +495,147 @@ def mpc_watch(now, state: State) -> list[Alert]:
                                                          "SBP MPC calendar"),
                       9, k, tags=["SBP", "MPC", "PolicyRate"])]
     return []
+
+
+def rate_signal(sbp: dict) -> str:
+    """What T-bill cut-offs say about rate expectations vs the policy rate (a market reading, not a forecast)."""
+    pr, y = sbp.get("policy_rate"), ((sbp.get("mtb") or {}).get("yields") or {})
+    if pr is None or not y.get("6-M"):
+        return ""
+    s3 = round((y["3-M"] - pr) * 100) if y.get("3-M") else None
+    s6 = round((y["6-M"] - pr) * 100)
+    if s6 <= -50:
+        read = "market is pricing rate CUTS"
+    elif s6 >= 50:
+        read = "market is pricing NO cut (or a possible hike)"
+    else:
+        read = "market is broadly neutral on the next move"
+    spreads = (f"3M {s3:+d} bps · " if s3 is not None else "") + f"6M {s6:+d} bps"
+    return f"📡 T-bills vs policy rate: {spreads} → {read}"
+
+
+def mpc_hold_check(now, state: State) -> None:
+    """Morning after an MPC meeting: if the policy rate didn't change, score 'hold' forecasts."""
+    from . import street
+
+    nxt_prev = [d for d in (state.snap("mpc") or {}).get("dates", []) if d < f"{now:%Y-%m-%d}"]
+    if not nxt_prev or now.hour < 10:
+        return
+    last = nxt_prev[-1]
+    k = f"mpc_scored:{last}"
+    if state.flag(k) or (now.date() - datetime.fromisoformat(last).date()).days > 3:
+        return
+    state.set_flag(k)
+    pr_on = (state.snap("policy_rate_at") or {}).get(last)
+    pr_now = (state.snap("sbp") or {}).get("policy_rate")
+    if pr_now is not None and (pr_on is None or pr_on == pr_now):
+        street.score_mpc(state, 0)
+
+
+# ---------------------------------------------------------------- PSX company filings
+NOISE = re.compile(r"transmission of|unclaimed|e-?dividend|zakat|change of (registered )?address|dividend warrant|"
+                   r"credit of|duplicate|lost share|cdc|annual general meeting|notice of agm|closed period|"
+                   r"resolutions passed|proxy", re.I)
+
+
+def psx_filings(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
+    """New company filings on PSX (material information, results, corporate actions).
+
+    Checks your watchlist every run and rotates through the KSE-100 (heaviest stocks first),
+    so each constituent is checked every few runs without hammering PSX.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .sources import psx
+
+    wl = [s.upper() for s in (cfg.get("watchlist") or {})]
+    ranked = [r["company_code"] for r in sorted(view, key=lambda r: -(r.get("IndexWeightCur") or 0))]
+    if not ranked:
+        return []
+    per_run = cfg.get("psx_filings_per_run", 30)
+    cur = state.data.get("psx_cursor", 0) % len(ranked)
+    batch = (ranked + ranked)[cur:cur + per_run]
+    state.data["psx_cursor"] = cur + per_run
+    symbols = list(dict.fromkeys(wl + ranked[:10] + batch))  # top-10 weights checked every run
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        pages = [p for p in ex.map(psx.company, symbols) if p]
+    known = set(state.data.setdefault("psx_known", []))
+    px = {r["company_code"]: r for r in view}
+    fresh = []
+    since = f"{now - timedelta(days=2):%Y-%m-%d}"
+    for p in pages:
+        sym = p["symbol"]
+        first_time = sym not in known
+        for f in p["filings"]:
+            key = f"psx:{sym}:{f['url'] or f['title']}"
+            if state.seen(key):
+                continue
+            state.mark(key)
+            if first_time or f["date"] < since or f["kind"] == "board" or NOISE.search(f["title"]):
+                continue
+            fresh.append((sym, f))
+        if first_time:
+            known.add(sym)
+        state.set_snap(f"eps:{sym}", {"annual": p["annual_eps"], "quarterly": p["quarterly_eps"]})
+    state.data["psx_known"] = sorted(known)
+    if not fresh:
+        return []
+    lines = []
+    for sym, f in fresh:
+        r = px.get(sym, {})
+        price = ""
+        if r.get("CurrentPrice") and r.get("LDCP"):
+            pct = (r["CurrentPrice"] / r["LDCP"] - 1) * 100
+            price = f" · Rs {r['CurrentPrice']:,.2f} ({pct:+.1f}%)"
+        star = "👁️" if sym in wl else "⭐"
+        tag = "📢 " if "material" in f["title"].lower() else ""
+        doc = f" · {link(f['url'], '📄 filing')}" if f["url"] else ""
+        lines.append(f"{star} <b>{esc(sym)}</b> — {tag}{esc(f['title'][:140])}{price}{doc}")
+    text = (header("📢", "PSX company filings", f"{len(fresh)} new · straight from PSX") + "\n"
+            + "\n".join(lines) +
+            "\n\n📌 Company disclosures often reach PSX before the news media — open the filing for full details.")
+    return [Alert(text, 9, "psxfilings", tags=["PSXFilings", "MaterialInformation"])]
+
+
+# ---------------------------------------------------------------- unusual volume
+def unusual_volume(now, state: State, cfg: dict, kse100: set[str]) -> list[Alert]:
+    """Volume running at a multiple of the 10-session average — often a footprint of news or big money."""
+    mh = cfg["market_hours"]
+    if now.weekday() > 4 or not in_window(now, "10:30", mh["end"]):
+        return []
+    daily = state.data.get("daily", {})
+    hist = [daily[d]["vol"] for d in sorted(daily) if daily[d].get("vol") and d < f"{now:%Y-%m-%d}"][-10:]
+    if len(hist) < 5:
+        return []  # needs about a week of history first
+    act = scs.daily_activity()
+    wl = {s.upper() for s in (cfg.get("watchlist") or {})}
+    mult = cfg.get("unusual_volume_x", 3.0)
+    hits = []
+    for r in act:
+        code, vol = r.get("company_code"), r.get("trading_vol") or 0
+        if code not in kse100 and code not in wl:
+            continue
+        past = [h.get(code, 0) for h in hist]
+        avg = sum(past) / len(past) if past else 0
+        if avg < 50_000 or vol < max(mult * avg, 500_000):
+            continue
+        k = f"vol:{now:%Y-%m-%d}:{code}"
+        if state.flag(k):
+            continue
+        state.set_flag(k)
+        hits.append((code, vol, vol / avg, r.get("trading_close"), r.get("trading_change")))
+    if not hits:
+        return []
+    hits.sort(key=lambda h: -h[2])
+    lines = []
+    for code, vol, x, close, chg in hits[:12]:
+        pct = ""
+        if close and chg is not None and close - chg:
+            pct = f" · price {chg / (close - chg) * 100:+.1f}%"
+        lines.append(f"🔎 <b>{esc(code)}</b> {vol / 1e6:,.2f}m shares — <b>{x:.1f}×</b> its 10-day average{pct}")
+    text = (header("🔎", "Unusual volume", f"KSE-100 / watchlist · {now:%H:%M} PKT") + "\n" + "\n".join(lines) +
+            "\n\n📌 Volume spikes often come before or with news — check filings and headlines.")
+    return [Alert(text, 8, "volume", tags=["UnusualVolume", "KSE100"])]
 
 
 def next_mpc(state: State, now):

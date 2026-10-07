@@ -104,6 +104,13 @@ def macro_block(state: State, fx: dict | None = None) -> str:
         days = (nxt - now_pkt().date()).days
         when = "TODAY" if days == 0 else ("tomorrow" if days == 1 else f"in {days} days")
         lines.append(f"🗓️ Next MPC meeting: <b>{nxt:%a %d %b}</b> ({when})")
+    if sig := w.rate_signal(s):
+        lines.append(sig)
+    from . import street
+    if calls := street.pending_calls(state, "mpc", days=30):
+        lines.append(f"🧠 Street calls for MPC: {calls}")
+    if calls := street.pending_calls(state, "cpi", days=20):
+        lines.append(f"🧠 Street CPI forecasts: {calls}")
     if fx and (u := fx.get("USD")):
         inter = (s.get("usdpkr") or {}).get("m2m")
         spread = f" · spread vs interbank {u['sell'] - inter:+.2f}" if inter else ""
@@ -112,6 +119,24 @@ def macro_block(state: State, fx: dict | None = None) -> str:
         if others:
             lines.append(f"   Other (selling): {' · '.join(others)}")
     return "\n".join(lines)
+
+
+def commodities_block(cfg: dict) -> str:
+    from .sources import markets
+
+    com, reg = cfg.get("commodities") or {}, cfg.get("regional") or {}
+    mk = markets.snapshot(list(com) + list(reg))
+    lines = []
+    for sym, (name, sector) in com.items():
+        if d := mk.get(sym):
+            lines.append(f"{arrow(d['pct'])} {esc(name)} {d['last']:,.2f} ({fmt_pct(d['pct'], 1)}) → <i>{esc(sector)}</i>")
+    reg_parts = [f"{esc(name)} {fmt_pct(mk[sym]['pct'], 1)}" for sym, name in reg.items() if sym in mk]
+    out = []
+    if lines:
+        out.append(f"{section('🧪', 'Sector commodities')}\n" + "\n".join(lines))
+    if reg_parts:
+        out.append(f"{section('🌏', 'Overnight & regional cues')}\n" + " · ".join(reg_parts))
+    return "\n\n".join(out)
 
 
 def breadth_block(act: list[dict]) -> str:
@@ -295,6 +320,11 @@ def glance(idx: list[dict], state: State, mk: dict) -> str:
 
 
 # ---------------------------------------------------------------- briefs
+def _scoreboard(state: State) -> str:
+    from . import street
+    return street.scoreboard(state)
+
+
 def _mpc_note(state: State) -> str:
     nxt = w.next_mpc(state, now_pkt())
     if not nxt:
@@ -325,6 +355,7 @@ def morning(cfg: dict, state: State, mk: dict, view=None, title: str = "Morning 
             f"{section('🏦', 'SBP · Rates · PKR')}\n{sbp_block(state.snap('sbp') or {})}\n\n"
             + (f"{section('🧭', 'Macro · Inflation · MPC · Open market')}\n{macro}\n\n" if macro else "") +
             f"{section('🌐', 'Global markets')}\n{global_block(mk, cfg)}\n\n"
+            + (f"{cb}\n\n" if (cb := commodities_block(cfg)) else "") +
             f"{section('📅', 'Today on the corporate calendar')}\n{cal}\n\n"
             f"{section('📰', 'Top headlines (last 16h)')}\n{headlines_block(state, 16)}"
             + footer(cfg, ["MorningBrief", "KSE100"]))
@@ -415,6 +446,8 @@ def week_ahead(cfg: dict, state: State, mk: dict, view=None):
             f"   • Current account / remittances — mid-month (SBP)\n"
             f"   • Petrol price revision — 15th & last day of month\n\n"
             f"{section('🌐', 'Global')}\n{global_block(mk, cfg)}\n\n"
+            + (f"{board}\n<i>Scored automatically when official CPI / SBP decisions are released.</i>\n\n"
+               if (board := _scoreboard(state)) else "") +
             f"{section('📰', 'Biggest stories of the last 36h')}\n{headlines_block(state, 36, 10)}"
             + footer(cfg, ["WeekAhead", "KSE100"]))
     card = None

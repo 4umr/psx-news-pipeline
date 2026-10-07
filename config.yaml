@@ -58,6 +58,27 @@ market_hours: {start: "09:15", end: "16:45"} # window for intraday checks (PKT)
 
 # Alert when any KSE-100 stock moves this much intraday (PSX circuit is ~10%)
 big_stock_move_pct: 7.5
+# Unusual volume: alert when a KSE-100/watchlist stock trades this multiple of its 10-day average
+unusual_volume_x: 3.0
+# PSX company filings: company pages checked per run (top-10 by index weight + watchlist every run)
+psx_filings_per_run: 30
+
+# Sector-relevant commodities and regional cues (shown in the morning brief)
+commodities:
+  "CT=F":  ["Cotton", "Textile"]
+  "ZW=F":  ["Wheat", "Food / flour mills"]
+  "HG=F":  ["Copper", "Cables / engineering"]
+  "ALI=F": ["Aluminium", "Engineering / autos"]
+  "NG=F":  ["US natural gas", "Fertilizer / power (LNG proxy)"]
+  "ZS=F":  ["Soybeans", "Edible oil / poultry feed"]
+regional:
+  "ES=F":   "S&P 500 futures"
+  "NQ=F":   "Nasdaq futures"
+  "^N225":  "Nikkei (Japan)"
+  "^HSI":   "Hang Seng (HK)"
+  "^BSESN": "Sensex (India)"
+  "EEM":    "Emerging markets ETF"
+
 # Your watchlist: KSE-100 symbol -> alert threshold in % (alerts once per day per direction)
 watchlist:
   # OGDC: 4
@@ -117,6 +138,8 @@ google_news:
   - 'Pakistan Saudi OR China OR UAE investment OR deposit OR rollover'
   - 'SECP OR privatisation Pakistan'
   - 'Federal Reserve OR OPEC OR "oil prices"'
+  - 'Topline OR "Arif Habib" OR "JS Global" OR AKD expects OR forecast Pakistan'
+  - 'analysts expect Pakistan inflation OR "policy rate" OR KSE-100'
 
 # ---------------------------------------------------------------------
 # Topics: how news is recognised and scored.
@@ -283,6 +306,19 @@ topics:
       - ['deposit', 'rollover', 'roll over', 'loan', 'investment', 'financing', 'facility', 'oil on deferred', 'deferred payment', '\$\s?\d', '\d\s?(bn|billion|million)']
     why: "Bilateral/multilateral inflows support reserves and reduce external financing risk."
 
+  - name: street_view
+    label: "🧠 Street View · Analyst Forecasts"
+    score: 7
+    pk: true
+    all:
+      - ['top\s?line', 'arif habib', '\bahl\b', 'js global', 'js research', '\bakd\b', 'insight securities', 'optimus',
+         'foundation securities', 'pearl securities', 'ismail iqbal', 'intermarket', '\bbma\b', 'alpha capital',
+         'chase securities', 'sherman', 'next capital', 'taurus', 'darson', 'elixir', 'tola capital', 'al habib capital',
+         'efg hermes', 'analysts?', 'economists?', 'brokerage', 'research house', 'reuters poll']
+      - ['expect', 'forecast', 'project', 'estimat', 'predict', 'anticipat', 'target', 'outlook', 'likely', 'poll',
+         'survey', 'recommend', 'overweight', 'buy rating', 'preview', 'sees\b', 'see\b']
+    why: "Brokerage forecasts shape market expectations — the gap between expectation and the actual number is what moves prices."
+
   - name: psx_corporate
     label: "🏢 Corporate / PSX"
     score: 6
@@ -409,6 +445,7 @@ topic_meta:
   economy_growth:    {tags: [Economy, GDP], sectors: []}
   bilateral_finance: {tags: [Economy, Financing], sectors: []}
   psx_corporate:     {tags: [Corporate, PSX], sectors: []}
+  street_view:       {tags: [StreetView, Forecasts], sectors: []}
   psx_market:        {tags: [PSX, KSE100], sectors: []}
   regulation:        {tags: [Regulation, SECP], sectors: []}
   sector_data:       {tags: [SectorData], sectors: []}
