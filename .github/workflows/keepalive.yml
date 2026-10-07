@@ -1,0 +1,23 @@
+name: Keepalive
+
+# GitHub pauses scheduled workflows after 60 days without a commit.
+# This makes a tiny commit once a month so the pipeline never stops.
+on:
+  schedule:
+    - cron: "0 3 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          date -u > .github/last-keepalive.txt
+          git config user.name "keepalive-bot"
+          git config user.email "keepalive-bot@users.noreply.github.com"
+          git add .github/last-keepalive.txt
+          git commit -m "keepalive" && git push

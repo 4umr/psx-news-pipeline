@@ -1,0 +1,347 @@
+# =====================================================================
+#  PSX News Pipeline — settings
+#  Edit this file to change sources, keywords, alert levels and timings.
+# =====================================================================
+
+timezone: Asia/Karachi
+
+# Messages appended to briefs / digests / alerts
+disclaimer: "ℹ️ For information only — not investment advice."
+disclaimer_on_alerts: true
+
+# Ignore news older than this (stops old feed items flooding the channel)
+max_item_age_hours: 18
+
+# Score thresholds (see `topics` below). 8+ = instant standalone alert,
+# 4–7 = grouped into a "News Update" digest, below 4 = ignored.
+min_score_instant: 8
+min_score_digest: 4
+max_instant_per_run: 8
+max_digest_items: 15
+max_global_in_digest: 4      # cap non-Pakistan stories per digest
+
+# ---------------------------------------------------------------------
+# Scheduled briefs (Pakistan time). days: 0=Mon ... 6=Sun
+# ---------------------------------------------------------------------
+briefs:
+  morning:    {time: "08:45", days: [0, 1, 2, 3, 4]}
+  close:      {time: "17:15", days: [0, 1, 2, 3, 4]}
+  week_ahead: {time: "19:00", days: [6]}
+
+# ---------------------------------------------------------------------
+# Market-move alerts
+# ---------------------------------------------------------------------
+kse100_move_alerts_pct: [1.5, 3.0, 5.0]      # intraday KSE-100 move vs prev close
+market_hours: {start: "09:15", end: "16:45"} # window for intraday checks (PKT)
+
+global_markets:
+  # symbol: [display name, unit/prefix, alert threshold % daily move]
+  "BZ=F":     ["Brent oil", "$", 3.0]
+  "CL=F":     ["WTI oil", "$", 3.0]
+  "GC=F":     ["Gold", "$", 2.5]
+  "DX-Y.NYB": ["Dollar index (DXY)", "", 1.0]
+  "^GSPC":    ["S&P 500", "", 2.5]
+  "^TNX":     ["US 10Y yield", "%", 4.0]
+  "^VIX":     ["VIX (fear index)", "", 20.0]
+  "CNY=X":    ["USD/CNY", "", 1.0]
+  "BTC-USD":  ["Bitcoin", "$", 8.0]
+
+# ---------------------------------------------------------------------
+# News sources
+# pk: true  -> feed is Pakistan-only, so Pakistan context is assumed
+# official: true -> official source, gets +1 score boost
+# ---------------------------------------------------------------------
+feeds:
+  - {name: "Business Recorder", url: "https://www.brecorder.com/feeds/latest-news", pk: false}
+  - {name: "Business Recorder Markets", url: "https://www.brecorder.com/feeds/markets", pk: false}
+  - {name: "Dawn Business", url: "https://www.dawn.com/feeds/business", pk: true}
+  - {name: "Express Tribune", url: "https://tribune.com.pk/feed/business", pk: true}
+  - {name: "The News", url: "https://www.thenews.com.pk/rss/1/8", pk: true}
+  - {name: "ProPakistani", url: "https://propakistani.pk/category/business/feed/", pk: true}
+  - {name: "Arab News PK", url: "https://www.arabnews.pk/rss.xml", pk: false}
+  - {name: "PBS", url: "https://www.pbs.gov.pk/feed/", pk: true, official: true}
+
+# Google News searches (Pakistan edition, last 24h). Catches Reuters,
+# Bloomberg, Mettis, Profit, Geo, Gulf News etc. that have no usable RSS.
+google_news:
+  - '"PSX" OR "KSE-100" OR "Pakistan Stock Exchange"'
+  - '"State Bank of Pakistan" OR "SBP" policy rate OR reserves'
+  - 'IMF Pakistan'
+  - 'Pakistan inflation OR CPI OR SPI'
+  - 'Pakistan "current account" OR remittances OR exports OR "trade deficit"'
+  - 'Pakistan petrol OR diesel price OR OGRA OR NEPRA OR "circular debt"'
+  - 'Pakistan budget OR FBR OR "super tax" OR "mini-budget"'
+  - 'Pakistan rupee dollar interbank'
+  - 'Pakistan Moody''s OR Fitch OR "S&P Global" rating'
+  - 'Pakistan T-bill OR PIB OR sukuk OR Eurobond auction'
+  - 'Pakistan India OR Afghanistan border OR military OR attack'
+  - 'Pakistan Saudi OR China OR UAE investment OR deposit OR rollover'
+  - 'SECP OR privatisation Pakistan'
+  - 'Federal Reserve OR OPEC OR "oil prices"'
+
+# ---------------------------------------------------------------------
+# Topics: how news is recognised and scored.
+# A topic matches when EVERY group in `all` has at least one regex hit
+# (case-insensitive). The first group must hit the headline; the others
+# may hit the headline or summary (title_only: true = headline only).
+# The item's score = best matching topic score
+# (+1 for official sources). `pk: true` = only counts when Pakistan
+# context is present (Pakistan-only feed, or a Pakistani keyword).
+# ---------------------------------------------------------------------
+pk_context: '\b(pakistan\w*|psx|kse|sbp|state bank|rupee|pkr|karachi|islamabad|lahore|fbr|secp|ogra|nepra)\b'
+
+topics:
+  - name: monetary_policy
+    label: "🏦 SBP Monetary Policy"
+    score: 10
+    pk: true
+    all:
+      - ['policy rate', 'monetary policy', '\bmpc\b', 'interest rate', 'discount rate', 'key rate']
+    why: "Policy rate sets bank lending/deposit rates and T-bill yields; cuts usually support equity valuations, hikes weigh on them."
+
+  - name: imf
+    label: "🌐 IMF"
+    score: 9
+    pk: true
+    all:
+      - ['\bimf\b', 'international monetary fund']
+      - ['tranche', 'staff.level', 'board', 'review', 'agreement', 'disburs', '\beff\b', 'programme', 'program', 'mission', 'loan', 'bailout', 'condition', 'waiver']
+    why: "IMF progress drives external financing, reserves, PKR stability and foreign investor confidence."
+
+  - name: govt_securities
+    label: "📜 T-Bills / PIBs / Sukuk"
+    score: 9
+    pk: true
+    all:
+      - ['t-?bill', 'treasury bill', '\bmtbs?\b', '\bpibs?\b', '(government|govt|ijara|gis)\W+sukuk', 'sukuk auction', 'eurobond', 'panda bond', 'government securities', 'cut-?off']
+    why: "Auction cut-off yields show where the market expects rates to go — falling yields often front-run policy rate cuts."
+
+  - name: inflation
+    label: "📈 Inflation"
+    score: 9
+    pk: true
+    all:
+      - ['inflation', '\bcpi\b', 'consumer price', 'sensitive price', '\bspi\b', 'price indicator']
+    why: "Inflation is the main input for SBP's next rate decision."
+
+  - name: reserves_external
+    label: "💵 Reserves / External Account"
+    score: 9
+    pk: true
+    all:
+      - ['reserves', 'current account', 'balance of payments', 'external debt', 'external financing', 'rollover', 'roll over']
+    why: "Reserves and the current account drive PKR stability and the country's ability to service debt."
+
+  - name: fuel_prices
+    label: "⛽ Fuel / Energy Prices"
+    score: 8
+    pk: true
+    all:
+      - ['petrol', 'diesel', '\bhsd\b', 'petroleum (product )?prices?', 'fuel price', 'kerosene', 'gas price', 'electricity (tariff|price|rate)', 'power tariff', '\blng\b', 'base tariff', 'fuel (charges )?adjustment']
+    why: "Fuel and power prices feed directly into CPI inflation and affect OMC, refinery, power and industrial margins."
+
+  - name: budget_tax
+    label: "🏛️ Budget / Taxation"
+    score: 8
+    pk: true
+    all:
+      - ['federal budget', 'budget (deficit|proposals?|strategy|target|20\d\d|fy\d\d)', 'mini-budget', 'super tax', 'capital gains tax', '\bcgt\b', 'finance bill', 'fiscal deficit', 'tax (measures?|hike|increase|cut|on (banks|dividends?|capital gains|stocks|profits))', 'new taxes', 'dividend tax']
+    why: "Tax changes can hit sector earnings directly (banks, E&P, cement, autos) and change after-tax returns for investors."
+
+  - name: tax_admin
+    label: "🧾 FBR / Tax Collection"
+    score: 5
+    pk: true
+    all:
+      - ['\bfbr\b', 'withholding tax', 'sales tax', '\bgst\b', 'customs duty', 'regulatory duty', 'tax (collection|target|shortfall|exemption|return)']
+    why: "Revenue performance matters for IMF targets and the risk of new tax measures."
+
+  - name: market_shock
+    label: "🚨 Market Shock"
+    score: 10
+    pk: true
+    all:
+      - ['kse|psx|pakistan stock|pakistani stocks|pakistan shares', 'bourse']
+      - ['circuit breaker', 'trading (halt|suspend)', 'halted', 'crash', 'plunge', 'plummet', 'bloodbath', 'record high', 'all-time high', 'historic high', 'biggest (single-day )?(fall|drop|gain)', 'nosedive', 'skyrocket']
+    why: "Large index moves often reflect a major macro or political trigger — check the cause before reacting."
+
+  - name: geo_escalation
+    label: "⚔️ Military Escalation"
+    score: 9
+    pk: true
+    all:
+      - ['india', 'afghan', 'taliban', 'iran', 'border', '\bloc\b', 'line of control']
+      - ['airstrikes?', 'air strikes?', 'missiles?', 'drone strikes?', 'shelling', 'military (operation|action|escalation)', 'war (with|on|between)', 'strikes on', 'attack on (pakistan|india|afghan)', 'airspace (closed|closure)']
+    why: "Military escalation can trigger sharp risk-off selling at PSX."
+
+  - name: geopolitics
+    label: "⚔️ Geopolitics / Security"
+    score: 6
+    pk: true
+    all:
+      - ['india', 'afghan', 'taliban', '\bttp\b', 'iran', 'border', '\bloc\b', 'line of control', 'airstrike', 'missile', 'drone strike']
+      - ['attack', 'strike', 'war\b', 'clash', 'escalat', 'tension', 'firing', 'blast', 'ceasefire', 'conflict', 'shelling', 'retaliat', 'missile', 'military']
+    why: "Security and geopolitical shocks can trigger sharp risk-off selling at PSX."
+
+  - name: sovereign_rating
+    label: "⭐ Credit Rating"
+    score: 9
+    pk: true
+    all:
+      - ["moody", 'fitch', 's&p', 'standard & poor', 'credit rating', 'sovereign rating']
+      - ['upgrade', 'downgrade', 'rating', 'outlook', 'affirm']
+    why: "Sovereign ratings affect Pakistan's borrowing costs and foreign portfolio flows."
+
+  - name: rupee_shock
+    label: "💱 Rupee Shock"
+    score: 9
+    pk: true
+    title_only: true
+    all:
+      - ['rupee', '\bpkr\b', 'exchange rate', 'devaluation']
+      - ['record (low|high)', 'all-time (low|high)', 'plunge', 'crash', 'devalu', 'slump', 'tumble', 'biggest', 'free fall', 'sharp(ly)?']
+    why: "Sharp PKR moves hit inflation, import costs and foreign-investor returns."
+
+  - name: rupee
+    label: "💱 Rupee / Exchange Rate"
+    score: 5
+    pk: true
+    all:
+      - ['rupee', '\bpkr\b', 'exchange rate', 'interbank', 'open market', 'dollar rate']
+    why: "PKR moves affect inflation, import costs, and earnings of exporters vs importers."
+
+  - name: external_trade
+    label: "🚢 Trade / Remittances / FDI"
+    score: 7
+    pk: true
+    all:
+      - ['remittance', 'exports?\b', 'imports?\b', 'trade deficit', 'foreign direct investment', '\bfdi\b', 'roshan digital', 'textile exports']
+    why: "Trade, remittances and FDI determine the current account and pressure on the rupee."
+
+  - name: energy_sector
+    label: "🔌 Energy Sector / Circular Debt"
+    score: 7
+    pk: true
+    all:
+      - ['circular debt', '\bipps?\b', 'nepra', 'ogra', 'discos?', '\bsngpl\b', '\bssgc\b', '\bogdc', '\bppl\b', '\bmari\b', 'oil (and|&) gas', 'exploration', 'refiner', '\bomcs?\b', 'oil marketing']
+    why: "Circular debt and energy pricing decisions drive cash flows of E&P, power, gas and OMC companies."
+
+  - name: economy_growth
+    label: "🏭 Economy / Growth"
+    score: 7
+    pk: true
+    all:
+      - ['\bgdp\b', 'large.scale manufacturing', '\blsm\b', 'economic growth', 'economic survey', 'growth rate', 'recession', 'economic outlook', 'debt servicing', 'public debt', 'privati[sz]', 'pia\b', 'ecc\b', 'cabinet approv']
+    why: "Growth data and major economic decisions shape corporate earnings expectations."
+
+  - name: bilateral_finance
+    label: "🤝 Friendly-Country Financing"
+    score: 8
+    pk: true
+    title_only: true
+    all:
+      - ['saudi', 'china', 'chinese', 'uae', 'qatar', 'kuwait', '\bcpec\b', 'world bank', '\badb\b', 'asian development bank', 'aiib']
+      - ['deposit', 'rollover', 'roll over', 'loan', 'investment', 'financing', 'facility', 'oil on deferred', 'deferred payment', '\$\s?\d', '\d\s?(bn|billion|million)']
+    why: "Bilateral/multilateral inflows support reserves and reduce external financing risk."
+
+  - name: psx_corporate
+    label: "🏢 Corporate / PSX"
+    score: 6
+    pk: true
+    all:
+      - ['profit', 'earnings', '\beps\b', 'dividend', 'bonus shares', 'right (shares|issue)', '\bipo\b', 'listing', 'merger', 'acquisition', 'acquire', 'takeover', 'buyback', 'buy-back', 'delist', 'stake', 'board of directors', 'results', 'payout']
+    why: "Company-specific news can move the stock and its sector peers."
+
+  - name: psx_market
+    label: "📊 PSX Market"
+    score: 6
+    pk: true
+    all:
+      - ['kse-?100', '\bpsx\b', 'pakistan stock', 'pakistani stocks', 'pakistan equities', 'bourse', 'kse-?30', 'kmi-?30']
+    why: "Daily market action and the drivers behind it."
+
+  - name: regulation
+    label: "⚖️ Regulation / SECP / SBP Rules"
+    score: 5
+    pk: true
+    all:
+      - ['secp', 'regulat', 'circular', 'directive', 'notification', 'mutual fund', 'brokerage', 'margin', 'leverage', 'short sell']
+    why: "Regulatory changes can affect market liquidity, specific sectors or investor access."
+
+  - name: sector_data
+    label: "🏗️ Sector Data"
+    score: 5
+    pk: true
+    all:
+      - ['cement (despatches|dispatches|sales|prices)', 'auto(mobile)? sales', 'car sales', 'fertili[sz]er (offtake|sales|urea|dap)', 'urea', 'oil sales', 'petroleum sales', 'bank deposits', 'advances', 'textile', 'steel', 'sugar', 'wheat', 'cotton (arrivals|production)']
+    why: "Monthly sector data directly signals earnings trends for listed companies."
+
+  - name: politics
+    label: "🗳️ Politics"
+    score: 5
+    pk: true
+    all:
+      - ['election', 'parliament', 'national assembly', 'senate', 'prime minister', 'protest', 'sit-in', 'amendment', 'supreme court', 'pti\b', 'pml-?n', 'ppp\b', 'no-confidence', 'caretaker']
+    why: "Political stability matters for policy continuity and investor sentiment."
+
+  - name: natural_disaster
+    label: "🌧️ Weather / Disaster"
+    score: 7
+    pk: true
+    all:
+      - ['flood', 'earthquake', 'heatwave', 'drought', 'cyclone', 'monsoon', 'smog']
+    why: "Natural disasters hit crops, infrastructure, inflation and fiscal spending."
+
+  - name: fed_decision
+    label: "🇺🇸 Fed Rate Decision"
+    score: 8
+    pk: false
+    title_only: true
+    all:
+      - ['\bfed\b', 'federal reserve', '\bfomc\b']
+      - ['raises', 'hikes', 'cuts', 'lowers', 'holds', 'keeps', 'leaves', 'unchanged']
+      - ['rates?\b']
+    why: "Fed decisions move the dollar and global risk appetite, which drive flows into frontier markets like Pakistan."
+
+  - name: global_rates
+    label: "🌍 Global Rates / Fed"
+    score: 5
+    pk: false
+    all:
+      - ['federal reserve', '\bfed\b', '\bfomc\b', 'powell', 'treasury yields', 'us inflation', 'us cpi', 'nonfarm|non-farm|payrolls']
+      - ['rate', 'cut', 'hike', 'minutes', 'decision', 'inflation', 'jobs', 'yield']
+    why: "US rates and dollar strength drive emerging-market flows and pressure on the rupee."
+
+  - name: global_oil
+    label: "🛢️ Global Oil"
+    score: 6
+    pk: false
+    all:
+      - ['oil price', 'crude', 'brent', 'opec', '\bwti\b']
+    why: "Pakistan imports most of its oil — higher prices widen the import bill and push up inflation."
+
+  - name: global_shock
+    label: "🌍 Global Risk Event"
+    score: 6
+    pk: false
+    title_only: true
+    all:
+      - ['global (markets|stocks|selloff|sell-off)', 'wall street', '\bdow\b', 'stocks', 'recession', 'trade war', 'hormuz', 'red sea', 'tankers?', 'oil (supply|supplies|shipments|exports)']
+      - ['plunge', 'crash', 'tumble', 'rout', 'escalat', 'attack', 'blocked', 'closure', 'disrupt', 'selloff', 'sell-off', 'slump', 'recession', 'highest']
+    why: "Global risk-off episodes and supply shocks hit EM equities and oil-importing economies like Pakistan."
+
+  - name: middle_east
+    label: "🌍 Middle East / Iran War"
+    score: 6
+    pk: false
+    title_only: true
+    all:
+      - ['iran', 'israel', 'middle east', 'houthi', '\bgulf\b']
+      - ['ceasefire', 'truce', 'peace (deal|talks|agreement)', 'escalat', 'hormuz', '\boil\b', 'nuclear (deal|talks)', 'end (the )?war']
+    why: "The Middle East conflict drives oil prices and Gulf remittance/financing flows that matter for Pakistan."
+
+# Sources whose Pakistan coverage is mostly opinion/rhetoric: score -2
+low_priority_sources: '(times of india|dna india|sunday guardian|ndtv|india today|hindustan times|news18|firstpost|wion|republic|zee news|economic times|indian express|the print|opindia|tolonews)'
+
+# Words that mark an item as noise even if a topic matches
+exclude: '\b(cricket|football|hockey|showbiz|film|drama|celebrity|recipe|horoscope|t20|odi|psl|fashion|wedding|phones?|smartphones?|indian rupee|rbi|sri lanka\w*|bangladesh\w*|nepal)\b'
