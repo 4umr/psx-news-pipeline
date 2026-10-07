@@ -112,6 +112,7 @@ class Alert:
     key: str = ""                # dedupe key
     preview: bool = False        # Telegram link preview
     tags: list = field(default_factory=list)
+    admin: bool = False          # route to the owner's private chat only (e.g. data-quality warning)
     extra: dict = field(default_factory=dict)
 
 

@@ -10,7 +10,7 @@ from .common import Alert, NewsItem, esc, hours_ago, in_window, link, log, now_p
 from .scoring import Scorer, is_duplicate, title_tokens
 from .sources import markets, news, sbp, scs
 from .state import State
-from .style import DIV, footer, header, meta
+from .style import DIV, footer, header, meta, to_whatsapp
 from .telegram import Sender
 
 
@@ -128,11 +128,12 @@ def _flush_digest(cfg: dict, state: State, sender: Sender) -> int:
 
 
 # ---------------------------------------------------------------- briefs
-def _send_brief(name: str, cfg: dict, state: State, mk: dict, view, sender: Sender, **kw) -> None:
+def _send_brief(name: str, cfg: dict, state: State, mk: dict, view, sender: Sender, **kw) -> str:
     text, card, caption = briefs.BUILDERS[name](cfg, state, mk, view, **kw)
     if card:
         sender.send_photo(card, caption, name=name)
     sender.send(text)
+    return text
 
 
 def about_text(cfg: dict) -> str:
@@ -238,19 +239,38 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
         log.info("bootstrap done in %.1fs", time.time() - t0)
         return
 
+    sender.retry_outbox(state.data.pop("outbox", []))
+
+    wa_mode = cfg.get("brand", {}).get("whatsapp_copy", "important")
+
+    def wa(text: str, important: bool) -> None:
+        if sender.admin and (wa_mode == "all" or (wa_mode == "important" and important)):
+            sender.send_admin_plain("📲 WhatsApp-ready copy (long-press → copy → paste):\n\n" + to_whatsapp(text, cfg))
+
     alerts.sort(key=lambda a: -a.priority)
     for a in alerts:
-        sender.send(_with_footer(a, cfg), preview=a.preview)
+        if a.admin:
+            sender.send_admin(a.text)
+            continue
+        msg = _with_footer(a, cfg)
+        sender.send(msg, preview=a.preview)
+        wa(msg, a.priority >= 9)
     for it in instant:
-        sender.send(_fmt_instant(it, cfg))
+        msg = _fmt_instant(it, cfg)
+        sender.send(msg)
+        wa(msg, it.score >= 10)
     _queue_digest(digest, state)
     n_digest = _flush_digest(cfg, state, sender) if _digest_due(cfg, state, now) else 0
 
     names = [force_brief] if force_brief else briefs.due(cfg, state, now)
     for name in names:
-        _send_brief(name, cfg, state, mk, view, sender)
+        text = _send_brief(name, cfg, state, mk, view, sender)
+        if text:
+            wa(text, True)
         state.data["briefs"][name] = f"{now:%Y-%m-%d}"
 
+    if sender.failed:
+        state.data["outbox"] = sender.failed[-20:]
     state.save()
     log.info("run done in %.1fs: %d alerts, %d instant news, %d queued, %d in digest, briefs=%s, messages=%d",
              time.time() - t0, len(alerts), len(instant), len(digest), n_digest, names, sender.sent)

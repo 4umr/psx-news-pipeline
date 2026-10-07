@@ -43,6 +43,7 @@ class Sender:
         # Optional private chat for operational warnings (never sent to the channel)
         self.admin = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
         self.sent = 0
+        self.failed: list[dict] = []   # messages to retry next run (outbox)
         if self.dry:
             self.preview = ROOT / "out" / "preview.txt"
             self.preview.parent.mkdir(exist_ok=True)
@@ -105,10 +106,22 @@ class Sender:
                 ok = False
         return ok
 
-    def _post(self, chat: str, text: str, preview: bool) -> bool:
+    def send_admin_plain(self, text: str) -> bool:
+        """Plain-text message to the owner (keeps WhatsApp *bold* markers intact for copy-paste)."""
+        if self.dry:
+            return self.send(f"[ADMIN ONLY · plain text]\n{text}")
+        if not self.admin:
+            return False
+        ok = True
+        for i in range(0, len(text), MAX_LEN):
+            ok &= self._post(self.admin, text[i:i + MAX_LEN], False, html_mode=False)
+        return ok
+
+    def _post(self, chat: str, text: str, preview: bool, html_mode: bool = True) -> bool:
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-        payload = {"chat_id": chat, "text": text, "parse_mode": "HTML",
-                   "disable_web_page_preview": not preview}
+        payload = {"chat_id": chat, "text": text, "disable_web_page_preview": not preview}
+        if html_mode:
+            payload["parse_mode"] = "HTML"
         for attempt in range(4):
             try:
                 r = http().post(url, json=payload, timeout=20)
@@ -122,6 +135,8 @@ class Sender:
                     continue
                 if not r.ok:
                     log.error("Telegram error %s: %s", r.status_code, r.text[:200])
+                    if r.status_code >= 500 and chat != self.admin:
+                        self.failed.append({"chat": chat, "text": text, "ts": int(time.time())})
                     return False
                 self.sent += 1
                 time.sleep(1.1)  # stay well under channel rate limits
@@ -129,7 +144,21 @@ class Sender:
             except Exception as e:  # noqa: BLE001
                 log.warning("Telegram send failed (%s), retrying", e)
                 time.sleep(2 * (attempt + 1))
+        if chat != self.admin:
+            # network trouble: keep it for the next run instead of losing the message
+            self.failed.append({"chat": chat, "text": text, "ts": int(time.time())})
         return False
+
+    def retry_outbox(self, outbox: list[dict]) -> list[dict]:
+        """Resend messages that failed in earlier runs (max 6h old). Returns what still failed."""
+        if self.dry or not outbox:
+            return []
+        for m in outbox:
+            if time.time() - m["ts"] < 6 * 3600:
+                n = len(self.failed)
+                if not self._post(m["chat"], m["text"], False) and len(self.failed) > n:
+                    self.failed[-1]["ts"] = m["ts"]  # keep original age so it expires after 6h
+        return []
 
 
 def find_chats() -> None:

@@ -129,6 +129,76 @@ def breadth_block(act: list[dict]) -> str:
             f"🔥 Volume leaders: {leaders}")
 
 
+def _sector_name(s: str) -> str:
+    s = (s or "").strip().title()
+    return {"Oil & Gas Exploration Companies": "E&P", "Oil & Gas Marketing Companies": "OMCs",
+            "Inv. Banks / Inv. Cos. / Securities Cos.": "Inv. Banks/Brokers",
+            "Power Generation & Distribution": "Power", "Technology & Communication": "Tech & Telecom",
+            "Automobile Assembler": "Autos", "Automobile Parts & Accessories": "Auto Parts",
+            "Food & Personal Care Products": "Food & FMCG", "Pharmaceuticals": "Pharma"}.get(s, s)
+
+
+def sector_block(view: list[dict], act: list[dict]) -> str:
+    """KSE-100 sector performance: free-float-weighted % change and index points, like the index itself."""
+    if not view or not act:
+        return ""
+    sec = {r["company_code"]: r.get("sector_name", "") for r in act}
+    agg: dict[str, list[float]] = {}
+    for r in view:
+        s, ldcp, cur = sec.get(r.get("company_code")), r.get("LDCP"), r.get("CurrentPrice")
+        if not s or not ldcp or not cur:
+            continue
+        wgt = (r.get("freeflooat") or 0) * ldcp
+        a = agg.setdefault(_sector_name(s), [0.0, 0.0, 0.0])
+        a[0] += wgt
+        a[1] += wgt * (cur / ldcp - 1)
+        a[2] += r.get("NetIndexPoint") or 0
+    rows = [(name, (v[1] / v[0] * 100) if v[0] else 0.0, v[2]) for name, v in agg.items()]
+    rows.sort(key=lambda x: -x[2])
+    top = [x for x in rows[:3] if x[2] > 0]
+    bot = [x for x in reversed(rows[-3:]) if x[2] < 0]
+    fmt = lambda x: f"{esc(x[0])} {x[1]:+.2f}% ({x[2]:+.0f} pts)"  # noqa: E731
+    return (f"{section('🏭', 'Sector performance (KSE-100)')}\n"
+            f"🟢 {' · '.join(fmt(x) for x in top) or '—'}\n🔴 {' · '.join(fmt(x) for x in bot) or '—'}")
+
+
+def highs_lows_block(kse100: set[str]) -> str:
+    out = []
+    for kind, field_, icon in (("high52", "NearHigh", "🏔️"), ("low52", "NearLow", "🕳️")):
+        rows = [r for r in scs._post(f"MarketStatistics/MS_NearHighLow.aspx/{kind}")
+                if r.get(field_) == 0 and "DELISTED" not in (r.get("company_name") or "").upper()]
+        if not rows:
+            continue
+        majors = [r["company_code"] for r in rows if r["company_code"] in kse100]
+        label = "52-week HIGH" if kind == "high52" else "52-week LOW"
+        names = ", ".join(majors[:10]) if majors else "none in KSE-100"
+        out.append(f"{icon} {len(rows)} stocks at {label} · KSE-100: {esc(names)}")
+    return (f"{section('📏', '52-week highs & lows')}\n" + "\n".join(out)) if out else ""
+
+
+def week_review_block(state: State, now: datetime) -> str:
+    daily = state.data.get("daily", {})
+    cut = f"{now - timedelta(days=7):%Y-%m-%d}"
+    week = sorted(d for d in daily if d > cut and daily[d].get("px"))
+    base = sorted(d for d in daily if d <= cut and daily[d].get("px"))
+    lines = []
+    if week and base:
+        p0, p1 = daily[base[-1]]["px"], daily[week[-1]]["px"]
+        ch = sorted(((c, (p1[c] / p0[c] - 1) * 100) for c in p1 if c in p0 and p0[c]), key=lambda x: x[1])
+        gain = [(c, p) for c, p in reversed(ch[-5:]) if p > 0]
+        lose = [(c, p) for c, p in ch[:5] if p < 0]
+        if gain:
+            lines.append("🟢 Top KSE-100 gainers: " + " · ".join(f"{esc(c)} {p:+.1f}%" for c, p in gain))
+        if lose:
+            lines.append("🔴 Top KSE-100 losers: " + " · ".join(f"{esc(c)} {p:+.1f}%" for c, p in lose))
+    flows = [daily[d]["fipi"] for d in sorted(daily) if d > cut and "fipi" in daily[d]]
+    if flows:
+        tot = sum(flows)
+        lines.append(f"🌍 Foreign investors this week: net {'buy' if tot > 0 else 'sell'} "
+                     f"<b>${abs(tot):.2f}m</b> over {len(flows)} session(s)")
+    return "\n".join(lines)
+
+
 def global_block(mk: dict, cfg: dict) -> str:
     lines = []
     for sym, (name, unit, _th) in cfg["global_markets"].items():
@@ -287,8 +357,10 @@ def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
     text = (header("🔔", "PSX Closing Wrap", f"{now:%A, %d %B %Y}") + "\n"
             + (f"{section('⚡', 'At a glance')}\n{g}\n\n" if g else "")
             + f"{section('📈', 'Indices')}\n{psx_block(idx)}\n\n"
-            + (f"{breadth_block(act)}\n\n" if act else "") +
+            + (f"{breadth_block(act)}\n\n" if act else "")
+            + (f"{sector_block(view, act)}\n\n" if sector_block(view, act) else "") +
             f"{movers_block(view)}"
+            + (f"\n\n{hl}" if (hl := highs_lows_block({r.get('company_code') for r in view})) else "")
             + (fipi_section(state) if fipi_today else
                "\n\n🌍 FIPI/LIPI for today will be posted as soon as NCCPL publishes it.")
             + f"\n\n{section('🏦', 'Rates · PKR')}\n{sbp_block(state.snap('sbp') or {})}\n"
@@ -327,8 +399,10 @@ def week_ahead(cfg: dict, state: State, mk: dict, view=None):
         week = f"{arrow(b - a)} KSE-100 this week: <b>{b:,.0f}</b> ({b - a:+,.0f} | {(b / a - 1) * 100:+.2f}%)\n\n"
     monday = now + timedelta(days=(7 - now.weekday()) % 7 or 1)
     cal, _, _ = calendar_block(monday, 7)
-    text = (header("📅", "PSX Week Ahead", f"Week of {monday:%d %B %Y}") + "\n"
-            f"{week}"
+    review = week_review_block(state, now)
+    text = (header("📅", "PSX Week in Review & Week Ahead", f"Week of {monday:%d %B %Y}") + "\n"
+            + (f"{section('🔙', 'The week that was')}\n" if week or review else "")
+            + f"{week.rstrip()}" + (f"\n{review}" if review else "") + ("\n\n" if week or review else "") +
             f"{section('🗓️', 'Corporate calendar (next 7 days)')}\n{cal}\n\n"
             f"{section('🏦', 'Rates snapshot')}\n{sbp_block(state.snap('sbp') or {})}\n\n"
             + (f"{section('🧭', 'Macro · Inflation · MPC · Open market')}\n{macro_block(state, forex.open_market())}\n\n"

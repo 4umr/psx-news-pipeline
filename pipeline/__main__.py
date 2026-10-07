@@ -66,7 +66,13 @@ def main() -> None:
             print("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set (.env or environment).")
             sys.exit(1)
         ok = s.send("✅ Test message from your PSX News Pipeline.")
-        print("Sent!" if ok else "Failed — check the token, chat id, and that the bot is an admin of the channel.")
+        print("Channel: sent!" if ok else "Channel: FAILED — check the token, chat id, and that the bot is an admin of the channel.")
+        if s.admin:
+            a = s.send_admin("✅ Private admin alerts are working. Health warnings and WhatsApp-ready copies will arrive here.")
+            print("Admin chat: sent!" if a else "Admin chat: FAILED — message your bot once from your own account, then check the id.")
+            ok &= a
+        else:
+            print("Admin chat: not configured (TELEGRAM_ADMIN_CHAT_ID).")
         sys.exit(0 if ok else 1)
     elif args.cmd == "chats":
         find_chats()

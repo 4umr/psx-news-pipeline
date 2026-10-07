@@ -43,11 +43,43 @@ def tenor_line(yields: dict, old: dict | None = None) -> str:
 
 
 # ---------------------------------------------------------------- SBP
+def _suspicious(what: str, detail: str) -> Alert:
+    """A data-quality warning for the owner only — the channel never sees questionable numbers."""
+    return Alert(f"🧐 <b>Data check — not posted to channel</b>\n{esc(what)}: {esc(detail)}\n"
+                 "This looks like a parsing/source glitch. If it's real, it will be confirmed by the news feed.",
+                 0, f"sus:{what}", admin=True)
+
+
+def _sbp_sane(new: dict, old: dict) -> list[str]:
+    """Return a list of problems with a freshly parsed SBP snapshot (empty = looks fine)."""
+    bad = []
+    pr, opr = new.get("policy_rate"), old.get("policy_rate")
+    if pr is not None and not (3 <= pr <= 30):
+        bad.append(f"policy rate {pr}% out of range")
+    if pr is not None and opr is not None and abs(pr - opr) > 5:
+        bad.append(f"policy rate jump {opr}% → {pr}%")
+    r, o = new.get("reserves"), old.get("reserves")
+    if r and o and r.get("sbp") and o.get("sbp") and abs(r["sbp"] - o["sbp"]) > 5000:
+        bad.append(f"SBP reserves jump {o['sbp']:.0f} → {r['sbp']:.0f} USD m")
+    for key in ("mtb", "pib"):
+        for t, y in ((new.get(key) or {}).get("yields") or {}).items():
+            if y is not None and not (2 <= y <= 35):
+                bad.append(f"{key.upper()} {t} yield {y}% out of range")
+    return bad
+
+
 def sbp_changes(new: dict, state: State) -> list[Alert]:
     if not new:
         return []
     old = state.snap("sbp") or {}
     alerts: list[Alert] = []
+    problems = _sbp_sane(new, old)
+    if problems:
+        k = f"sus:sbp:{'|'.join(problems)}"
+        if not state.flag(k):
+            state.set_flag(k)
+            alerts.append(_suspicious("SBP homepage numbers", "; ".join(problems)))
+        return alerts  # keep the previous good snapshot
     if old:
         pr_new, pr_old = new.get("policy_rate"), old.get("policy_rate")
         if pr_new is not None and pr_old is not None and pr_new != pr_old:
@@ -160,6 +192,9 @@ def fipi_alert(now, state: State) -> list[Alert]:
         return []
     state.set_flag(key)
     state.set_snap("fipi_last", data)
+    net = data["summary"].get("FIPI", {}).get("net")
+    if net is not None:
+        daily_rec(state, data["date"])["fipi"] = net
     rate = ((state.snap("sbp") or {}).get("usdpkr") or {}).get("m2m") or 280.0
     text = (header("🌍", "Investor Flows · FIPI / LIPI", f"{now:%A %d %b %Y}") + "\n" + fipi_block(data, rate) +
             f"\n\n📌 <b>Why it matters:</b> Sustained foreign buying or selling is a key driver of PSX direction.\n"
@@ -196,6 +231,12 @@ def kse_moves(now, state: State, cfg: dict) -> tuple[list[Alert], list[dict]]:
     if not last_close and now.hour < 10:
         return [], view
     pct = (cur / pre - 1) * 100
+    if abs(pct) > 12:  # PSX index halts long before this — almost certainly bad data
+        k = f"sus:kse:{now:%Y-%m-%d}"
+        if state.flag(k):
+            return [], view
+        state.set_flag(k)
+        return [_suspicious("KSE-100 intraday", f"{pct:+.1f}% ({pre:,.0f} → {cur:,.0f})")], view
     hit = None
     for th in sorted(cfg["kse100_move_alerts_pct"]):
         k = f"kse:{now:%Y-%m-%d}:{'up' if pct > 0 else 'dn'}:{th}"
@@ -234,8 +275,20 @@ def record_close(now, state: State) -> list[dict]:
     if not closes or abs(list(closes.values())[-1] - close) > 0.01:
         closes[f"{now:%Y-%m-%d}"] = close
         state.set_snap("kse_session_date", f"{now:%Y-%m-%d}")  # a new session actually traded today
+        # keep each session's KSE-100 constituent closes for the weekly review
+        px = {r["company_code"]: r["CurrentPrice"] for r in scs.kse100_view() if r.get("CurrentPrice")}
+        if px:
+            daily_rec(state, f"{now:%Y-%m-%d}")["px"] = px
     state.set_snap("kse_last_close", close)
     return idx
+
+
+def daily_rec(state: State, day: str) -> dict:
+    """Per-session record (prices, FIPI) kept ~3 weeks for weekly reviews."""
+    daily = state.data.setdefault("daily", {})
+    for d in sorted(daily)[:-15]:
+        del daily[d]
+    return daily.setdefault(day, {})
 
 
 # ---------------------------------------------------------------- stock moves
@@ -253,6 +306,9 @@ def stock_moves(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
         pct = (cur / ldcp - 1) * 100
         th = min(big, wl.get(code, big))
         if abs(pct) < th:
+            continue
+        # PSX circuit: ±10% or Rs1, whichever is higher — larger moves on Rs10+ stocks are bad data
+        if abs(pct) > 10.5 and abs(cur - ldcp) > 1.05:
             continue
         k = f"stk:{now:%Y-%m-%d}:{code}:{'up' if pct > 0 else 'dn'}"
         if state.flag(k):
@@ -407,7 +463,7 @@ def global_moves(mk: dict, state: State, cfg: dict) -> list[Alert]:
     alerts = []
     for sym, (name, unit, th) in cfg["global_markets"].items():
         d = mk.get(sym)
-        if not d or d["pct"] is None or abs(d["pct"]) < th:
+        if not d or d["pct"] is None or abs(d["pct"]) < th or abs(d["pct"]) > 30:
             continue
         k = f"g:{sym}:{d['date']}"
         if state.flag(k):
