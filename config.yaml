@@ -114,8 +114,6 @@ feeds:
   - {name: "ProPakistani", url: "https://propakistani.pk/category/business/feed/", pk: true}
   - {name: "Arab News PK", url: "https://www.arabnews.pk/rss.xml", pk: false}
   - {name: "PBS", url: "https://www.pbs.gov.pk/feed/", pk: true, official: true}
-  - {name: "APP", url: "https://www.app.com.pk/business/feed/", pk: true}
-  - {name: "APP", url: "https://www.app.com.pk/feed/", pk: true}
   - {name: "Business Recorder", url: "https://www.brecorder.com/feeds/pakistan", pk: true}
   - {name: "Business Recorder", url: "https://www.brecorder.com/feeds/business-finance", pk: false}
   - {name: "Geo News", url: "https://www.geo.tv/rss/1/2", pk: true}
