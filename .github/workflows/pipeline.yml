@@ -14,8 +14,11 @@ on:
           - test --admin-only
           - test
           - brief morning
+          - brief opening
           - brief midday
           - brief close
+          - brief results
+          - brief macro
           - brief week_ahead
           - about
           - chats

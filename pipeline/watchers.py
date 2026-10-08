@@ -110,6 +110,8 @@ def sbp_changes(new: dict, state: State) -> list[Alert]:
         r_new, r_old = new.get("reserves"), old.get("reserves")
         if r_new and r_new.get("sbp"):
             record_hist(state, "reserves", r_new["as_on"], r_new["sbp"])
+        if (u := new.get("usdpkr")) and u.get("m2m"):
+            record_hist(state, "usdpkr", f"{now_pkt():%Y-%m-%d}", u["m2m"], keep=60)
         if r_new and r_old and r_new.get("as_on") != r_old.get("as_on"):
             d_sbp = (r_new["sbp"] or 0) - (r_old["sbp"] or 0)
             d_tot = (r_new["total"] or 0) - (r_old["total"] or 0)

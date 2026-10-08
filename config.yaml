@@ -56,9 +56,12 @@ max_per_topic_in_digest: 3   # e.g. at most 3 petrol-price stories per digest
 # ---------------------------------------------------------------------
 briefs:
   morning:    {time: "08:45", days: [0, 1, 2, 3, 4]}
+  opening:    {time: "10:00", days: [0, 1, 2, 3, 4], grace: 1}   # opening bell (skipped if later than 11:00)
   midday:     {time: "12:30", days: [0, 1, 2, 3, 4]}
   close:      {time: "17:15", days: [0, 1, 2, 3, 4]}
+  results:    {time: "18:30", days: [0, 1, 2, 3, 4], grace: 4}   # results tracker, only on days with results
   week_ahead: {time: "19:00", days: [6]}
+# The macro dashboard is posted automatically right after each monthly CPI release.
 
 # ---------------------------------------------------------------------
 # Market-move alerts

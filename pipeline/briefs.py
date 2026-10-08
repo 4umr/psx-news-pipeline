@@ -14,7 +14,7 @@ from .common import arrow, esc, fmt_num, fmt_pct, link, log, now_pkt, parse_hhmm
 from .sources import forex, scs
 from .scoring import dedupe
 from .state import State
-from .style import DIV, footer, header, section
+from .style import footer, header, section
 
 SBP_URL = "https://www.sbp.org.pk/"
 
@@ -515,12 +515,12 @@ def morning(cfg: dict, state: State, mk: dict, view=None, title: str = "Morning 
         if sig := w.rate_signal(state.snap("sbp") or {}):
             hl.append(sig)
         hl += [a for a in _agenda(state, n_board, n_bc) if not ("MPC" in a and any("MPC" in x for x in hl))]
-        ctx = {"title2": "Market open" if title == "Morning Brief" else title, "idx": idx,
+        ctx = {"title2": "Morning brief" if title == "Morning Brief" else title, "idx": idx,
                "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"), "mk": mk, "gmk": {**gmk, **mk},
                "hist": scs.index_history(45)[-22:], "headlines": card_headlines(cfg, state, 16, 8),
                "fipi": state.snap("fipi_last"), "highlights": hl}
         cards = _safe_card(morning_cards, cfg, now, ctx)
-    head = f"☀️ <b>PSX {esc('Market Open' if title == 'Morning Brief' else title)}</b> · {now:%A %d %b %Y}"
+    head = f"☀️ <b>PSX {esc(title)}</b> · {now:%A %d %b %Y}"
     return text, cards, brief_caption(cfg, head, state, 16)
 
 
@@ -672,6 +672,9 @@ def week_ahead(cfg: dict, state: State, mk: dict, view=None):
                "week_gain": gain, "week_lose": lose, "week_highlights": hl,
                "ahead": ahead, "ahead_label": f"Week of {monday:%d %b %Y}"}
         cards = _safe_card(week_cards, cfg, now, ctx)
+        from .cards import street_card
+        if cards and (sc := _safe_card(street_card, cfg, now, street_ctx(state))):
+            cards.append(sc)
     head = f"📅 <b>PSX Week in Review & Week Ahead</b> · week of {monday:%d %b}"
     return text, cards, brief_caption(cfg, head, state, 36)
 
@@ -718,7 +721,203 @@ def midday(cfg: dict, state: State, mk: dict, view=None):
     return text, cards, brief_caption(cfg, head, state, hours)
 
 
-BUILDERS = {"morning": morning, "midday": midday, "close": close, "week_ahead": week_ahead}
+def opening(cfg: dict, state: State, mk: dict, view=None):
+    """~10:00 PKT: how the session opened (first 30 minutes)."""
+    now = now_pkt()
+    view = view or scs.kse100_view()
+    if not view:
+        return None, None, ""
+    cur, pre = view[0].get("CurrentIndex"), view[0].get("PreIndex")
+    last = state.snap("kse_last_close")
+    if not cur or not pre or (last and abs(pre - last) > 1):
+        return None, None, ""  # market closed today (holiday)
+    act = scs.daily_activity()
+    chg = cur - pre
+    intra = (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}") or {}
+    pts = intra.get("pts") or []
+    hl = []
+    if pts:
+        first = pts[0][1]
+        hl.append(f"First reading {pts[0][0]}: {first:,.0f} ({first - pre:+,.0f} pts vs yesterday's close)")
+    hl += [x for x in (_sector_line(view, act), _movers_line(view), _volume_line(act)) if x]
+    text = (header("🔔", "PSX Opening Bell", f"{now:%A, %d %B %Y} · {now:%H:%M} PKT") + "\n"
+            f"KSE-100 at <b>{cur:,.0f}</b> ({chg:+,.0f} pts, {chg / pre * 100:+.2f}%)\n"
+            + "\n".join(f"• {esc(x)}" for x in hl) + footer(cfg))
+    cards = None
+    if cfg.get("brand", {}).get("cards", True):
+        from .cards import opening_cards
+        ctx = {"view": view, "act": act, "idx": scs.indices(), "intraday": intra, "hist": scs.index_history(45),
+               "highlights": hl}
+        cards = _safe_card(opening_cards, cfg, now, ctx)
+    return text, cards, brief_caption(cfg, f"<b>PSX Opening Bell</b> · {now:%A %d %b} · {now:%H:%M} PKT", state, 4, 2)
+
+
+def results(cfg: dict, state: State, mk: dict, view=None):
+    """Results-season tracker (evening): today's results, EPS vs last year, season tally."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    now = now_pkt()
+    today = now.date()
+    rows = [r for r in scs.results() if r.get("date") and r["date"].date() == today]
+    if not rows:
+        return None, None, ""
+    kse = {r.get("company_code") for r in (view or scs.kse100_view())}
+    by: dict[str, dict] = {}
+    for r in rows:
+        c = r.get("company_code") or ""
+        b = by.setdefault(c, {"code": c, "per": "", "eps": "", "pay": [], "raw": r})
+        if (r.get("bm_quarter_number") or "").strip():
+            fy = (r.get("bm_quarter_number") or "").strip().upper().startswith("FY")
+            b.update(per=r["bm_quarter_number"].strip(), raw=r,
+                     eps=((r.get("bm_eps_cum") if fy else r.get("bm_eps_quarter")) or r.get("bm_eps_quarter") or "").strip())
+        for k, lab in (("bm_dividend", "Div"), ("bm_bonus", "Bonus"), ("bm_right_per", "Right")):
+            if (r.get(k) or "").strip() and f"{lab} {r[k].strip()}" not in b["pay"]:
+                b["pay"].append(f"{lab} {r[k].strip()}")
+    items = sorted(by.values(), key=lambda b: (b["code"] not in kse, b["code"]))
+    n_kse = sum(1 for b in items if b["code"] in kse)
+    if n_kse == 0 and len(items) < 5:
+        return None, None, ""  # quiet day: nothing worth a tracker post
+    major = [b for b in items if b["code"] in kse and b["per"]][:15]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        yoy = dict(zip([b["code"] for b in major], ex.map(lambda b: w.eps_yoy(b["code"], b["raw"]), major)))
+    season = state.data.setdefault("season", {})
+    for b in major:
+        if res := yoy.get(b["code"]):
+            season[b["code"]] = {"d": f"{today}", "per": b["per"], "eps": res[0], "prev": res[1], "yoy": res[2]}
+    cutoff = f"{today - timedelta(days=60)}"
+    for c in [c for c, v in season.items() if v["d"] < cutoff]:
+        del season[c]
+    table = []
+    for b in items:
+        res = yoy.get(b["code"])
+        mid = " · ".join(x for x in (b["per"], f"EPS {b['eps']}" if b["eps"] else "", " ".join(b["pay"])) if x)
+        right = (f"{res[2]:+.0f}%" if res and res[2] is not None else (f"LY {res[1]:.2f}" if res else ""))
+        table.append((b["code"], mid or "see filing", right, res[2] if res and res[2] is not None else None))
+    grew = [(c, v["yoy"]) for c, v in season.items() if v.get("yoy") is not None]
+    up = sum(1 for _, p in grew if p > 0)
+    stats = [("Reported today", str(len(items)), None), ("KSE-100 names", str(n_kse), None),
+             ("Payouts today", str(sum(1 for b in items if b["pay"])), None)]
+    if grew:
+        from .cards import DOWN, UP
+        stats.append(("Season: EPS up", f"{up} of {len(grew)}", UP if up >= len(grew) - up else DOWN))
+    hl = []
+    today_yoy = sorted([(b["code"], yoy[b["code"]][2]) for b in major
+                        if yoy.get(b["code"]) and yoy[b["code"]][2] is not None], key=lambda x: -x[1])
+    if today_yoy:
+        hl.append(f"Strongest EPS growth today: {today_yoy[0][0]} {today_yoy[0][1]:+.0f}% vs last year")
+        if today_yoy[-1][1] < 0:
+            hl.append(f"Weakest: {today_yoy[-1][0]} {today_yoy[-1][1]:+.0f}% vs last year")
+    pays = [b for b in items if b["pay"]]
+    if pays:
+        hl.append("Payouts announced: " + ", ".join(f"{b['code']} ({' '.join(b['pay'])})" for b in pays[:5]))
+    if grew:
+        hl.append(f"Season so far (KSE-100, last 60 days): {up} of {len(grew)} companies grew EPS vs last year")
+    hl.append("EPS in Rs. Growth compares with the same period last year from PSX company data.")
+    text = (header("📊", "Results Tracker", f"{now:%A, %d %B %Y}") + "\n"
+            + "\n".join(f"{esc(code)}: {esc(mid)}" + (f" ({esc(right)} YoY)" if right and "%" in right else "")
+                        for code, mid, right, _ in table[:25]) + footer(cfg))
+    cards = None
+    if cfg.get("brand", {}).get("cards", True):
+        from .cards import results_card
+        cards = _safe_card(lambda: [results_card(cfg, now, {"stats": stats, "rows": table, "highlights": hl})])
+    links = [f"{esc(b['code'])}: {link(b['raw']['bm_PDFLink'], 'filing')}" for b in items[:6] if b["raw"].get("bm_PDFLink")]
+    head = f"<b>Results Tracker</b> · {now:%A %d %b %Y}" + ("\n" + "\n".join(links) if links else "")
+    from .telegram import Sender
+    while links and not Sender.fits_caption(head + footer(cfg, compact=True)):
+        links.pop()
+        head = f"<b>Results Tracker</b> · {now:%A %d %b %Y}" + ("\n" + "\n".join(links) if links else "")
+    return text, cards, head + footer(cfg, compact=True)
+
+
+def macro(cfg: dict, state: State, mk: dict, view=None):
+    """Monthly macro dashboard (sent right after the CPI release, or on demand)."""
+    from .sources import markets
+
+    now = now_pkt()
+    s = state.snap("sbp") or {}
+    g = (state.snap("cpi") or {}).get("general")
+    pr = s.get("policy_rate")
+    if not g and pr is None:
+        return None, None, ""
+    gm = markets.snapshot(["BZ=F"])
+    hist = scs.index_history(45)
+    tiles = []
+    if g:
+        tiles.append((f"CPI inflation ({g['month'][:3]})", f"{g['yoy']:.1f}%", None))
+    if pr is not None:
+        tiles.append(("SBP policy rate", f"{pr:.2f}%", None))
+        if g:
+            tiles.append(("Real policy rate", f"{pr - g['yoy']:+.1f}%", None))
+    if r := s.get("reserves"):
+        rh = list(((state.data.get("hist") or {}).get("reserves") or {}).values())
+        chg = (r["sbp"] / rh[-5] - 1) * 100 if len(rh) >= 5 and rh[-5] else None
+        tiles.append(("SBP reserves", f"${r['sbp'] / 1000:.2f}bn", chg))
+    if u := s.get("usdpkr"):
+        # SBP's own interbank rate history (recorded daily); shown as the rupee's move, so a weaker rupee is red
+        ph = list(((state.data.get("hist") or {}).get("usdpkr") or {}).items())
+        old = next((v for d, v in ph if d <= f"{(now - timedelta(days=30)).date()}"), None) if len(ph) >= 20 else None
+        tiles.append(("USD/PKR · rupee 1M move", f"{u['m2m']:.2f}", (old / u["m2m"] - 1) * 100 if old else None))
+    if len(hist) >= 5:
+        a, b = hist[-22 if len(hist) >= 22 else 0]["kse_index_close"], hist[-1]["kse_index_close"]
+        tiles.append(("KSE-100 (1 month)", f"{b:,.0f}", (b / a - 1) * 100))
+    cpi_hist = []
+    for k, v in ((state.data.get("hist") or {}).get("cpi") or {}).items():
+        try:
+            cpi_hist.append((datetime.strptime(k, "%Y-%m").strftime("%b %y"), v))
+        except ValueError:
+            continue
+    hl = []
+    if g:
+        trend = "up" if g["yoy"] > g["prev_yoy"] else ("down" if g["yoy"] < g["prev_yoy"] else "unchanged")
+        hl.append(f"Inflation {trend}: {g['yoy']:.1f}% in {g['month']} vs {g['prev_yoy']:.1f}% a month earlier "
+                  f"(month on month {g['mom']:+.1f}%)")
+        if pr is not None:
+            real = pr - g["yoy"]
+            hl.append(f"Real policy rate {real:+.1f}%: the policy rate is "
+                      + ("above" if real > 0 else "below") + " inflation")
+    if sig := w.rate_signal(s):
+        hl.append(sig)
+    if nxt := w.next_mpc(state, now):
+        hl.append(f"Next SBP policy meeting: {nxt:%A %d %B} ({(nxt - now.date()).days} days)")
+    from . import street
+    if calls := street.pending_calls(state, "mpc", days=30):
+        hl.append(f"Street calls for the MPC: {calls}")
+    if (bz := gm.get("BZ=F")) and len(bz.get("hist") or []) >= 2:
+        hl.append(f"Brent ${bz['last']:.2f}, {(bz['hist'][-1] / bz['hist'][0] - 1) * 100:+.1f}% over the month")
+    label = (g["month"] if g else f"{now:%B %Y}") + f" · updated {now:%d %b}"
+    text = (header("🧭", "Macro Dashboard", label) + "\n"
+            + "\n".join(f"{esc(lab)}: <b>{esc(val)}</b>" for lab, val, _ in tiles) + "\n\n"
+            + "\n".join(f"• {esc(x)}" for x in hl) + footer(cfg))
+    cards = None
+    if cfg.get("brand", {}).get("cards", True):
+        from .cards import macro_card
+        cards = _safe_card(lambda: [macro_card(cfg, now, {"tiles": tiles, "cpi_hist": cpi_hist[-10:],
+                                                          "highlights": hl, "label": label})])
+    return text, cards, f"<b>Macro Dashboard</b> · {esc(label)}" + footer(cfg, compact=True)
+
+
+def street_ctx(state: State) -> dict:
+    from . import street
+    sc = state.data.get("street", {}).get("scores", {})
+    rows = sorted([(b, s) for b, s in sc.items() if s["n"] >= 2],
+                  key=lambda x: (-(x[1]["hits"] / x[1]["n"]), -x[1]["n"]))
+    table = [(f"#{i}", b + (f" · CPI avg error {s['abs_err'] / s['cpi_n']:.2f}pp" if s.get("cpi_n") else ""),
+              f"{s['hits']}/{s['n']} ({s['hits'] / s['n'] * 100:.0f}%)", None) for i, (b, s) in enumerate(rows[:8], 1)]
+    pending = []
+    if c := street.pending_calls(state, "cpi", days=20):
+        pending.append(f"Next CPI, brokerage forecasts: {c}")
+    if c := street.pending_calls(state, "mpc", days=30):
+        pending.append(f"Next SBP decision, brokerage calls: {c}")
+    return {"rows": table, "pending": [esc_free(p) for p in pending]}
+
+
+def esc_free(s: str) -> str:
+    import html as _h
+    return _h.unescape(s)
+
+
+BUILDERS = {"morning": morning, "opening": opening, "midday": midday, "close": close, "results": results,
+            "macro": macro, "week_ahead": week_ahead}
 
 
 def due(cfg: dict, state: State, now: datetime, grace_hours: int = 3) -> list[str]:
@@ -729,6 +928,6 @@ def due(cfg: dict, state: State, now: datetime, grace_hours: int = 3) -> list[st
             continue
         h, m = parse_hhmm(b["time"])
         sched = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        if sched <= now <= sched + timedelta(hours=grace_hours) and state.data["briefs"].get(name) != f"{now:%Y-%m-%d}":
+        if sched <= now <= sched + timedelta(hours=b.get("grace", grace_hours)) and state.data["briefs"].get(name) != f"{now:%Y-%m-%d}":
             out.append(name)
     return out

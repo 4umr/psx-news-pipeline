@@ -421,6 +421,25 @@ class Card:
             self.text(self.R - 24, fy, fmt.format(v), 13.5, _col(v) if signed else CREAM, bold=True, ha="right")
         return y + h + 16
 
+    def table(self, y, title, rows, right_title="", max_rows=12) -> int:
+        """rows: (left, middle, right, sign|None) — one line each."""
+        if not rows:
+            return y
+        rows = rows[:max_rows]
+        h = 78 + len(rows) * 42
+        self.panel(self.L, y, 1000, h)
+        self.label(self.L + 30, y + 38, title, 14)
+        if right_title:
+            self.text(self.R - 30, y + 38, sp(right_title), 10.5, self.t["muted"], bold=True, ha="right")
+        for i, (left, mid, right, sign) in enumerate(rows):
+            yy = y + 84 + i * 42
+            self.text(self.L + 30, yy, clean(left)[:12], 15, self.t["accent2"], bold=True)
+            self.text(self.L + 190, yy, clean(mid)[:62], 13.5, CREAM)
+            if right:
+                self.text(self.R - 30, yy, clean(right), 14.5, _col(sign) if sign is not None else CREAM,
+                          bold=True, ha="right")
+        return y + h + 16
+
     def chip(self, x, y, s, color, size=12.5) -> float:
         s = clean(s).upper()
         w = 26 + len(s) * size * 1.08
@@ -519,7 +538,7 @@ def psx_card(cfg: dict, now: datetime, ctx: dict, kind: str) -> bytes:
         y = c.strip(y, strip)
         y = c.tiles(y, _rates_items(ctx.get("sbp") or {}, ctx.get("cpi"))[:6], "Rates · PKR · Macro", cols=3, tile_h=92)
     else:
-        if kind == "midday":
+        if kind in ("midday", "opening"):
             cur = view[0].get("CurrentIndex") if view else None
             pre = view[0].get("PreIndex") if view else None
             hl, lo = (max(vals), min(vals)) if vals else (None, None)
@@ -535,10 +554,10 @@ def psx_card(cfg: dict, now: datetime, ctx: dict, kind: str) -> bytes:
             vals = [r["kse_index_close"] for r in hist][-22:]
             base = vals[0]
             times = [hist[-len(vals)]["date"].strftime("%d %b"), hist[-1]["date"].strftime("%d %b")]
-        y = c.title_block("PSX", "Midday pulse" if kind == "midday" else "Market close",
-                          f"{now:%a, %d %b %Y}" + (f" · {now:%H:%M} PKT" if kind == "midday" else ""),
+        y = c.title_block("PSX", {"midday": "Midday pulse", "opening": "Opening bell"}.get(kind, "Market close"),
+                          f"{now:%a, %d %b %Y}" + (f" · {now:%H:%M} PKT" if kind != "close" else ""),
                           series=vals, base=base)
-        y = c.hero(y, "KSE-100" + (f" · at {now:%H:%M}" if kind == "midday" else ""), cur, cur - pre,
+        y = c.hero(y, "KSE-100" + (f" · at {now:%H:%M}" if kind != "close" else ""), cur, cur - pre,
                    (cur / pre - 1) * 100, vals, base=base, times=times)
         up, dn, _, vol = _breadth(act) if act else (0, 0, 0, 0)
         strip = []
@@ -792,6 +811,51 @@ def week_cards(cfg: dict, now: datetime, ctx: dict) -> list[bytes]:
     c.footer()
     out.append(c.png())
     return out
+
+
+def opening_cards(cfg: dict, now: datetime, ctx: dict) -> list[bytes]:
+    return [psx_card(cfg, now, ctx, "opening")]
+
+
+def results_card(cfg: dict, now: datetime, ctx: dict) -> bytes:
+    """Results season tracker: today's results with EPS vs the same period last year."""
+    c = Card(cfg, "psx")
+    y = c.title_block("Results", "Tracker", f"{now:%a, %d %b %Y}")
+    y = c.strip(y, ctx.get("stats") or [])
+    y = c.table(y, "Results today", ctx.get("rows") or [], "EPS vs last year", max_rows=12)
+    c.highlights(y, ctx.get("highlights") or [], h=c.H - 172 - 16 - y)
+    c.footer()
+    return c.png()
+
+
+def macro_card(cfg: dict, now: datetime, ctx: dict) -> bytes:
+    """Monthly macro dashboard (posted on CPI day): inflation, rates, reserves, PKR, market."""
+    c = Card(cfg, "economy")
+    y = c.title_block("Macro", "Dashboard", ctx.get("label", f"{now:%B %Y}"))
+    y = c.tiles(y, ctx.get("tiles") or [], "Pakistan at a glance", cols=3, tile_h=96)
+    cpi = ctx.get("cpi_hist") or []
+    if len(cpi) >= 3:
+        y = c.bars(y, "CPI inflation by month (% YoY)", [m for m, _ in cpi], [v for _, v in cpi], fmt="{:.1f}%",
+                   signed=False, h=min(420, 80 + len(cpi) * 40), x0=200)
+    c.highlights(y, ctx.get("highlights") or [], h=c.H - 172 - 16 - y)
+    c.footer()
+    return c.png()
+
+
+def street_card(cfg: dict, now: datetime, ctx: dict) -> bytes | None:
+    """Street View: which brokerages' forecasts (CPI, SBP decisions) have been most accurate."""
+    rows, pending = ctx.get("rows") or [], ctx.get("pending") or []
+    if not rows and not pending:
+        return None
+    c = Card(cfg, "gold")
+    y = c.title_block("Street view", "Scoreboard", "Forecast accuracy · tracked by us")
+    if rows:
+        y = c.table(y, "Most accurate forecasters", rows, "Correct calls", max_rows=8)
+    lines = pending + ["Scored automatically when PBS releases CPI and SBP announces its decision. "
+                       "Forecasts are captured from published news, with sources."]
+    c.highlights(y, lines, title="Calls on the table", h=c.H - 172 - 16 - y)
+    c.footer()
+    return c.png()
 
 
 # ===================================================================== alert cards

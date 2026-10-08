@@ -282,12 +282,15 @@ def about_text(cfg: dict) -> str:
             "Pakistan Stock Exchange news, data and macro indicators — automatic, 24/7, always with sources. "
             "Updates come as shareable infographics.\n\n"
             "<b>⏰ What you get & when (PKT)</b>\n"
-            f"☀️ <b>{t('morning', '08:45')}</b> Market open: PSX, US market close, commodity update, top stories (Mon–Fri)\n"
-            f"🕐 <b>{t('midday', '12:30')}</b> Midday pulse: intraday chart, movers, sectors (Mon–Fri)\n"
-            f"🔔 <b>{t('close', '17:15')}</b> Market close: gainers/losers, sectors, highlights (Mon–Fri)\n"
-            "🌍 <b>Evening</b> Foreign / local investor flows (FIPI/LIPI)\n"
-            f"📅 <b>Sun {t('week_ahead', '19:00')}</b> Week in review & the week ahead\n"
-            "📰 <b>As it happens</b> Relevant headlines, posted the moment they're found\n\n"
+            f"<b>{t('morning', '08:45')}</b> Morning brief: PSX, US market close, commodity update, top stories (Mon to Fri)\n"
+            f"<b>{t('opening', '10:00')}</b> Opening bell: how the session started\n"
+            f"<b>{t('midday', '12:30')}</b> Midday pulse: intraday chart, movers, sectors\n"
+            f"<b>{t('close', '17:15')}</b> Market close: gainers and losers, sectors, highlights\n"
+            "<b>Evening</b> Foreign and local investor flows (FIPI/LIPI)\n"
+            f"<b>{t('results', '18:30')}</b> Results tracker in results season: EPS vs last year, payouts\n"
+            "<b>CPI day</b> Macro dashboard: inflation, rates, reserves, rupee, market\n"
+            f"<b>Sun {t('week_ahead', '19:00')}</b> Week in review, the week ahead, Street View scoreboard\n"
+            "<b>As it happens</b> Relevant headlines with their likely impact and the sectors affected\n\n"
             "<b>🚨 Instant alerts, any time</b>\n"
             "• SBP policy rate decisions & MPC reminders\n"
             "• T-bill / PIB auction cut-offs (with change in bps)\n"
@@ -518,6 +521,8 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         S("news digest", _flush_digest, cfg, state, sender)
 
     names = [force_brief] if force_brief else briefs.due(cfg, state, now)
+    if not force_brief and any(a.key.startswith("cpi:") and not a.admin for a in alerts):
+        names.append("macro")  # monthly macro dashboard right after the CPI release
     for name in names:
         text = S(f"{name} brief", _send_brief, name, cfg, state, mk, view, sender)
         if text:
