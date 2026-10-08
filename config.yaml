@@ -11,9 +11,15 @@ brand:
   author: "Umer"
   title: "Financial Analyst"
   channel_link: ""     # e.g. https://t.me/+AbCdEf... — shown as "Join" link when set
-  cards: true          # image cards (albums) with morning / midday / closing / weekly briefs
-  alert_cards: true    # important news & data alerts come as an image card with the text as caption
-  alert_card_min_priority: 9
+  # Infographic mode: briefs (market open / midday / close / week ahead, US market & commodity
+  # update, top stories) and every data alert & important news item are posted as branded
+  # infographic images with a short caption (title + source links). Quick one-line headlines stay text.
+  # false = old style (long text messages, cards only as extras).
+  infographic: true
+  cards: true          # image cards (albums) with the briefs
+  alert_cards: true    # alerts & important news as image cards
+  alert_card_min_priority: 9   # text mode only
+  # Logo: put a transparent PNG at assets/logo.png to replace the drawn "PI" mark
   # WhatsApp-ready copies sent privately to you (needs TELEGRAM_ADMIN_CHAT_ID):
   #   important = briefs + top alerts (policy rate, CPI, auctions, reserves, MPC, big moves)
   #   all = every channel post · off = none

@@ -121,11 +121,11 @@ def macro_block(state: State, fx: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def commodities_block(cfg: dict) -> str:
+def commodities_block(cfg: dict, mk: dict | None = None) -> str:
     from .sources import markets
 
     com, reg = cfg.get("commodities") or {}, cfg.get("regional") or {}
-    mk = markets.snapshot(list(com) + list(reg))
+    mk = mk if mk is not None else markets.snapshot(list(com) + list(reg))
     lines = []
     for sym, (name, sector) in com.items():
         if d := mk.get(sym):
@@ -163,7 +163,8 @@ def _sector_name(s: str) -> str:
             "Food & Personal Care Products": "Food & FMCG", "Pharmaceuticals": "Pharma",
             "Cable & Electrical Goods": "Cables & Electrical", "Leather & Tanneries": "Leather",
             "Textile Composite": "Textile Composite", "Glass & Ceramics": "Glass & Ceramics",
-            "Chemical": "Chemicals", "Miscellaneous": "Misc."}.get(s, s)
+            "Chemical": "Chemicals", "Miscellaneous": "Misc.", "Close - End Mutual Fund": "Closed-end Funds",
+            "Commercial Banks": "Banks"}.get(s, s)
 
 
 def sector_rows(view: list[dict], act: list[dict]) -> list[tuple[str, float, float]]:
@@ -224,22 +225,29 @@ def highs_lows_block(kse100: set[str]) -> str:
     return (f"{section('📏', '52-week highs & lows')}\n" + "\n".join(out)) if out else ""
 
 
-def week_review_block(state: State, now: datetime) -> str:
+def week_movers(state: State, now: datetime) -> tuple[list, list, list[float]]:
+    """(top KSE-100 gainers, top losers, daily foreign flows) over the last 7 days."""
     daily = state.data.get("daily", {})
     cut = f"{now - timedelta(days=7):%Y-%m-%d}"
     week = sorted(d for d in daily if d > cut and daily[d].get("px"))
     base = sorted(d for d in daily if d <= cut and daily[d].get("px"))
-    lines = []
+    gain, lose = [], []
     if week and base:
         p0, p1 = daily[base[-1]]["px"], daily[week[-1]]["px"]
         ch = sorted(((c, (p1[c] / p0[c] - 1) * 100) for c in p1 if c in p0 and p0[c]), key=lambda x: x[1])
         gain = [(c, p) for c, p in reversed(ch[-5:]) if p > 0]
         lose = [(c, p) for c, p in ch[:5] if p < 0]
-        if gain:
-            lines.append("🟢 Top KSE-100 gainers: " + " · ".join(f"{esc(c)} {p:+.1f}%" for c, p in gain))
-        if lose:
-            lines.append("🔴 Top KSE-100 losers: " + " · ".join(f"{esc(c)} {p:+.1f}%" for c, p in lose))
     flows = [daily[d]["fipi"] for d in sorted(daily) if d > cut and "fipi" in daily[d]]
+    return gain, lose, flows
+
+
+def week_review_block(state: State, now: datetime) -> str:
+    gain, lose, flows = week_movers(state, now)
+    lines = []
+    if gain:
+        lines.append("🟢 Top KSE-100 gainers: " + " · ".join(f"{esc(c)} {p:+.1f}%" for c, p in gain))
+    if lose:
+        lines.append("🔴 Top KSE-100 losers: " + " · ".join(f"{esc(c)} {p:+.1f}%" for c, p in lose))
     if flows:
         tot = sum(flows)
         lines.append(f"🌍 Foreign investors this week: net {'buy' if tot > 0 else 'sell'} "
@@ -269,33 +277,41 @@ def headlines_block(state: State, hours: int, n: int = 8) -> str:
     return "\n".join(lines) or "No major headlines."
 
 
-def calendar_block(start: datetime, days: int) -> tuple[str, int, int]:
+def _payout(r: dict) -> str:
+    return " ".join(x for x in (f"Div {r['bm_dividend']}" if r.get("bm_dividend") else "",
+                                f"Bonus {r['bm_bonus']}" if r.get("bm_bonus") else "",
+                                f"Right {r['bm_right_per']}" if r.get("bm_right_per") else "") if x)
+
+
+def calendar_data(start: datetime, days: int) -> tuple[dict[str, list[str]], list[dict]]:
+    """(board meetings by day -> company codes, payout book closures) in [start, start + days)."""
     s0 = start.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     e0 = s0 + timedelta(days=days)
     bms = [r for r in scs.board_meetings() if r.get("date") and s0 <= r["date"].replace(tzinfo=None) < e0]
     bms.sort(key=lambda r: r["date"])
+    by_day: dict[str, list[str]] = {}
+    for r in bms:
+        codes = by_day.setdefault(r["date"].strftime("%a %d %b"), [])
+        if r["company_code"] not in codes:
+            codes.append(r["company_code"])
+    bcs = [r for r in scs.book_closures() if r.get("date") and s0 <= r["date"] < e0]
+    bcs.sort(key=lambda r: r["date"])
+    return by_day, bcs
+
+
+def calendar_block(start: datetime, days: int, data=None) -> tuple[str, int, int]:
+    by_day, bcs = data or calendar_data(start, days)
     out = []
-    n_board = 0
-    if bms:
-        by_day: dict[str, list[str]] = {}
-        for r in bms:
-            codes = by_day.setdefault(r["date"].strftime("%a %d %b"), [])
-            if r["company_code"] not in codes:
-                codes.append(r["company_code"])
-        n_board = sum(len(c) for c in by_day.values())
+    n_board = sum(len(c) for c in by_day.values())
+    if by_day:
         out.append("🧾 <b>Board meetings (results expected)</b>")
         for d, codes in by_day.items():
             shown = ", ".join(codes[:25]) + (f" +{len(codes) - 25}" if len(codes) > 25 else "")
             out.append(f"   {d}: {esc(shown)}")
-    bcs = [r for r in scs.book_closures() if r.get("date") and s0 <= r["date"] < e0]
-    bcs.sort(key=lambda r: r["date"])
     if bcs:
         out.append("💰 <b>Payout book closures</b>")
         for r in bcs[:20]:
-            pay = " ".join(x for x in (f"Div {r['bm_dividend']}" if r.get("bm_dividend") else "",
-                                       f"Bonus {r['bm_bonus']}" if r.get("bm_bonus") else "",
-                                       f"Right {r['bm_right_per']}" if r.get("bm_right_per") else "") if x)
-            out.append(f"   {r['date']:%d %b}: {esc(r['company_code'])} {esc(pay)}")
+            out.append(f"   {r['date']:%d %b}: {esc(r['company_code'])} {esc(_payout(r))}")
         if len(bcs) > 20:
             out.append(f"   …and {len(bcs) - 20} more")
     return "\n".join(out) or "No board meetings or book closures scheduled.", n_board, len(bcs)
@@ -314,6 +330,10 @@ def fipi_section(state: State) -> str:
 
 def glance(idx: list[dict], state: State, mk: dict) -> str:
     """Auto-generated 'at a glance' bullets from the numbers (no opinions)."""
+    return "\n".join(f"• {esc(x)}" for x in glance_lines(idx, state, mk))
+
+
+def glance_lines(idx: list[dict], state: State, mk: dict) -> list[str]:
     out = []
     k = _kse(idx)
     if k:
@@ -339,7 +359,7 @@ def glance(idx: list[dict], state: State, mk: dict) -> str:
             out.append(f"3M T-bill at {y3:.2f}% vs policy rate {s['policy_rate']:.2f}% ({spread:+d} bps)")
     if (b := mk.get("BZ=F")) and b.get("pct") is not None:
         out.append(f"Brent at ${b['last']:.2f} ({b['pct']:+.1f}%)")
-    return "\n".join(f"• {esc(x)}" for x in out)
+    return out
 
 
 # ---------------------------------------------------------------- briefs
@@ -400,12 +420,77 @@ def _safe_card(fn, *a, **kw):
         return None
 
 
+def brief_caption(cfg: dict, head: str, state: State, hours: int, n: int = 4) -> str:
+    """Album caption: title + the top stories with visible source links (links can't live in an image)."""
+    from .telegram import Sender
+    cutoff = time.time() - hours * 3600
+    hs = sorted((h for h in state.data["headlines"] if h["ts"] >= cutoff and h.get("u")),
+                key=lambda h: (-h["sc"], -h["ts"]))
+    for k in range(min(n, len(hs)), -1, -1):
+        lines = [head]
+        if k:
+            lines += ["", "📰 <b>Top stories · sources</b>"]
+            lines += [f"{i}. {esc(h['t'])}\n{link(h['u'], h['s'])}" for i, h in enumerate(hs[:k], 1)]
+        cap = "\n".join(lines) + footer(cfg, compact=True)
+        if Sender.fits_caption(cap):
+            return cap
+    return head
+
+
+def _volume_line(act: list[dict], n: int = 3) -> str:
+    lead = sorted(act, key=lambda r: -(r.get("trading_vol") or 0))[:n]
+    return ("Volume leaders: " + " · ".join(f"{r['company_code']} {r['trading_vol'] / 1e6:.1f}m" for r in lead)
+            if lead else "")
+
+
+def _movers_line(view: list[dict]) -> str:
+    pos, neg = w.contributors(view, 3)
+    if not pos and not neg:
+        return ""
+    fmt = lambda rows: ", ".join(f"{r['company_code']} {r['NetIndexPoint']:+.0f}" for r in rows) or "none"  # noqa: E731
+    return f"Index lifted by {fmt(pos)} · dragged by {fmt(neg)} (pts)"
+
+
+def _sector_line(view: list[dict], act: list[dict]) -> str:
+    secs = sector_rows(view, act)
+    if not secs:
+        return ""
+    return f"Leading sector: {secs[0][0]} ({secs[0][2]:+.0f} pts) · Lagging: {secs[-1][0]} ({secs[-1][2]:+.0f} pts)"
+
+
+def _auctions(state: State) -> list[tuple[str, str]]:
+    """[(date, auction name)] from SBP's upcoming-auction panel, today or later."""
+    today = now_pkt().date()
+    out = []
+    text = (state.snap("sbp") or {}).get("upcoming_auctions", "")
+    for name, d in re.findall(r"(.+?)\s+(\d{1,2}-[A-Za-z]{3}-\d{2})\s*", text or ""):
+        try:
+            when = datetime.strptime(d, "%d-%b-%y").date()
+        except ValueError:
+            continue
+        if when >= today:
+            n = name.strip()
+            label = {"MTB": "T-bill auction (MTB)", "PIB": "Fixed-rate PIB auction",
+                     "PFL": "Floating-rate PIB auction"}.get(n.upper(), n)
+            if "sukuk" in n.lower() or "gis" in n.lower() or "ijara" in n.lower():
+                label = f"Govt Ijara Sukuk auction ({n})"
+            out.append((f"{when:%a %d %b}", label))
+    return out
+
+
 def morning(cfg: dict, state: State, mk: dict, view=None, title: str = "Morning Brief"):
     now = now_pkt()
     idx = scs.indices()
-    cal, n_board, n_bc = calendar_block(now, 1)
+    caldata = calendar_data(now, 1)
+    cal, n_board, n_bc = calendar_block(now, 1, caldata)
     g = glance(idx, state, mk)
     macro = macro_block(state, forex.open_market())
+    gmk = {}
+    if cfg.get("brand", {}).get("cards", True):
+        from .cards import COMMOD_MAIN, CUES, MEGA, US_SYMS
+        from .sources import markets
+        gmk = markets.snapshot(US_SYMS + MEGA + [c[0] for c in CUES] + [c[0] for c in COMMOD_MAIN] + ["CL=F"]
+                               + list(cfg.get("commodities") or {}) + list(cfg.get("regional") or {}))
     text = (header("☀️", f"PSX {title}", f"{now:%A, %d %B %Y}") + "\n"
             + (f"{section('⚡', 'At a glance')}\n{g}\n\n" if g else "")
             + f"{section('📈', 'PSX — last close')}\n{psx_block(idx)}"
@@ -413,21 +498,24 @@ def morning(cfg: dict, state: State, mk: dict, view=None, title: str = "Morning 
             f"{section('🏦', 'SBP · Rates · PKR')}\n{sbp_block(state.snap('sbp') or {})}\n\n"
             + (f"{section('🧭', 'Macro · Inflation · MPC · Open market')}\n{macro}\n\n" if macro else "") +
             f"{section('🌐', 'Global markets')}\n{global_block(mk, cfg)}\n\n"
-            + (f"{cb}\n\n" if (cb := commodities_block(cfg)) else "") +
+            + (f"{cb}\n\n" if (cb := commodities_block(cfg, gmk or None)) else "") +
             f"{section('📅', 'Today on the corporate calendar')}\n{cal}\n\n"
             f"{section('📰', 'Top headlines (last 16h)')}\n{headlines_block(state, 16)}"
             + footer(cfg, ["MorningBrief", "KSE100"]))
     cards = None
     if cfg.get("brand", {}).get("cards", True):
         from .cards import morning_cards
-        from .sources import markets
-        ctx = {"kicker": title, "idx": idx, "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"), "mk": mk,
-               "cmk": markets.snapshot(["ES=F", "^N225", "^HSI", "CT=F", "NG=F", "ZW=F"]),
-               "hist": scs.index_history(45)[-22:], "headlines": card_headlines(cfg, state, 16, 4),
-               "fipi": state.snap("fipi_last"),
-               "agenda": _agenda(state, n_board, n_bc)}
+        hl = [x for x in glance_lines(idx, state, mk) if not x.startswith("KSE-100")]
+        if sig := w.rate_signal(state.snap("sbp") or {}):
+            hl.append(sig)
+        hl += [a for a in _agenda(state, n_board, n_bc) if not ("MPC" in a and any("MPC" in x for x in hl))]
+        ctx = {"title2": "Market open" if title == "Morning Brief" else title, "idx": idx,
+               "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"), "mk": mk, "gmk": {**gmk, **mk},
+               "hist": scs.index_history(45)[-22:], "headlines": card_headlines(cfg, state, 16, 6),
+               "fipi": state.snap("fipi_last"), "highlights": hl}
         cards = _safe_card(morning_cards, cfg, now, ctx)
-    return text, cards, f"☀️ <b>PSX {esc(title)}</b> · {now:%A %d %b %Y}"
+    head = f"☀️ <b>PSX {esc('Market Open' if title == 'Morning Brief' else title)}</b> · {now:%A %d %b %Y}"
+    return text, cards, brief_caption(cfg, head, state, 16)
 
 
 def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
@@ -447,7 +535,8 @@ def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
     fipi_today = (state.snap("fipi_last") or {}).get("date") == f"{now:%Y-%m-%d}"
     cal, _, _ = calendar_block(nxt, 1)
     act = scs.daily_activity()
-    g = glance(idx, state, mk) if fipi_today else glance(idx, _NoFipi(state), mk)
+    st = state if fipi_today else _NoFipi(state)
+    g = glance(idx, st, mk)
     text = (header("🔔", "PSX Closing Wrap", f"{now:%A, %d %B %Y}") + "\n"
             + (f"{section('⚡', 'At a glance')}\n{g}\n\n" if g else "")
             + f"{section('📈', 'Indices')}\n{psx_block(idx)}\n\n"
@@ -466,13 +555,17 @@ def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
     cards = None
     if cfg.get("brand", {}).get("cards", True):
         from .cards import close_cards
+        hl = [x for x in (_sector_line(view, act), _movers_line(view), _volume_line(act)) if x]
+        hl += [x for x in glance_lines(idx, st, mk) if not x.startswith("KSE-100")][:3]
+        if not fipi_today:
+            hl.append("Foreign/local investor flows (FIPI/LIPI) follow this evening")
         ctx = {"idx": idx, "view": view, "act": act, "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"),
-               "mk": mk, "fipi": state.snap("fipi_last") if fipi_today else None,
+               "mk": mk, "fipi": state.snap("fipi_last") if fipi_today else None, "hist": scs.index_history(45),
                "intraday": (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}"),
-               "sectors": _sector_rows_for_card(view, act), "sector_name": _sector_name,
-               "headlines": card_headlines(cfg, state, 10, 3)}
+               "sectors": _sector_rows_for_card(view, act), "headlines": card_headlines(cfg, state, 10, 6),
+               "highlights": hl}
         cards = _safe_card(close_cards, cfg, now, ctx)
-    return text, cards, f"🔔 <b>PSX Closing Wrap</b> · {now:%A %d %b %Y}"
+    return text, cards, brief_caption(cfg, f"🔔 <b>PSX Market Close</b> · {now:%A %d %b %Y}", state, 10)
 
 
 class _NoFipi:
@@ -485,18 +578,34 @@ class _NoFipi:
         return None if name == "fipi_last" else self._s.snap(name, default)
 
 
+def _releases(monday: datetime) -> list[tuple[str, str]]:
+    """Regular data releases due in the week starting `monday`."""
+    days = [monday + timedelta(days=i) for i in range(7)]
+    out = [(f"{days[3]:%a %d %b}", "SBP forex reserves (weekly)"), (f"{days[4]:%a %d %b}", "PBS weekly SPI inflation")]
+    if any(d.day <= 5 for d in days):
+        out.append(("Early month", "CPI inflation for last month (PBS)"))
+    if any(d.day in (15, 16) or (d + timedelta(days=1)).day == 1 for d in days):
+        out.append(("15th / month-end", "Petrol & diesel price revision"))
+    if any(15 <= d.day <= 20 for d in days):
+        out.append(("Mid-month", "Current account & remittances (SBP)"))
+    return out
+
+
 def week_ahead(cfg: dict, state: State, mk: dict, view=None):
     now = now_pkt()
     closes = state.data["kse_closes"]
     week = ""
+    wk = None
     cut = f"{now - timedelta(days=7):%Y-%m-%d}"
     recent = [(d, c) for d, c in closes.items() if d >= cut]
     prior = [(d, c) for d, c in closes.items() if d < cut]
     if recent and prior:
         a, b = prior[-1][1], recent[-1][1]
+        wk = {"close": b, "chg": b - a, "pct": (b / a - 1) * 100}
         week = f"{arrow(b - a)} KSE-100 this week: <b>{b:,.0f}</b> ({b - a:+,.0f} | {(b / a - 1) * 100:+.2f}%)\n\n"
     monday = now + timedelta(days=(7 - now.weekday()) % 7 or 1)
-    cal, _, _ = calendar_block(monday, 7)
+    caldata = calendar_data(monday, 7)
+    cal, _, _ = calendar_block(monday, 7, caldata)
     review = week_review_block(state, now)
     text = (header("📅", "PSX Week in Review & Week Ahead", f"Week of {monday:%d %B %Y}") + "\n"
             + (f"{section('🔙', 'The week that was')}\n" if week or review else "")
@@ -519,11 +628,46 @@ def week_ahead(cfg: dict, state: State, mk: dict, view=None):
             + footer(cfg, ["WeekAhead", "KSE100"]))
     cards = None
     if cfg.get("brand", {}).get("cards", True):
-        from .cards import morning_cards
-        ctx = {"kicker": "Week in Review", "idx": scs.indices(), "sbp": state.snap("sbp") or {},
-               "cpi": state.snap("cpi"), "mk": mk, "hist": scs.index_history(45)[-22:]}
-        cards = (_safe_card(morning_cards, cfg, now, ctx) or [])[:1] or None
-    return text, cards, f"📅 <b>PSX Week in Review & Week Ahead</b> · week of {monday:%d %b}"
+        from .cards import DOWN, UP, week_cards
+        hist = scs.index_history(45)
+        gain, lose, flows = week_movers(state, now)
+        cut_d = (now - timedelta(days=7)).date()
+        this_wk = [r for r in hist if r["date"].date() > cut_d]
+        before = [r for r in hist if r["date"].date() <= cut_d]
+        if this_wk and before:  # official PSX history: the week's change doesn't depend on our own records
+            a, b = before[-1]["kse_index_close"], this_wk[-1]["kse_index_close"]
+            wk = {"close": b, "chg": b - a, "pct": (b / a - 1) * 100}
+        closes_wk = [r["kse_index_close"] for r in this_wk]
+        strip = [("Week high", f"{max(closes_wk):,.0f}", None), ("Week low", f"{min(closes_wk):,.0f}", None)] \
+            if closes_wk else []
+        if flows:
+            tot = sum(flows)
+            strip.append(("Foreign flow", f"{tot:+.1f}m $", UP if tot > 0 else DOWN))
+        if this_wk:
+            strip.append(("Sessions", str(len(this_wk)), None))
+        hl = [x for x in glance_lines(scs.indices(), state, mk) if not x.startswith(("KSE-100", "Foreigners"))]
+        if sig := w.rate_signal(state.snap("sbp") or {}):
+            hl.append(sig)
+        if board := _scoreboard(state):
+            hl += ["Forecast scoreboard: " + " · ".join(re.sub(r"^\d+\.\s*", "", ln) for ln in board.split("\n")[1:3])]
+        ahead = []
+        key = []
+        if (nxt := w.next_mpc(state, now)) and (nxt - now.date()).days <= 14:
+            key.append((f"{nxt:%a %d %b}", "SBP monetary policy decision (MPC)"))
+        key += _auctions(state)[:3]
+        ahead.append(("Key dates", key))
+        by_day, bcs = caldata
+        ahead.append(("Results expected · board meetings",
+                      [(d, ", ".join(c[:9]) + (f" +{len(c) - 9} more" if len(c) > 9 else "")) for d, c in by_day.items()][:5]))
+        ahead.append(("Payouts · book closures", [(f"{r['date']:%a %d %b}", f"{r['company_code']}  {_payout(r)}")
+                                                  for r in bcs[:5]]))
+        ahead.append(("Regular data releases", _releases(monday)))
+        ctx = {"hist": hist[-22:], "week": wk, "week_label": f"Week ending {now:%d %b %Y}", "week_strip": strip,
+               "week_gain": gain, "week_lose": lose, "week_highlights": hl,
+               "ahead": ahead, "ahead_label": f"Week of {monday:%d %b %Y}"}
+        cards = _safe_card(week_cards, cfg, now, ctx)
+    head = f"📅 <b>PSX Week in Review & Week Ahead</b> · week of {monday:%d %b}"
+    return text, cards, brief_caption(cfg, head, state, 36)
 
 
 def midday(cfg: dict, state: State, mk: dict, view=None):
@@ -541,14 +685,14 @@ def midday(cfg: dict, state: State, mk: dict, view=None):
     up = sum(1 for r in act if (r.get("trading_change") or 0) > 0)
     dn = sum(1 for r in act if (r.get("trading_change") or 0) < 0)
     vol = sum(r.get("trading_vol") or 0 for r in act)
-    glance_lines = [f"KSE-100 at {cur:,.0f}, {'up' if chg > 0 else 'down'} {abs(chg):,.0f} pts ({chg / pre * 100:+.2f}%)",
-                    f"{up} stocks up · {dn} down · {vol / 1e6:,.0f}m shares traded so far"]
+    gl = [f"KSE-100 at {cur:,.0f}, {'up' if chg > 0 else 'down'} {abs(chg):,.0f} pts ({chg / pre * 100:+.2f}%)",
+          f"{up} stocks up · {dn} down · {vol / 1e6:,.0f}m shares traded so far"]
     secs = sector_rows(view, act)
     if secs:
-        glance_lines.append(f"Leading: {secs[0][0]} ({secs[0][2]:+.0f} pts) · Lagging: {secs[-1][0]} ({secs[-1][2]:+.0f} pts)")
+        gl.append(f"Leading: {secs[0][0]} ({secs[0][2]:+.0f} pts) · Lagging: {secs[-1][0]} ({secs[-1][2]:+.0f} pts)")
     hours = max(now.hour - 6, 3)
     text = (header("🕐", "PSX Midday Pulse", f"{now:%A, %d %B %Y} · {now:%H:%M} PKT") + "\n"
-            + f"{section('⚡', 'At a glance')}\n" + "\n".join(f"• {esc(x)}" for x in glance_lines) + "\n\n"
+            + f"{section('⚡', 'At a glance')}\n" + "\n".join(f"• {esc(x)}" for x in gl) + "\n\n"
             + (f"{breadth_block(act)}\n\n" if act else "")
             + (f"{sector_block(view, act)}\n\n" if secs else "")
             + f"{movers_block(view)}\n\n"
@@ -557,11 +701,15 @@ def midday(cfg: dict, state: State, mk: dict, view=None):
     cards = None
     if cfg.get("brand", {}).get("cards", True):
         from .cards import midday_cards
-        ctx = {"view": view, "act": act, "intraday": (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}"),
-               "sectors": _sector_rows_for_card(view, act), "sector_name": _sector_name,
-               "headlines": card_headlines(cfg, state, hours, 3)}
+        hl = [x for x in (_sector_line(view, act), _movers_line(view), _volume_line(act)) if x]
+        ctx = {"view": view, "act": act, "idx": scs.indices(), "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"),
+               "hist": scs.index_history(45),
+               "mk": mk, "intraday": (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}"),
+               "sectors": _sector_rows_for_card(view, act), "headlines": card_headlines(cfg, state, hours, 6),
+               "highlights": hl}
         cards = _safe_card(midday_cards, cfg, now, ctx)
-    return text, cards, f"🕐 <b>PSX Midday Pulse</b> · {now:%A %d %b} · {now:%H:%M} PKT"
+    head = f"🕐 <b>PSX Midday Pulse</b> · {now:%A %d %b} · {now:%H:%M} PKT"
+    return text, cards, brief_caption(cfg, head, state, hours)
 
 
 BUILDERS = {"morning": morning, "midday": midday, "close": close, "week_ahead": week_ahead}

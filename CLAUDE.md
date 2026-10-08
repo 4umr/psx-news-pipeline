@@ -20,15 +20,24 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   `--dry-run` writes messages to `out/preview.txt` and cards to `out/*.png` (no Telegram).
 - `runner.py` one pass: collect → watchers → news scoring → send. Every component wrapped in `_safe()`; state always
   saved in `finally`; component-error / source-health alerts to admin after 3 consecutive failures; daily 23:45 report.
-  News: `news_mode: instant` → each headline posted alone (compact), score≥8 = full post with **image card + caption**.
-  Data alerts priority≥9 also get an image card (except list alerts in `NO_CARD`). WhatsApp-ready copies → admin chat.
+  **Infographic mode** (`brand.infographic: true`, default since 2026-10-09): briefs are posted ONLY as image albums
+  + short caption (title + top-story source links); every data alert and every score≥8 news item = one infographic
+  card + short caption (title + visible links). Quick headlines (score 4–7) stay compact text. Watchers attach a
+  structured card spec in `Alert.extra["card"]` (theme, kicker, title, stats, rows, why, sectors, source, links);
+  alerts without one get a fallback card parsed from the text. `infographic: false` restores old text posts.
+  WhatsApp-ready text copies → admin chat.
 - `watchers.py` SBP changes (policy rate, reserves, T-bill/PIB cut-offs, with sanity checks), corporate results (+FY EPS YoY
   from PSX), FIPI/LIPI (+by sector), KSE-100 moves (+intraday path recording), big stock moves & watchlist, PBS CPI/SPI
   (real numbers from the .docx/post), MPC calendar & reminders, PSX company filings (material info, insider dealing),
   unusual volume (needs ≥5 sessions of history), global moves.
 - `briefs.py` text + card albums: morning 08:45, **midday 12:30**, close 17:15 (holiday detection), week_ahead Sun 19:00.
-- `cards.py` matplotlib cards (`Card` class, px coords): alert_card (1080²), morning_cards/midday_cards/close_cards (2 each, 1080×1350).
-  Colors: up blue `#2a78d6`, down red `#e34948`, band `#0d366b`; no emoji in images (font can't draw them); `text.parse_math=False`.
+- `cards.py` matplotlib infographics in the **PAKISTAN INVESTORS brand kit** (`Card` class, px coords, 1080×1560):
+  dark gradient bg + glow, "PI" logo (drawn; `assets/logo.png` overrides), serif STIX titles, rounded panels, sparklines,
+  footer nav icons + disclaimer. Themes = category colours: psx green · us blue · commodity gold · fixed purple ·
+  economy slate · alert red · gold (week ahead). Up green `#46d27f` ▲ / down red `#ff5f5f` ▼.
+  Albums: morning = PSX market open + US market close + commodity update + top stories; midday/close = PSX card +
+  movers & sectors + top stories; week_ahead = week in review + the week ahead. `alert_card(cfg, spec, when, tiles)`.
+  No emoji in images (font can't draw them); `text.parse_math=False`. Preview with `--dry-run` → `out/*.png`.
 - `style.py` header/section/footer (one-line signature, **no hashtags**), `to_whatsapp()`.
 - `links.py` visible links: decode Google News → publisher URL, short forms (dawn/brecorder/tribune/thenews). `common.link()`
   always renders **plain visible URLs** (hidden <a> links break when copied to WhatsApp).
@@ -66,3 +75,4 @@ Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not sh
 3. Waiting on: channel invite link (`brand.channel_link`), watchlist stocks (`watchlist:`).
 4. Verify first real midday/closing albums arrived (logs show "album of N cards sent" / "image card ... sent").
 5. Ideas offered, not built: monthly macro card on CPI day, results-season tracker, weekly poll, web archive page, Urdu summaries.
+6. Brand kit applied 2026-10-09 (infographic mode). Waiting on Umer's real logo as transparent PNG → `assets/logo.png`.

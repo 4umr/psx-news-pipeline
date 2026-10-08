@@ -95,7 +95,17 @@ def sbp_changes(new: dict, state: State) -> list[Alert]:
                 f"🏭 In focus: Banks · Cement · Autos · Steel · Fertilizer\n"
                 + (f"\n{called}\n" if called else "") +
                 f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 10, f"sbp:pr:{pr_new}",
-                tags=["SBP", "PolicyRate", "InterestRates"]))
+                tags=["SBP", "PolicyRate", "InterestRates"],
+                extra={"card": {
+                    "theme": "alert", "kicker": "Breaking · SBP monetary policy",
+                    "title": f"SBP {'cuts' if move == 'cut' else 'raises'} policy rate by "
+                             f"{abs(round((pr_new - pr_old) * 100))} bps to {pr_new:.2f}%",
+                    "stats": [("New rate", f"{pr_new:.2f}%", None), ("Previous", f"{pr_old:.2f}%", None),
+                              ("Change", f"{round((pr_new - pr_old) * 100):+d} bps", pr_new - pr_old)],
+                    "why": "The policy rate sets bank lending/deposit rates and T-bill yields; cuts usually "
+                           "support equity valuations, hikes weigh on them.",
+                    "sectors": ["Banks", "Cement", "Autos", "Steel", "Fertilizer"],
+                    "source": "State Bank of Pakistan"}}))
 
         r_new, r_old = new.get("reserves"), old.get("reserves")
         if r_new and r_old and r_new.get("as_on") != r_old.get("as_on"):
@@ -109,7 +119,17 @@ def sbp_changes(new: dict, state: State) -> list[Alert]:
                 f"💡 Rising reserves support the rupee and investor confidence; "
                 f"falling reserves add external pressure.\n"
                 f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 9, f"sbp:res:{r_new['as_on']}",
-                tags=["Reserves", "SBP", "PKR"]))
+                tags=["Reserves", "SBP", "PKR"],
+                extra={"card": {
+                    "theme": "economy", "kicker": "SBP forex reserves · weekly",
+                    "title": f"SBP reserves {'rise' if d_sbp > 0 else 'fall'} ${abs(d_sbp):,.0f}m to "
+                             f"{usd_bn(r_new['sbp'])} (as on {r_new['as_on']})",
+                    "stats": [("SBP reserves", usd_bn(r_new["sbp"]), None, f"{d_sbp:+,.0f}m WoW"),
+                              ("Total liquid", usd_bn(r_new["total"]), None, f"{d_tot:+,.0f}m WoW"),
+                              ("Commercial banks", usd_bn(r_new["banks"]), None, "")],
+                    "why": "Rising reserves support the rupee and investor confidence; falling reserves add "
+                           "external pressure.",
+                    "sectors": ["Banks", "E&P"], "source": "State Bank of Pakistan"}}))
 
         for key, name in (("mtb", "T-Bill (MTB)"), ("pib", "Fixed-rate PIB")):
             n, o = new.get(key), old.get(key)
@@ -121,10 +141,32 @@ def sbp_changes(new: dict, state: State) -> list[Alert]:
                     f"💡 Cut-off yields show where the market expects rates "
                     f"to go — falling yields often front-run policy rate cuts.\n"
                     f"🔗 {link(SBP_URL, 'State Bank of Pakistan')}", 9, f"sbp:{key}:{n['as_on']}",
-                    tags=["TBills" if key == "mtb" else "PIB", "Yields", "SBP"]))
+                    tags=["TBills" if key == "mtb" else "PIB", "Yields", "SBP"],
+                    extra={"card": _auction_card(name, n, o, new.get("policy_rate"))}))
     merged = {**old, **new}
     state.set_snap("sbp", merged)
     return alerts
+
+
+def _auction_card(name: str, n: dict, o: dict, pr: float | None) -> dict:
+    ys, old = n["yields"], o.get("yields") or {}
+    stats, rows = [], []
+    for t, y in ys.items():
+        d = round((y - old[t]) * 100) if y is not None and old.get(t) is not None else None
+        if y is not None and len(stats) < 3:
+            stats.append((f"{t} cut-off", f"{y:.2f}%", d if d else None, f"{d:+d} bps" if d is not None else "new"))
+        rows.append((t, "rejected / no bids accepted" if y is None else "cut-off yield",
+                     "—" if y is None else f"{y:.2f}%" + (f"  ({d:+d} bps)" if d is not None else ""), None))
+    if pr is not None:
+        rows.append(("Policy", "SBP policy rate (for comparison)", f"{pr:.2f}%", None))
+    moves = [round((y - old[t]) * 100) for t, y in ys.items() if y is not None and old.get(t) is not None]
+    trend = ("yields fall" if sum(moves) < 0 else "yields rise" if sum(moves) > 0 else "yields steady") if moves else ""
+    return {"theme": "fixed", "kicker": f"Fixed income · {name} auction",
+            "title": f"{name} auction ({n['as_on']})" + (f": {trend}" if trend else ""),
+            "stats": stats, "rows_title": "All tenors", "rows": rows,
+            "why": "Cut-off yields show where the market expects rates to go; falling yields often "
+                   "front-run policy rate cuts.",
+            "sectors": ["Banks"], "source": "State Bank of Pakistan"}
 
 
 # ---------------------------------------------------------------- results
@@ -168,7 +210,23 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str]) -> list[
     text = (header("📊", "Corporate Results & Payouts", f"{len(fresh)} new announcement(s)") + "\n"
             f"⭐ KSE-100 company · EPS in Rs · 📄 PSX filing\n\n" + "\n".join(lines) + more +
             f"\n\n🔗 {link(SCS_URL + 'MarketStatistics/MS_Announcements.aspx', 'SCS Trade')} · filings from PSX")
-    return [Alert(text, 8 if has_major else 7, "results", tags=["Results", "Dividends", "Corporate"])]
+    rows, links = [], []
+    for r in fresh[:12]:
+        code = r.get("company_code", "")
+        bits = [f"EPS {r['bm_eps_quarter']}" if r.get("bm_eps_quarter") else ""]
+        bits += [f"Div {r['bm_dividend'].strip()}" if (r.get("bm_dividend") or "").strip() else "",
+                 f"Bonus {r['bm_bonus'].strip()}" if (r.get("bm_bonus") or "").strip() else ""]
+        rows.append((code, f"{r.get('bm_quarter_number') or ''} · " + (" · ".join(b for b in bits if b) or "see filing"),
+                     "KSE-100" if code in kse100 else "", None))
+        if r.get("bm_PDFLink"):
+            links.append((code, r["bm_PDFLink"]))
+    card = {"theme": "psx", "kicker": "Corporate results & payouts",
+            "title": f"{len(fresh)} new result / payout announcement(s)",
+            "rows_title": "Company · period · EPS (Rs) · payout", "rows": rows,
+            "why": "Results and payouts move individual stocks and their sector peers — open the filing for details.",
+            "source": "PSX filings via SCS Trade", "links": links}
+    return [Alert(text, 8 if has_major else 7, "results", tags=["Results", "Dividends", "Corporate"],
+                  extra={"card": card})]
 
 
 def _fy_yoy(code: str, r: dict) -> str:
@@ -207,25 +265,31 @@ def fipi_block(data: dict, usdpkr: float) -> str:
 
 def fipi_sectors(day) -> str:
     """Where foreigners bought / sold, by sector (USD m)."""
+    buy, sell = fipi_sector_rows(day)
+    out = ["🏭 <b>Foreigners by sector (USD m)</b>"]
+    if buy:
+        out.append("🟢 Bought: " + " · ".join(f"{esc(n)} {v:+.2f}" for n, v in buy))
+    if sell:
+        out.append("🔴 Sold: " + " · ".join(f"{esc(n)} {v:+.2f}" for n, v in sell))
+    return "\n".join(out) if len(out) > 1 else ""
+
+
+def fipi_sector_rows(day) -> tuple[list, list]:
+    """([(sector, USD m)] top foreign buys, top foreign sells)."""
     d = day.strftime("%m/%d/%Y")
     rows = [r for r in scs._post("FIPILIPI.aspx/loadfipisector", {"date1": d, "date2": d})
             if (r.get("FLTypeNew") or "").strip().upper() == "FIPI" and r.get("FLNetValueUSD") is not None
             and "all other" not in (r.get("FLSectorName") or "").lower()]
     if not rows:
-        return ""
+        return [], []
     rows.sort(key=lambda r: r["FLNetValueUSD"])
-    buy = [r for r in reversed(rows[-3:]) if r["FLNetValueUSD"] > 0.005]
-    sell = [r for r in rows[:3] if r["FLNetValueUSD"] < -0.005]
     from .briefs import _sector_name
-    name = lambda r: esc(_sector_name(re.sub(r"\s+and\s+", " & ",  # noqa: E731
-                                             re.sub(r"\s+", " ", r["FLSectorName"].replace("(mn$)", "")),
-                                             flags=re.I).strip()))
-    out = ["🏭 <b>Foreigners by sector (USD m)</b>"]
-    if buy:
-        out.append("🟢 Bought: " + " · ".join(f"{name(r)} {r['FLNetValueUSD']:+.2f}" for r in buy))
-    if sell:
-        out.append("🔴 Sold: " + " · ".join(f"{name(r)} {r['FLNetValueUSD']:+.2f}" for r in sell))
-    return "\n".join(out) if len(out) > 1 else ""
+    name = lambda r: _sector_name(re.sub(r"\s+and\s+", " & ",  # noqa: E731
+                                         re.sub(r"\s+", " ", r["FLSectorName"].replace("(mn$)", "")),
+                                         flags=re.I).strip())
+    buy = [(name(r), r["FLNetValueUSD"]) for r in reversed(rows[-3:]) if r["FLNetValueUSD"] > 0.005]
+    sell = [(name(r), r["FLNetValueUSD"]) for r in rows[:3] if r["FLNetValueUSD"] < -0.005]
+    return buy, sell
 
 
 def fipi_alert(now, state: State) -> list[Alert]:
@@ -243,12 +307,27 @@ def fipi_alert(now, state: State) -> list[Alert]:
     if net is not None:
         daily_rec(state, data["date"])["fipi"] = net
     rate = ((state.snap("sbp") or {}).get("usdpkr") or {}).get("m2m") or 280.0
-    sectors = fipi_sectors(now)
+    buy, sell = fipi_sector_rows(now)
+    sectors = fipi_sectors(now) if buy or sell else ""
     text = (header("🌍", "Investor Flows · FIPI / LIPI", f"{now:%A %d %b %Y}") + "\n" + fipi_block(data, rate) +
             (f"\n\n{sectors}" if sectors else "") +
             f"\n\n💡 Sustained foreign buying or selling is a key driver of PSX direction.\n"
             f"🔗 {link(SCS_URL + 'FIPILIPI.aspx', 'SCS Trade / NCCPL')}")
-    return [Alert(text, 8, key, tags=["FIPI", "ForeignFlows"])]
+    f, lp = data["summary"].get("FIPI", {}), data["summary"].get("LIPI", {})
+    rows = [("Bought", n, f"{v:+.2f}m $", v) for n, v in buy] + [("Sold", n, f"{v:+.2f}m $", v) for n, v in sell]
+    locals_ = sorted(((k, v / rate / 1e6) for k, v in data.get("lipi", {}).items() if abs(v / rate) >= 50_000),
+                     key=lambda kv: kv[1])
+    rows += [("Locals", k, f"{v:+.2f}m $", v) for k, v in (locals_[-2:][::-1] + locals_[:2])][:4]
+    card = {"theme": "psx", "kicker": "Investor flows · FIPI / LIPI",
+            "title": f"Foreigners net {'buyers' if (net or 0) > 0 else 'sellers'} of ${abs(net or 0):.2f}m today",
+            "stats": [("Foreign (FIPI)", f"{f.get('net', 0):+.2f}m $", f.get("net")),
+                      ("Local (LIPI)", f"{lp.get('net', 0):+.2f}m $", lp.get("net")),
+                      ("Foreign buy / sell", f"{abs(f.get('buy') or 0):.1f} / {abs(f.get('sell') or 0):.1f}", None,
+                       "USD m")],
+            "rows_title": "Who bought & sold what (USD m)", "rows": rows,
+            "why": "Sustained foreign buying or selling is a key driver of PSX direction.",
+            "source": "NCCPL via SCS Trade"}
+    return [Alert(text, 8, key, tags=["FIPI", "ForeignFlows"], extra={"card": card})]
 
 
 # ---------------------------------------------------------------- KSE-100 moves
@@ -305,7 +384,16 @@ def kse_moves(now, state: State, cfg: dict) -> tuple[list[Alert], list[dict]]:
             f"🔴 <b>Dragging:</b> {contrib_line(neg)}\n\n"
             f"💡 Check the news feed for the trigger before reacting.\n"
             f"🔗 {link(SCS_URL + 'MarketStatistics/MS_IndexView.aspx', 'SCS Trade index view')}")
-    return [Alert(text, 10 if abs(pct) >= 3 else 9, f"kse:{hit}", tags=["KSE100", "MarketAlert"])] + stock_alerts, view
+    rows = [("Lifting", r["company_code"], f"{r['NetIndexPoint']:+.0f} pts", r["NetIndexPoint"]) for r in pos] + \
+           [("Dragging", r["company_code"], f"{r['NetIndexPoint']:+.0f} pts", r["NetIndexPoint"]) for r in neg]
+    card = {"theme": "alert" if abs(pct) >= 3 else "psx", "kicker": f"Market alert · {now:%H:%M} PKT",
+            "title": f"KSE-100 {direction} {abs(pct):.2f}% intraday",
+            "stats": [("KSE-100", f"{cur:,.0f}", None), ("Points", f"{cur - pre:+,.0f}", cur - pre),
+                      ("Change", f"{pct:+.2f}%", pct)],
+            "rows_title": "Biggest index movers", "rows": rows,
+            "why": "Check the news feed for the trigger before reacting.", "source": "PSX via SCS Trade"}
+    return [Alert(text, 10 if abs(pct) >= 3 else 9, f"kse:{hit}", tags=["KSE100", "MarketAlert"],
+                  extra={"card": card})] + stock_alerts, view
 
 
 def record_intraday(state: State, now, cur: float, pre: float) -> None:
@@ -393,7 +481,14 @@ def stock_moves(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
             + "\n".join(lines) +
             "\n\n💡 Large single-stock moves often follow company news — check announcements before reacting."
             + (f"\n👁️ = on your watchlist" if any(h[3] for h in hits) else ""))
-    return [Alert(text, 8, "stocks", tags=["StockAlert", "KSE100"])]
+    card = {"theme": "psx", "kicker": f"Big stock moves · {now:%H:%M} PKT",
+            "title": f"{len(hits)} KSE-100 / watchlist stock(s) moving sharply",
+            "rows_title": "Stock · price · change", "rows": [
+                (code, f"Rs {cur:,.2f}" + (" · near circuit" if abs(pct) >= 9.5 else "") + (" · watchlist" if mine else ""),
+                 f"{pct:+.2f}%", pct) for code, pct, cur, mine in hits[:12]],
+            "why": "Large single-stock moves often follow company news — check announcements before reacting.",
+            "source": "PSX via SCS Trade"}
+    return [Alert(text, 8, "stocks", tags=["StockAlert", "KSE100"], extra={"card": card})]
 
 
 # ---------------------------------------------------------------- PBS: CPI / SPI with numbers
@@ -436,7 +531,15 @@ def pbs_releases(state: State) -> list[Alert]:
                     f"💡 SPI tracks weekly prices of essential items — an early "
                     f"signal for monthly CPI and the SBP's rate path.\n"
                     f"🔗 {link(url, 'Pakistan Bureau of Statistics')}", 8, f"spi:{d['week']}",
-                    tags=["SPI", "Inflation"]))
+                    tags=["SPI", "Inflation"],
+                    extra={"card": {"theme": "economy", "kicker": "Inflation · weekly SPI",
+                                    "title": f"Weekly SPI {'up' if d['wow'] > 0 else 'down'} {abs(d['wow']):.2f}% "
+                                             f"(week ended {d['week']})",
+                                    "stats": [("SPI index", f"{d['index']:.2f}", None),
+                                              ("Week on week", f"{d['wow']:+.2f}%", None)],
+                                    "why": "SPI tracks weekly prices of essential items — an early signal for "
+                                           "monthly CPI and the SBP's rate path.",
+                                    "source": "Pakistan Bureau of Statistics"}}))
     return alerts
 
 
@@ -461,7 +564,22 @@ def _cpi_alert(d: dict, url: str, state: State) -> Alert:
               "a positive real rate gives room for cuts, a negative one pressure for hikes.",
               "🏭 In focus: Banks · Cement · FMCG · Autos",
               f"🔗 {link(url, 'Pakistan Bureau of Statistics')} · {link(d['doc'], 'full review')}"]
-    return Alert("\n".join(lines), 10, f"cpi:{g['month']}", tags=["CPI", "Inflation", "SBP"])
+    rows = [(k.title(), "CPI inflation, YoY", f"{v['yoy']:.1f}%  (prev {v['prev_yoy']:.1f}%)", None)
+            for k in ("urban", "rural") if (v := d.get(k))]
+    if d.get("spi_yoy") is not None:
+        rows.append(("SPI / WPI", "Sensitive price & wholesale indices, YoY",
+                     f"{d['spi_yoy']:.1f}% / {d.get('wpi_yoy', 0):.1f}%", None))
+    if pr is not None:
+        rows.append(("Real rate", f"Policy {pr:.2f}% minus CPI {g['yoy']:.1f}%", f"{pr - g['yoy']:+.1f}%", None))
+    card = {"theme": "economy", "kicker": "Inflation update · official",
+            "title": f"CPI inflation at {g['yoy']:.1f}% in {g['month']} (previous {g['prev_yoy']:.1f}%)",
+            "stats": [("CPI YoY", f"{g['yoy']:.1f}%", None, f"{g['yoy'] - g['prev_yoy']:+.1f} pp vs last month"),
+                      ("Previous month", f"{g['prev_yoy']:.1f}%", None), ("Month on month", f"{g['mom']:+.1f}%", None)],
+            "rows_title": "Breakdown", "rows": rows,
+            "why": "Inflation is the main input for the SBP's next rate decision; a positive real rate gives "
+                   "room for cuts, a negative one pressure for hikes.",
+            "sectors": ["Banks", "Cement", "FMCG", "Autos"], "source": "Pakistan Bureau of Statistics"}
+    return Alert("\n".join(lines), 10, f"cpi:{g['month']}", tags=["CPI", "Inflation", "SBP"], extra={"card": card})
 
 
 # ---------------------------------------------------------------- MPC calendar
@@ -507,8 +625,24 @@ def mpc_watch(now, state: State) -> list[Alert]:
                       "\n\n💡 The decision is usually announced in the afternoon/evening — we'll alert you "
                       "the moment it's out.\n🔗 " + link("https://www.sbp.org.pk/our-operations/monetary-policy",
                                                          "SBP MPC calendar"),
-                      9, k, tags=["SBP", "MPC", "PolicyRate"])]
+                      9, k, tags=["SBP", "MPC", "PolicyRate"],
+                      extra={"card": {"theme": "economy", "kicker": "SBP monetary policy · reminder",
+                                      "title": f"SBP MPC meeting tomorrow ({nxt:%A %d %B})",
+                                      "stats": [x for x in (
+                                          ("Policy rate", f"{pr:.2f}%", None) if pr is not None else None,
+                                          ("Latest CPI", f"{cpi['yoy']:.1f}%", None, cpi["month"]) if cpi else None,
+                                          ("Real rate", f"{pr - cpi['yoy']:+.1f}%", None)
+                                          if cpi and pr is not None else None) if x],
+                                      "why": "The decision is usually announced in the afternoon/evening — "
+                                             "we'll alert you the moment it's out. " + _clean_sig(state),
+                                      "sectors": ["Banks", "Cement", "Autos", "Steel"],
+                                      "source": "SBP MPC calendar"}})]
     return []
+
+
+def _clean_sig(state: State) -> str:
+    sig = rate_signal(state.snap("sbp") or {})
+    return sig.replace("📡 ", "") + "." if sig else ""
 
 
 def rate_signal(sbp: dict) -> str:
@@ -616,7 +750,24 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
     text = (header("📢", "New company filings on PSX", "Straight from the exchange") + "\n"
             + "\n".join(lines) +
             "\n\n💡 Company disclosures often reach PSX before the news media — open the filing for full details.")
-    return [Alert(text, 9, "psxfilings", tags=["PSXFilings", "MaterialInformation"])]
+    rows, links, seen = [], [], set()
+    for sym, f in fresh:
+        if (sym, f["title"].lower()) in seen:
+            continue
+        seen.add((sym, f["title"].lower()))
+        title = f["title"]
+        if re.search(r"disclosure of interest", title, re.I):
+            title = "Insider dealing disclosure (director / executive / major shareholder traded shares)"
+        r = px.get(sym, {})
+        pct = (r["CurrentPrice"] / r["LDCP"] - 1) * 100 if r.get("CurrentPrice") and r.get("LDCP") else None
+        rows.append((sym, title[:150], f"{pct:+.1f}%" if pct is not None else "", pct))
+        if f["url"]:
+            links.append((sym, f["url"]))
+    card = {"theme": "psx", "kicker": "PSX company filings", "title": f"{len(rows)} new filing(s) on PSX",
+            "rows_title": "Company · filing · price today", "rows": rows[:10],
+            "why": "Company disclosures often reach PSX before the news media — open the filing for full details.",
+            "source": "Pakistan Stock Exchange (dps.psx.com.pk)", "links": links}
+    return [Alert(text, 9, "psxfilings", tags=["PSXFilings", "MaterialInformation"], extra={"card": card})]
 
 
 # ---------------------------------------------------------------- unusual volume
@@ -657,7 +808,15 @@ def unusual_volume(now, state: State, cfg: dict, kse100: set[str]) -> list[Alert
         lines.append(f"🔎 <b>{esc(code)}</b> {vol / 1e6:,.2f}m shares — <b>{x:.1f}×</b> its 10-day average{pct}")
     text = (header("🔎", "Unusual volume", f"KSE-100 / watchlist · {now:%H:%M} PKT") + "\n" + "\n".join(lines) +
             "\n\n💡 Volume spikes often come before or with news — check filings and headlines.")
-    return [Alert(text, 8, "volume", tags=["UnusualVolume", "KSE100"])]
+    card = {"theme": "psx", "kicker": f"Unusual volume · {now:%H:%M} PKT",
+            "title": f"{len(hits)} stock(s) trading far above normal volume",
+            "rows_title": "Stock · volume vs 10-day average · price", "rows": [
+                (code, f"{vol / 1e6:,.2f}m shares · {x:.1f}x average",
+                 f"{chg / (close - chg) * 100:+.1f}%" if close and chg is not None and close - chg else "",
+                 chg if chg else None) for code, vol, x, close, chg in hits[:12]],
+            "why": "Volume spikes often come before or with news — check filings and headlines.",
+            "source": "PSX via SCS Trade"}
+    return [Alert(text, 8, "volume", tags=["UnusualVolume", "KSE100"], extra={"card": card})]
 
 
 def next_mpc(state: State, now):
@@ -698,7 +857,12 @@ def global_moves(mk: dict, state: State, cfg: dict) -> list[Alert]:
         alerts.append(Alert(
             header("🌐", f"{name} {fmt_pct(d['pct'], 1)}", "Global market move") + "\n"
             f"{arrow(d['pct'])} {esc(name)}: <b>{val}</b> ({fmt_pct(d['pct'], 1)} today)\n\n"
-            f"💡 {GLOBAL_WHY.get(sym, '')}", 8, k, tags=["GlobalMarkets"]))
+            f"💡 {GLOBAL_WHY.get(sym, '')}", 8, k, tags=["GlobalMarkets"],
+            extra={"card": {"theme": "commodity" if sym in ("BZ=F", "CL=F", "GC=F") else "us",
+                            "kicker": "Global market move",
+                            "title": f"{name} {'jumps' if d['pct'] > 0 else 'drops'} {abs(d['pct']):.1f}% to {val}",
+                            "stats": [(name, val, None), ("Daily change", f"{d['pct']:+.1f}%", d["pct"])],
+                            "why": GLOBAL_WHY.get(sym, ""), "source": "Yahoo Finance"}}))
     if alerts:
         log.info("global alerts: %d", len(alerts))
     return alerts
