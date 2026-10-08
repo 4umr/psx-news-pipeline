@@ -11,7 +11,9 @@ brand:
   author: "Umer"
   title: "Financial Analyst"
   channel_link: ""     # e.g. https://t.me/+AbCdEf... — shown as "Join" link when set
-  cards: true          # send image cards with morning brief / closing wrap / week ahead
+  cards: true          # image cards (albums) with morning / midday / closing / weekly briefs
+  alert_cards: true    # important news & data alerts come as an image card with the text as caption
+  alert_card_min_priority: 9
   # WhatsApp-ready copies sent privately to you (needs TELEGRAM_ADMIN_CHAT_ID):
   #   important = briefs + top alerts (policy rate, CPI, auctions, reserves, MPC, big moves)
   #   all = every channel post · off = none
@@ -47,6 +49,7 @@ max_per_topic_in_digest: 3   # e.g. at most 3 petrol-price stories per digest
 # ---------------------------------------------------------------------
 briefs:
   morning:    {time: "08:45", days: [0, 1, 2, 3, 4]}
+  midday:     {time: "12:30", days: [0, 1, 2, 3, 4]}
   close:      {time: "17:15", days: [0, 1, 2, 3, 4]}
   week_ahead: {time: "19:00", days: [6]}
 

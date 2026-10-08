@@ -67,6 +67,22 @@ def daily_activity() -> list[dict]:
     return _post("MarketStatistics/MS_DailyActivity.aspx/chartact", {"rows": 3000})
 
 
+def index_history(days: int = 45, name: str = "KSE 100") -> list[dict]:
+    """Daily OHLC + volume for an index over the last `days` calendar days (oldest first)."""
+    from datetime import timedelta
+
+    from ..common import now_pkt
+    end = now_pkt()
+    rows = _post("MarketStatistics/MS_HistoricalIndices.aspx/chart",
+                 {"par": name, "date1": (end - timedelta(days=days)).strftime("%m/%d/%Y"),
+                  "date2": end.strftime("%m/%d/%Y")})
+    for r in rows:
+        r["date"] = date_from_ms(r.get("kse_index_date", ""))
+    rows = [r for r in rows if r.get("date") and r.get("kse_index_close")]
+    rows.sort(key=lambda r: r["date"])
+    return rows
+
+
 def indices() -> list[dict]:
     """OHLC + change for KSE-100, KSE-30, KMI-30, KSE All etc."""
     rows = _post("MarketStatistics/MS_DailyActivity.aspx/chartind")

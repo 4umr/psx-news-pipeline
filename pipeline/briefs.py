@@ -160,7 +160,30 @@ def _sector_name(s: str) -> str:
             "Inv. Banks / Inv. Cos. / Securities Cos.": "Inv. Banks/Brokers",
             "Power Generation & Distribution": "Power", "Technology & Communication": "Tech & Telecom",
             "Automobile Assembler": "Autos", "Automobile Parts & Accessories": "Auto Parts",
-            "Food & Personal Care Products": "Food & FMCG", "Pharmaceuticals": "Pharma"}.get(s, s)
+            "Food & Personal Care Products": "Food & FMCG", "Pharmaceuticals": "Pharma",
+            "Cable & Electrical Goods": "Cables & Electrical", "Leather & Tanneries": "Leather",
+            "Textile Composite": "Textile Composite", "Glass & Ceramics": "Glass & Ceramics",
+            "Chemical": "Chemicals", "Miscellaneous": "Misc."}.get(s, s)
+
+
+def sector_rows(view: list[dict], act: list[dict]) -> list[tuple[str, float, float]]:
+    """(sector, free-float-weighted % change, index points) for KSE-100 sectors, best first."""
+    if not view or not act:
+        return []
+    sec = {r["company_code"]: r.get("sector_name", "") for r in act}
+    agg: dict[str, list[float]] = {}
+    for r in view:
+        s, ldcp, cur = sec.get(r.get("company_code")), r.get("LDCP"), r.get("CurrentPrice")
+        if not s or not ldcp or not cur:
+            continue
+        wgt = (r.get("freeflooat") or 0) * ldcp
+        a = agg.setdefault(_sector_name(s), [0.0, 0.0, 0.0])
+        a[0] += wgt
+        a[1] += wgt * (cur / ldcp - 1)
+        a[2] += r.get("NetIndexPoint") or 0
+    rows = [(name, (v[1] / v[0] * 100) if v[0] else 0.0, v[2]) for name, v in agg.items()]
+    rows.sort(key=lambda x: -x[2])
+    return rows
 
 
 def sector_block(view: list[dict], act: list[dict]) -> str:
@@ -334,6 +357,41 @@ def _mpc_note(state: State) -> str:
     return f"Next SBP MPC meeting: {nxt:%a %d %b} ({when})"
 
 
+def card_headlines(cfg: dict, state: State, hours: int, n: int = 5) -> list[dict]:
+    """Top headlines for image cards, with impact level and sectors in focus."""
+    cutoff = time.time() - hours * 3600
+    hs = sorted((h for h in state.data["headlines"] if h["ts"] >= cutoff), key=lambda h: (-h["sc"], -h["ts"]))
+    out = []
+    for h in hs[:n]:
+        m = (cfg.get("topic_meta") or {}).get(h.get("topic", ""), {}) or {}
+        label = h.get("l", "")
+        out.append({**h, "topic_label": label.split(" ", 1)[-1] if " " in label else label,
+                    "sectors": ", ".join(m.get("sectors", [])[:3])})
+    return out
+
+
+def _sector_rows_for_card(view, act, n=6):
+    rows = sector_rows(view, act)
+    pick = rows[: n // 2] + rows[-(n // 2):] if len(rows) > n else rows
+    seen, out = set(), []
+    for r in pick:
+        if r[0] not in seen:
+            seen.add(r[0])
+            out.append((r[0], r[1]))
+    return out
+
+
+def _agenda(state: State, n_board: int, n_bc: int) -> list[str]:
+    out = []
+    if note := _mpc_note(state):
+        out.append(note)
+    if n_board or n_bc:
+        out.append(f"Today: {n_board} board meeting(s) · {n_bc} payout book closure(s)")
+    if a := upcoming_auctions((state.snap("sbp") or {}).get("upcoming_auctions", "")):
+        out.append(f"Next govt securities auctions: {a}")
+    return out
+
+
 def _safe_card(fn, *a, **kw):
     try:
         return fn(*a, **kw)
@@ -359,12 +417,17 @@ def morning(cfg: dict, state: State, mk: dict, view=None, title: str = "Morning 
             f"{section('📅', 'Today on the corporate calendar')}\n{cal}\n\n"
             f"{section('📰', 'Top headlines (last 16h)')}\n{headlines_block(state, 16)}"
             + footer(cfg, ["MorningBrief", "KSE100"]))
-    card = None
+    cards = None
     if cfg.get("brand", {}).get("cards", True):
-        from .cards import morning_card
-        card = _safe_card(morning_card, cfg, now, idx, state.snap("sbp") or {}, mk, n_board, n_bc, kicker=title,
-                          cpi=state.snap("cpi"), mpc_note=_mpc_note(state))
-    return text, card, f"☀️ <b>PSX {esc(title)}</b> · {now:%d %b %Y} — full details below 👇"
+        from .cards import morning_cards
+        from .sources import markets
+        ctx = {"kicker": title, "idx": idx, "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"), "mk": mk,
+               "cmk": markets.snapshot(["ES=F", "^N225", "^HSI", "CT=F", "NG=F", "ZW=F"]),
+               "hist": scs.index_history(45)[-22:], "headlines": card_headlines(cfg, state, 16, 4),
+               "fipi": state.snap("fipi_last"),
+               "agenda": _agenda(state, n_board, n_bc)}
+        cards = _safe_card(morning_cards, cfg, now, ctx)
+    return text, cards, f"☀️ <b>PSX {esc(title)}</b> · {now:%A %d %b %Y}"
 
 
 def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
@@ -400,12 +463,16 @@ def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
             f"{section('📅', f'Next session · {nxt:%a %d %b}')}\n{cal}\n\n"
             f"{section('📰', 'Key headlines today')}\n{headlines_block(state, 10, 10)}"
             + footer(cfg, ["ClosingWrap", "KSE100"]))
-    card = None
+    cards = None
     if cfg.get("brand", {}).get("cards", True):
-        from .cards import close_card
-        card = _safe_card(close_card, cfg, now, idx, view, state.snap("sbp") or {}, mk,
-                          state.snap("fipi_last") if fipi_today else None, act, state.snap("cpi"))
-    return text, card, f"🔔 <b>PSX Closing Wrap</b> · {now:%d %b %Y} — full details below 👇"
+        from .cards import close_cards
+        ctx = {"idx": idx, "view": view, "act": act, "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"),
+               "mk": mk, "fipi": state.snap("fipi_last") if fipi_today else None,
+               "intraday": (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}"),
+               "sectors": _sector_rows_for_card(view, act), "sector_name": _sector_name,
+               "headlines": card_headlines(cfg, state, 10, 3)}
+        cards = _safe_card(close_cards, cfg, now, ctx)
+    return text, cards, f"🔔 <b>PSX Closing Wrap</b> · {now:%A %d %b %Y}"
 
 
 class _NoFipi:
@@ -450,15 +517,54 @@ def week_ahead(cfg: dict, state: State, mk: dict, view=None):
                if (board := _scoreboard(state)) else "") +
             f"{section('📰', 'Biggest stories of the last 36h')}\n{headlines_block(state, 36, 10)}"
             + footer(cfg, ["WeekAhead", "KSE100"]))
-    card = None
+    cards = None
     if cfg.get("brand", {}).get("cards", True):
-        from .cards import morning_card
-        card = _safe_card(morning_card, cfg, now, scs.indices(), state.snap("sbp") or {}, mk, kicker="Week Ahead",
-                          cpi=state.snap("cpi"), mpc_note=_mpc_note(state))
-    return text, card, f"📅 <b>PSX Week Ahead</b> · week of {monday:%d %b} — full details below 👇"
+        from .cards import morning_cards
+        ctx = {"kicker": "Week in Review", "idx": scs.indices(), "sbp": state.snap("sbp") or {},
+               "cpi": state.snap("cpi"), "mk": mk, "hist": scs.index_history(45)[-22:]}
+        cards = (_safe_card(morning_cards, cfg, now, ctx) or [])[:1] or None
+    return text, cards, f"📅 <b>PSX Week in Review & Week Ahead</b> · week of {monday:%d %b}"
 
 
-BUILDERS = {"morning": morning, "close": close, "week_ahead": week_ahead}
+def midday(cfg: dict, state: State, mk: dict, view=None):
+    """12:30 PKT pulse: where the market stands mid-session, where the volume is, news so far."""
+    now = now_pkt()
+    view = view or scs.kse100_view()
+    if not view:
+        return None, None, ""
+    cur, pre = view[0].get("CurrentIndex"), view[0].get("PreIndex")
+    last = state.snap("kse_last_close")
+    if not cur or not pre or (last and abs(pre - last) > 1):
+        return None, None, ""  # market closed today (holiday) - skip
+    act = scs.daily_activity()
+    chg = cur - pre
+    up = sum(1 for r in act if (r.get("trading_change") or 0) > 0)
+    dn = sum(1 for r in act if (r.get("trading_change") or 0) < 0)
+    vol = sum(r.get("trading_vol") or 0 for r in act)
+    glance_lines = [f"KSE-100 at {cur:,.0f}, {'up' if chg > 0 else 'down'} {abs(chg):,.0f} pts ({chg / pre * 100:+.2f}%)",
+                    f"{up} stocks up · {dn} down · {vol / 1e6:,.0f}m shares traded so far"]
+    secs = sector_rows(view, act)
+    if secs:
+        glance_lines.append(f"Leading: {secs[0][0]} ({secs[0][2]:+.0f} pts) · Lagging: {secs[-1][0]} ({secs[-1][2]:+.0f} pts)")
+    hours = max(now.hour - 6, 3)
+    text = (header("🕐", "PSX Midday Pulse", f"{now:%A, %d %B %Y} · {now:%H:%M} PKT") + "\n"
+            + f"{section('⚡', 'At a glance')}\n" + "\n".join(f"• {esc(x)}" for x in glance_lines) + "\n\n"
+            + (f"{breadth_block(act)}\n\n" if act else "")
+            + (f"{sector_block(view, act)}\n\n" if secs else "")
+            + f"{movers_block(view)}\n\n"
+            + f"{section('📰', 'News so far today')}\n{headlines_block(state, hours, 8)}"
+            + footer(cfg))
+    cards = None
+    if cfg.get("brand", {}).get("cards", True):
+        from .cards import midday_cards
+        ctx = {"view": view, "act": act, "intraday": (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}"),
+               "sectors": _sector_rows_for_card(view, act), "sector_name": _sector_name,
+               "headlines": card_headlines(cfg, state, hours, 3)}
+        cards = _safe_card(midday_cards, cfg, now, ctx)
+    return text, cards, f"🕐 <b>PSX Midday Pulse</b> · {now:%A %d %b} · {now:%H:%M} PKT"
+
+
+BUILDERS = {"morning": morning, "midday": midday, "close": close, "week_ahead": week_ahead}
 
 
 def due(cfg: dict, state: State, now: datetime, grace_hours: int = 3) -> list[str]:

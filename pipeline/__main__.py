@@ -37,7 +37,7 @@ def main() -> None:
     lp.add_argument("--every", type=int, default=120)
     lp.add_argument("--dry-run", action="store_true")
     b = sub.add_parser("brief")
-    b.add_argument("name", choices=["morning", "close", "week_ahead"])
+    b.add_argument("name", choices=["morning", "midday", "close", "week_ahead"])
     b.add_argument("--dry-run", action="store_true")
     tp = sub.add_parser("test")
     tp.add_argument("--admin-only", action="store_true", help="only message the private admin chat")

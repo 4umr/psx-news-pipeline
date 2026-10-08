@@ -76,37 +76,24 @@ class Sender:
         return self._post(self.admin, text, False)
 
     def send_photo(self, png: bytes, caption: str = "", name: str = "card") -> bool:
-        caption = caption[:1000]
+        """One image with an (HTML) caption — the caption can carry the whole message (max ~1024 chars)."""
         if self.dry:
             path = self.preview.parent / f"{name}.png"
             path.write_bytes(png)
             with open(self.preview, "a", encoding="utf-8") as f:
-                f.write(f"\n{'=' * 60}\n[IMAGE {path.name}] {caption}\n")
+                f.write(f"\n{'=' * 60}\n[IMAGE {path.name}]\n{caption}\n")
             self.sent += 1
             return True
         ok = True
-        url = f"https://api.telegram.org/bot{self.token}/sendPhoto"
         for chat in self.chats:
-            for attempt in range(3):
-                try:
-                    r = http().post(url, data={"chat_id": chat, "caption": caption, "parse_mode": "HTML"},
-                                    files={"photo": (f"{name}.png", png, "image/png")}, timeout=40)
-                    if r.status_code == 429:
-                        time.sleep(min(r.json().get("parameters", {}).get("retry_after", 5), 60))
-                        continue
-                    if not r.ok:
-                        log.error("Telegram photo error %s: %s", r.status_code, r.text[:200])
-                        ok = False
-                    else:
-                        self.sent += 1
-                        time.sleep(1.1)
-                    break
-                except Exception as e:  # noqa: BLE001
-                    log.warning("Telegram photo failed (%s), retrying", e)
-                    time.sleep(2 * (attempt + 1))
-            else:
-                ok = False
+            sent = self._photo(chat, png, caption, name)
+            log.info("image card '%s' %s", name, "sent" if sent else "FAILED")
+            ok &= sent
         return ok
+
+    @staticmethod
+    def fits_caption(text: str) -> bool:
+        return _vis(text) <= 1000
 
     def send_admin_plain(self, text: str) -> bool:
         """Plain-text message to the owner (keeps WhatsApp *bold* markers intact for copy-paste)."""
@@ -118,6 +105,68 @@ class Sender:
         for i in range(0, len(text), MAX_LEN):
             ok &= self._post(self.admin, text[i:i + MAX_LEN], False, html_mode=False)
         return ok
+
+    def send_album(self, pngs: list[bytes], caption: str = "", name: str = "card") -> bool:
+        """Several cards as one album (caption on the first). Falls back to single photos."""
+        pngs = [p for p in pngs if p]
+        if not pngs:
+            return False
+        if len(pngs) == 1:
+            return self.send_photo(pngs[0], caption, name=name)
+        if self.dry:
+            for i, p in enumerate(pngs, 1):
+                self.send_photo(p, caption if i == 1 else "", name=f"{name}_{i}")
+            return True
+        import json as _json
+        url = f"https://api.telegram.org/bot{self.token}/sendMediaGroup"
+        media = [{"type": "photo", "media": f"attach://p{i}", **({"caption": caption[:1000], "parse_mode": "HTML"}
+                                                                  if i == 0 and caption else {})}
+                 for i in range(len(pngs))]
+        files = {f"p{i}": (f"{name}_{i}.png", p, "image/png") for i, p in enumerate(pngs)}
+        ok = True
+        for chat in self.chats:
+            sent = False
+            for attempt in range(3):
+                try:
+                    r = http().post(url, data={"chat_id": chat, "media": _json.dumps(media)}, files=files, timeout=60)
+                    if r.status_code == 429:
+                        time.sleep(min(r.json().get("parameters", {}).get("retry_after", 5), 60))
+                        continue
+                    sent = r.ok
+                    if not r.ok:
+                        log.error("Telegram album error %s: %s", r.status_code, r.text[:200])
+                    break
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Telegram album failed (%s), retrying", e)
+                    time.sleep(2 * (attempt + 1))
+            if sent:
+                self.sent += 1
+                log.info("album of %d cards sent to %s", len(pngs), "channel")
+                time.sleep(1.5)
+            else:  # fall back to individual photos so the cards still arrive
+                for i, p in enumerate(pngs):
+                    ok &= self._photo(chat, p, caption if i == 0 else "", f"{name}_{i}")
+        return ok
+
+    def _photo(self, chat: str, png: bytes, caption: str, name: str) -> bool:
+        url = f"https://api.telegram.org/bot{self.token}/sendPhoto"
+        for attempt in range(3):
+            try:
+                r = http().post(url, data={"chat_id": chat, "caption": caption[:1024], "parse_mode": "HTML"},
+                                files={"photo": (f"{name}.png", png, "image/png")}, timeout=40)
+                if r.status_code == 429:
+                    time.sleep(min(r.json().get("parameters", {}).get("retry_after", 5), 60))
+                    continue
+                if not r.ok:
+                    log.error("Telegram photo error %s: %s", r.status_code, r.text[:200])
+                    return False
+                self.sent += 1
+                time.sleep(1.1)
+                return True
+            except Exception as e:  # noqa: BLE001
+                log.warning("Telegram photo failed (%s), retrying", e)
+                time.sleep(2 * (attempt + 1))
+        return False
 
     def _post(self, chat: str, text: str, preview: bool, html_mode: bool = True) -> bool:
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"

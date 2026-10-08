@@ -31,7 +31,7 @@ def _news_alerts(items: list[NewsItem], state: State, cfg: dict) -> tuple[list[N
             continue
         state.add_title(toks, it.topic)
         state.add_headline({"t": it.title, "u": it.url, "s": it.source, "sc": it.score,
-                            "l": it.label, "ts": int(time.time())})
+                            "l": it.label, "topic": it.topic, "ts": int(time.time())})
         picked.append(it)
     picked.sort(key=lambda i: -i.score)
     instant = [i for i in picked if i.score >= cfg["min_score_instant"]][: cfg["max_instant_per_run"]]
@@ -67,7 +67,7 @@ def _fmt_instant(it: NewsItem, cfg: dict) -> str:
         lines.append(f"💡 {esc(it.why)}")
     if m.get("sectors"):
         lines.append(f"🏭 In focus: {esc(' · '.join(m['sectors']))}")
-    lines.append(f"🔗 {link(it.url, it.source)} · {when:%H:%M} PKT")
+    lines.append(f"🔗 {when:%H:%M} PKT · {link(it.url, it.source)}")
     return "\n".join(lines) + footer(cfg, compact=True)
 
 
@@ -93,7 +93,7 @@ def _fmt_compact(d: dict, cfg: dict) -> str:
     when = datetime.fromtimestamp(d.get("pub") or d["ts"], tz=now_pkt().tzinfo)
     icon, topic = _split_label(d["l"])
     return (f"{icon} <b>{esc(d['t'])}</b>\n"
-            f"<i>{esc(topic)}</i> · {link(d['u'], d['s'])} · {when:%H:%M}")
+            f"<i>{esc(topic)} · {when:%H:%M}</i> · {link(d['u'], d['s'])}")
 
 
 def _with_footer(a: Alert, cfg: dict) -> str:
@@ -156,11 +156,65 @@ def _flush_digest(cfg: dict, state: State, sender: Sender) -> int:
 
 # ---------------------------------------------------------------- briefs
 def _send_brief(name: str, cfg: dict, state: State, mk: dict, view, sender: Sender, **kw) -> str:
-    text, card, caption = briefs.BUILDERS[name](cfg, state, mk, view, **kw)
-    if card:
-        sender.send_photo(card, caption, name=name)
+    text, cards, caption = briefs.BUILDERS[name](cfg, state, mk, view, **kw)
+    if not text:
+        return ""  # e.g. midday brief on a market holiday
+    if isinstance(cards, bytes):
+        cards = [cards]
+    if cards:
+        sender.send_album(cards, caption, name=name)
     sender.send(text)
     return text
+
+
+# Long list-style alerts read better as text than squeezed into an image
+NO_CARD = {"results", "psxfilings", "stocks", "volume"}
+
+
+def _market_tiles(state: State, view: list[dict]) -> list:
+    """KSE-100 / policy rate / USD-PKR right now, for the strip on alert cards."""
+    tiles = []
+    if view and view[0].get("CurrentIndex") and view[0].get("PreIndex"):
+        cur, pre = view[0]["CurrentIndex"], view[0]["PreIndex"]
+        tiles.append(("KSE-100", f"{cur:,.0f}", (cur / pre - 1) * 100))
+    s = state.snap("sbp") or {}
+    if s.get("policy_rate") is not None:
+        tiles.append(("SBP policy rate", f"{s['policy_rate']:.2f}%", None))
+    if u := s.get("usdpkr"):
+        tiles.append(("USD/PKR", f"{u['m2m']:.2f}", None))
+    return tiles
+
+
+def _post_with_card(sender: Sender, cfg: dict, msg: str, kicker: str, title: str, body: list[str],
+                    source: str, breaking: bool, when: datetime, name: str, tiles: list | None = None) -> None:
+    """Image card + the message as its caption (one shareable post). Falls back to plain text."""
+    if not cfg.get("brand", {}).get("alert_cards", True):
+        sender.send(msg)
+        return
+    from .cards import alert_card
+    try:
+        png = alert_card(cfg, kicker, title, body, source, when, breaking=breaking, tiles=tiles)
+    except Exception:  # noqa: BLE001 — never lose the message because an image failed
+        log.exception("alert card failed")
+        sender.send(msg)
+        return
+    if sender.fits_caption(msg):
+        sender.send_photo(png, msg, name=name)
+    else:
+        sender.send_photo(png, "", name=name)
+        sender.send(msg)
+
+
+def _card_parts_from_alert(a: Alert) -> tuple[str, str, list[str], str]:
+    """Split a formatted data alert into (kicker, title, body lines, source) for its image card."""
+    lines = [ln for ln in a.text.split("\n")]
+    title = lines[0] if lines else ""
+    sub = lines[1] if len(lines) > 1 and lines[1].startswith("<i>") else ""
+    rest = lines[2:] if sub else lines[1:]
+    source = next((ln for ln in rest if ln.startswith("🔗")), "")
+    body = [ln for ln in rest if not ln.startswith("🔗")]
+    kicker = "Breaking" if a.priority >= 10 else "Market update"
+    return kicker + (f" · {sub}" if sub else ""), title, body, source
 
 
 def about_text(cfg: dict) -> str:
@@ -171,7 +225,8 @@ def about_text(cfg: dict) -> str:
                    f"Curated by {b.get('author', '')}" + (f", {b['title']}" if b.get("title") else "")) + "\n"
             "Pakistan Stock Exchange news, data and macro indicators — automatic, 24/7, always with sources.\n\n"
             "<b>⏰ What you get & when (PKT)</b>\n"
-            f"☀️ <b>{t('morning', '08:45')}</b> Morning brief + market card (Mon–Fri)\n"
+            f"☀️ <b>{t('morning', '08:45')}</b> Morning brief + market cards (Mon–Fri)\n"
+            f"🕐 <b>{t('midday', '12:30')}</b> Midday pulse: intraday chart, volume, movers (Mon–Fri)\n"
             f"🔔 <b>{t('close', '17:15')}</b> Closing wrap + market card (Mon–Fri)\n"
             "🌍 <b>Evening</b> Foreign / local investor flows (FIPI/LIPI)\n"
             f"📅 <b>Sun {t('week_ahead', '19:00')}</b> Week ahead: results calendar, payouts, auctions\n"
@@ -374,11 +429,24 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
             sender.send_admin(a.text)
             continue
         msg = _with_footer(a, cfg)
-        sender.send(msg, preview=a.preview)
+        if a.priority >= cfg.get("brand", {}).get("alert_card_min_priority", 9) and a.key not in NO_CARD:
+            kicker, title, body, source = _card_parts_from_alert(a)
+            _post_with_card(sender, cfg, msg, kicker, title, body, source, a.priority >= 10, now, "alert",
+                            _market_tiles(state, view_now))
+        else:
+            sender.send(msg, preview=a.preview)
         S("whatsapp copy", wa, msg, a.priority >= 9)
     for it in instant:
         msg = _fmt_instant(it, cfg)
-        sender.send(msg)
+        icon, topic = _split_label(it.label)
+        m = meta(cfg, it.topic)
+        body = [it.why] if it.why else []
+        if m.get("sectors"):
+            body.append("In focus: " + " · ".join(m["sectors"]))
+        when = to_pkt(it.published) or now
+        _post_with_card(sender, cfg, msg, f"{'Breaking' if it.score >= 10 else 'Important'} · {topic}",
+                        it.title, body, f"Source: {it.source} · {when:%H:%M} PKT", it.score >= 10, now, "news",
+                        _market_tiles(state, view_now))
         S("whatsapp copy", wa, msg, it.score >= 10)
     _queue_digest(digest, state)
     if cfg.get("news_mode", "instant") == "instant":

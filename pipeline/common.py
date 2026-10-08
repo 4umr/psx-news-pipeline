@@ -59,7 +59,20 @@ def esc(text: str) -> str:
 
 
 def link(url: str, label: str) -> str:
-    return f'<a href="{html.escape(url, quote=True)}">{esc(label)}</a>'
+    """Source name + the real, visible URL.
+
+    Hidden hyperlinks (<a href>) lose their address when a post is copied from
+    Telegram into WhatsApp, so the URL is always shown as plain text — Telegram and
+    WhatsApp both turn it into a clickable link. Google News redirects are resolved
+    to the publisher's article and long URLs are trimmed (see links.py).
+    """
+    if not url:
+        return esc(label)
+    from .links import short
+    u = esc(short(url))
+    if label in ("📄", "📄 filing", "view filing"):
+        return f"📄 {u}"
+    return f"{esc(label)} · {u}"
 
 
 def clean_ws(text: str) -> str:

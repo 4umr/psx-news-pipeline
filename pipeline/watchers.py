@@ -142,7 +142,7 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str]) -> list[
     if not fresh:
         return []
     fresh.sort(key=lambda r: (r.get("company_code") not in kse100, r.get("company_code") or ""))
-    limit = 40
+    limit = 25
     lines = []
     for r in fresh[:limit]:
         code = r.get("company_code", "")
@@ -279,6 +279,7 @@ def kse_moves(now, state: State, cfg: dict) -> tuple[list[Alert], list[dict]]:
         return [], view  # data still shows a previous session (pre-open / holiday)
     if not last_close and now.hour < 10:
         return [], view
+    record_intraday(state, now, cur, pre)
     pct = (cur / pre - 1) * 100
     if abs(pct) > 12:  # PSX index halts long before this — almost certainly bad data
         k = f"sus:kse:{now:%Y-%m-%d}"
@@ -305,6 +306,18 @@ def kse_moves(now, state: State, cfg: dict) -> tuple[list[Alert], list[dict]]:
             f"💡 Check the news feed for the trigger before reacting.\n"
             f"🔗 {link(SCS_URL + 'MarketStatistics/MS_IndexView.aspx', 'SCS Trade index view')}")
     return [Alert(text, 10 if abs(pct) >= 3 else 9, f"kse:{hit}", tags=["KSE100", "MarketAlert"])] + stock_alerts, view
+
+
+def record_intraday(state: State, now, cur: float, pre: float) -> None:
+    """KSE-100 level each run during the session -> intraday chart for midday/closing cards."""
+    day = f"{now:%Y-%m-%d}"
+    intra = state.data.setdefault("intraday", {})
+    for d in sorted(intra)[:-3]:
+        del intra[d]
+    pts = intra.setdefault(day, {"prev": pre, "pts": []})
+    stamp = f"{now:%H:%M}"
+    if not pts["pts"] or pts["pts"][-1][0] != stamp:
+        pts["pts"].append([stamp, round(cur, 2)])
 
 
 def record_close(now, state: State) -> list[dict]:
