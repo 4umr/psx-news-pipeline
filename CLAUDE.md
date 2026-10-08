@@ -43,7 +43,12 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   always renders **plain visible URLs** (hidden <a> links break when copied to WhatsApp).
 - `street.py` Street View: captures brokerage forecasts (Topline, AHL, JS Global, AKD…) from news, scores vs actual CPI /
   SBP decisions → accuracy scoreboard (Sunday post). Never invent analyst track records.
-- `scoring.py` keyword topics (config.yaml `topics`), dedupe (fuzzy + same-topic).
+- `scoring.py` keyword topics (config.yaml `topics`), dedupe (fuzzy + same-topic; numbers/units and rise=gain
+  normalised), US ticker-list filter ("VLO, MPC, PSX" are NYSE tickers), `is_stale()` (old dates in title/URL),
+  `exclude_titles` (daily price-list pages), `max_per_global_topic_3h` flood cap.
+- `impact.py` rule-based impact engine: topic + direction words → level High/Medium/Low, tone, one-line summary,
+  sectors positive/pressured. Used in every news post, news card and Top Stories card. General relationships only.
+- `style.tidy()` runs on every channel post/caption/WhatsApp copy: **no emojis, no long dashes (—)** (user request).
 - `sources/`: `news.py` (RSS + Google News), `sbp.py` (homepage indicators, press releases, MPC calendar), `scs.py`
   (scstrade.com JSON endpoints: results, board meetings, book closures, KSE-100 view, indices, daily activity, FIPI, index
   history, 52-wk), `psx.py` (dps.psx.com.pk/company/SYMBOL filings + EPS), `pbs.py`, `forex.py` (forex.pk open market), `markets.py` (yfinance).

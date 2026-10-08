@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from .common import ROOT, http, log
+from .style import tidy
 
 MAX_LEN = 4000  # Telegram limit is 4096
 
@@ -53,7 +54,7 @@ class Sender:
 
     def send(self, text: str, preview: bool = False) -> bool:
         ok = True
-        for part in _split(text):
+        for part in _split(tidy(text)):
             if self.dry:
                 block = f"\n{'=' * 60}\n{part}\n"
                 with open(self.preview, "a", encoding="utf-8") as f:
@@ -77,6 +78,7 @@ class Sender:
 
     def send_photo(self, png: bytes, caption: str = "", name: str = "card") -> bool:
         """One image with an (HTML) caption — the caption can carry the whole message (max ~1024 chars)."""
+        caption = tidy(caption)
         if self.dry:
             path = self.preview.parent / f"{name}.png"
             path.write_bytes(png)
@@ -97,6 +99,7 @@ class Sender:
 
     def send_admin_plain(self, text: str) -> bool:
         """Plain-text message to the owner (keeps WhatsApp *bold* markers intact for copy-paste)."""
+        text = tidy(text)
         if self.dry:
             return self.send(f"[ADMIN ONLY · plain text]\n{text}")
         if not self.admin:
@@ -109,6 +112,7 @@ class Sender:
     def send_album(self, pngs: list[bytes], caption: str = "", name: str = "card") -> bool:
         """Several cards as one album (caption on the first). Falls back to single photos."""
         pngs = [p for p in pngs if p]
+        caption = tidy(caption)
         if not pngs:
             return False
         if len(pngs) == 1:

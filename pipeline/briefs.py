@@ -8,9 +8,11 @@ import re
 import time
 from datetime import datetime, timedelta
 
+from . import impact
 from . import watchers as w
 from .common import arrow, esc, fmt_num, fmt_pct, link, log, now_pkt, parse_hhmm
 from .sources import forex, scs
+from .scoring import dedupe
 from .state import State
 from .style import DIV, footer, header, section
 
@@ -269,7 +271,7 @@ def global_block(mk: dict, cfg: dict) -> str:
 def headlines_block(state: State, hours: int, n: int = 8) -> str:
     cutoff = time.time() - hours * 3600
     hs = [h for h in state.data["headlines"] if h["ts"] >= cutoff]
-    hs.sort(key=lambda h: (-h["sc"], -h["ts"]))
+    hs = dedupe(sorted(hs, key=lambda h: (-h["sc"], -h["ts"])))
     lines = []
     for i, h in enumerate(hs[:n], 1):
         src = f" — {link(h['u'], h['s'])}" if h.get("u") else ""
@@ -380,13 +382,16 @@ def _mpc_note(state: State) -> str:
 def card_headlines(cfg: dict, state: State, hours: int, n: int = 5) -> list[dict]:
     """Top headlines for image cards, with impact level and sectors in focus."""
     cutoff = time.time() - hours * 3600
-    hs = sorted((h for h in state.data["headlines"] if h["ts"] >= cutoff), key=lambda h: (-h["sc"], -h["ts"]))
+    hs = dedupe(sorted((h for h in state.data["headlines"] if h["ts"] >= cutoff), key=lambda h: (-h["sc"], -h["ts"])))
     out = []
     for h in hs[:n]:
         m = (cfg.get("topic_meta") or {}).get(h.get("topic", ""), {}) or {}
         label = h.get("l", "")
         out.append({**h, "topic_label": label.split(" ", 1)[-1] if " " in label else label,
-                    "sectors": ", ".join(m.get("sectors", [])[:3])})
+                    "sectors": ", ".join(m.get("sectors", [])[:3]),
+                    "impact": impact.assess(h["t"], h.get("topic", ""), h.get("sc", 0), cfg)})
+    # most market-moving first: High > Medium > Low, then score
+    out.sort(key=lambda h: ({"High": 0, "Medium": 1, "Low": 2}[h["impact"]["level"]], -h["sc"], -h["ts"]))
     return out
 
 
@@ -426,6 +431,7 @@ def brief_caption(cfg: dict, head: str, state: State, hours: int, n: int = 4) ->
     cutoff = time.time() - hours * 3600
     hs = sorted((h for h in state.data["headlines"] if h["ts"] >= cutoff and h.get("u")),
                 key=lambda h: (-h["sc"], -h["ts"]))
+    hs = dedupe(hs)
     for k in range(min(n, len(hs)), -1, -1):
         lines = [head]
         if k:
@@ -511,7 +517,7 @@ def morning(cfg: dict, state: State, mk: dict, view=None, title: str = "Morning 
         hl += [a for a in _agenda(state, n_board, n_bc) if not ("MPC" in a and any("MPC" in x for x in hl))]
         ctx = {"title2": "Market open" if title == "Morning Brief" else title, "idx": idx,
                "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"), "mk": mk, "gmk": {**gmk, **mk},
-               "hist": scs.index_history(45)[-22:], "headlines": card_headlines(cfg, state, 16, 6),
+               "hist": scs.index_history(45)[-22:], "headlines": card_headlines(cfg, state, 16, 8),
                "fipi": state.snap("fipi_last"), "highlights": hl}
         cards = _safe_card(morning_cards, cfg, now, ctx)
     head = f"☀️ <b>PSX {esc('Market Open' if title == 'Morning Brief' else title)}</b> · {now:%A %d %b %Y}"
@@ -562,7 +568,7 @@ def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
         ctx = {"idx": idx, "view": view, "act": act, "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"),
                "mk": mk, "fipi": state.snap("fipi_last") if fipi_today else None, "hist": scs.index_history(45),
                "intraday": (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}"),
-               "sectors": _sector_rows_for_card(view, act), "headlines": card_headlines(cfg, state, 10, 6),
+               "sectors": _sector_rows_for_card(view, act), "headlines": card_headlines(cfg, state, 10, 8),
                "highlights": hl}
         cards = _safe_card(close_cards, cfg, now, ctx)
     return text, cards, brief_caption(cfg, f"🔔 <b>PSX Market Close</b> · {now:%A %d %b %Y}", state, 10)
@@ -705,7 +711,7 @@ def midday(cfg: dict, state: State, mk: dict, view=None):
         ctx = {"view": view, "act": act, "idx": scs.indices(), "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"),
                "hist": scs.index_history(45),
                "mk": mk, "intraday": (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}"),
-               "sectors": _sector_rows_for_card(view, act), "headlines": card_headlines(cfg, state, hours, 6),
+               "sectors": _sector_rows_for_card(view, act), "headlines": card_headlines(cfg, state, hours, 8),
                "highlights": hl}
         cards = _safe_card(midday_cards, cfg, now, ctx)
     head = f"🕐 <b>PSX Midday Pulse</b> · {now:%A %d %b} · {now:%H:%M} PKT"

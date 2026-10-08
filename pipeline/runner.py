@@ -6,38 +6,50 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import briefs, street, watchers
+from . import briefs, impact, street, watchers
 from .common import Alert, NewsItem, esc, hours_ago, in_window, link, log, now_pkt, to_pkt
 from .links import short
-from .scoring import Scorer, is_duplicate, title_tokens
+from .scoring import Scorer, is_duplicate, is_stale, title_tokens
 from .sources import markets, news, sbp, scs
 from .state import State
-from .style import DIV, footer, header, meta, to_whatsapp
+from .style import footer, header, to_whatsapp
 from .telegram import Sender
 
 
 def _news_alerts(items: list[NewsItem], state: State, cfg: dict) -> tuple[list[NewsItem], list[NewsItem]]:
     scorer = Scorer(cfg)
     picked: list[NewsItem] = []
+    now = now_pkt()
+    global_topics = {t["name"] for t in cfg["topics"] if not t.get("pk")}
+    cap = cfg.get("max_per_global_topic_3h", 3)
+    recent_topics: dict[str, int] = {}
+    for h in state.data["headlines"]:
+        if h["ts"] >= time.time() - 3 * 3600:
+            recent_topics[h.get("topic", "")] = recent_topics.get(h.get("topic", ""), 0) + 1
     for it in items:
         if not it.title or state.seen(it.uid):
             continue
         state.mark(it.uid)
         if it.published and hours_ago(it.published) > cfg["max_item_age_hours"]:
             continue
+        if is_stale(it.title, it.url, it.published, now):
+            continue
         scorer.score(it)
         if it.score < cfg["min_score_digest"]:
+            continue
+        # Global stories (Fed, oil...) come in waves of 30+ near-identical takes: keep the first few
+        if it.topic in global_topics and it.score < cfg["min_score_instant"] and recent_topics.get(it.topic, 0) >= cap:
             continue
         toks = title_tokens(it.title)
         if is_duplicate(toks, state.titles, it.topic):
             continue
+        recent_topics[it.topic] = recent_topics.get(it.topic, 0) + 1
         state.add_title(toks, it.topic)
         state.add_headline({"t": it.title, "u": it.url, "s": it.source, "sc": it.score,
                             "l": it.label, "topic": it.topic, "ts": int(time.time())})
         picked.append(it)
     picked.sort(key=lambda i: -i.score)
     instant = [i for i in picked if i.score >= cfg["min_score_instant"]][: cfg["max_instant_per_run"]]
-    global_topics = {t["name"] for t in cfg["topics"] if not t.get("pk")}
     digest, n_global = [], 0
     for i in picked:
         if i in instant:
@@ -59,17 +71,19 @@ def _split_label(label: str) -> tuple[str, str]:
     return (parts[0], parts[1]) if len(parts) == 2 and not parts[0].isalnum() else ("📰", label)
 
 
-def _fmt_instant(it: NewsItem, cfg: dict) -> str:
+def _impact_line(imp: dict) -> str:
+    return f"{imp['level']} impact" + (f", {imp['tone'].lower()}" if imp["tone"] != "Neutral" else "")
+
+
+def _fmt_instant(it: NewsItem, cfg: dict, imp: dict | None = None) -> str:
     when = to_pkt(it.published) or now_pkt()
-    icon, topic = _split_label(it.label)
-    tag = "🚨 <b>Breaking</b>" if it.score >= 10 else "🔴 <b>Important</b>"
-    m = meta(cfg, it.topic)
-    lines = [f"{tag} · {icon} {esc(topic)}", "", f"<b>{esc(it.title)}</b>", ""]
-    if it.why:
-        lines.append(f"💡 {esc(it.why)}")
-    if m.get("sectors"):
-        lines.append(f"🏭 In focus: {esc(' · '.join(m['sectors']))}")
-    lines.append(f"🔗 {when:%H:%M} PKT · {link(it.url, it.source)}")
+    _, topic = _split_label(it.label)
+    imp = imp or impact.assess(it.title, it.topic, it.score, cfg, it.summary)
+    lines = [f"<b>{'Breaking' if it.score >= 10 else 'Important'}</b> · {esc(topic)}", "",
+             f"<b>{esc(it.title)}</b>", "", f"<b>{_impact_line(imp)}</b>. {esc(imp['summary'])}"]
+    if sl := impact.sectors_line(imp):
+        lines.append(esc(sl))
+    lines.append(f"{when:%H:%M} PKT · {link(it.url, it.source)}")
     return "\n".join(lines) + footer(cfg, compact=True)
 
 
@@ -93,9 +107,15 @@ def _fmt_digest(items: list[dict], cfg: dict) -> str:
 def _fmt_compact(d: dict, cfg: dict) -> str:
     """One headline, posted the moment it's found (instant news mode)."""
     when = datetime.fromtimestamp(d.get("pub") or d["ts"], tz=now_pkt().tzinfo)
-    icon, topic = _split_label(d["l"])
-    return (f"{icon} <b>{esc(d['t'])}</b>\n"
-            f"<i>{esc(topic)} · {when:%H:%M}</i> · {link(d['u'], d['s'])}")
+    _, topic = _split_label(d["l"])
+    imp = impact.assess(d["t"], d.get("topic", ""), d.get("sc", 0), cfg, d.get("sm", ""))
+    lines = [f"<b>{esc(d['t'])}</b>",
+             f"<i>{esc(topic)} · {when:%H:%M} PKT · {_impact_line(imp)}</i>",
+             esc(imp["summary"])]
+    if sl := impact.sectors_line(imp):
+        lines.append(esc(sl))
+    lines.append(link(d["u"], d["s"]))
+    return "\n".join(lines)
 
 
 def _with_footer(a: Alert, cfg: dict) -> str:
@@ -115,7 +135,7 @@ def _queue_digest(items: list[NewsItem], state: State) -> None:
     pending = state.data.setdefault("pending", [])
     for it in items:
         pending.append({"t": it.title, "u": it.url, "s": it.source, "sc": it.score,
-                        "l": it.label, "topic": it.topic, "ts": int(time.time()),
+                        "l": it.label, "topic": it.topic, "ts": int(time.time()), "sm": (it.summary or "")[:300],
                         "pub": int(it.published.timestamp()) if it.published else None})
 
 
@@ -457,7 +477,7 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
 
     def wa(text: str, important: bool) -> None:
         if sender.admin and (wa_mode == "all" or (wa_mode == "important" and important)):
-            sender.send_admin_plain("📲 WhatsApp-ready copy (long-press → copy → paste):\n\n" + to_whatsapp(text, cfg))
+            sender.send_admin_plain("WhatsApp-ready copy (long-press, copy, paste):\n\n" + to_whatsapp(text, cfg))
 
     alerts.sort(key=lambda a: -a.priority)
     for a in alerts:
@@ -477,15 +497,18 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
             sender.send(msg, preview=a.preview)
         S("whatsapp copy", wa, msg, a.priority >= 9)
     for it in instant:
-        msg = _fmt_instant(it, cfg)
-        icon, topic = _split_label(it.label)
-        m = meta(cfg, it.topic)
+        imp = impact.assess(it.title, it.topic, it.score, cfg, it.summary)
+        msg = _fmt_instant(it, cfg, imp)
+        _, topic = _split_label(it.label)
         when = to_pkt(it.published) or now
         breaking = it.score >= 10
         spec = {"theme": "alert" if breaking else TOPIC_THEME.get(it.topic, "economy"),
                 "kicker": f"{'Breaking' if breaking else 'Important'} · {topic}", "title": it.title,
-                "why": it.why, "sectors": m.get("sectors") or [], "source": f"{it.source} · {when:%H:%M} PKT"}
-        cap = _caption(cfg, f"{'🚨' if breaking else '🔴'} <b>{esc(it.title)}</b>", [f"🔗 {link(it.url, it.source)}"])
+                "impact": imp, "why": imp["summary"], "source": f"{it.source} · {when:%H:%M} PKT"}
+        lines = [f"<b>{_impact_line(imp)}</b>. {esc(imp['summary'])}"]
+        if sl := impact.sectors_line(imp):
+            lines.append(esc(sl))
+        cap = _caption(cfg, f"<b>{esc(it.title)}</b>\n" + "\n".join(lines), [link(it.url, it.source)])
         _post_with_card(sender, cfg, msg, spec, when, "news", _market_tiles(state, view_now), cap)
         S("whatsapp copy", wa, msg, it.score >= 10)
     _queue_digest(digest, state)

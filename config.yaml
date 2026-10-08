@@ -48,6 +48,7 @@ min_score_digest: 4
 max_instant_per_run: 8
 max_digest_items: 15
 max_global_in_digest: 4      # cap non-Pakistan stories per digest
+max_per_global_topic_3h: 3   # e.g. at most 3 Fed-commentary stories in any 3 hours (breaking ones always pass)
 max_per_topic_in_digest: 3   # e.g. at most 3 petrol-price stories per digest
 
 # ---------------------------------------------------------------------
@@ -379,10 +380,9 @@ topics:
     score: 8
     pk: false
     title_only: true
+    # Only the actual decision ("Fed raises rates", "Fed holds rates steady"), not commentary about hikes
     all:
-      - ['\bfed\b', 'federal reserve', '\bfomc\b']
-      - ['raises', 'hikes', 'cuts', 'lowers', 'holds', 'keeps', 'leaves', 'unchanged']
-      - ['rates?\b']
+      - ['(\bfed\b|federal reserve|\bfomc\b)\W+(\w+\W+){0,2}?(raises|hikes|cuts|lowers|holds|keeps|leaves)\b.{0,40}\b(rates?|unchanged|steady)\b']
     why: "Fed decisions move the dollar and global risk appetite, which drive flows into frontier markets like Pakistan."
 
   - name: global_rates
@@ -423,7 +423,10 @@ topics:
     why: "The Middle East conflict drives oil prices and Gulf remittance/financing flows that matter for Pakistan."
 
 # Sources whose Pakistan coverage is mostly opinion/rhetoric: score -2
-low_priority_sources: '(times of india|dna india|sunday guardian|ndtv|india today|hindustan times|news18|firstpost|wion|republic|zee news|economic times|indian express|the print|opindia|tolonews)'
+low_priority_sources: '(times of india|dna india|sunday guardian|ndtv|india today|hindustan times|news18|firstpost|wion|republic|zee news|economic times|indian express|the print|opindia|tolonews|stocktwits|benzinga|zacks|tipranks|marketbeat|seeking alpha|motley fool)'
+
+# Daily price-list / SEO pages ("Petrol Price in Pakistan for October 9", "Currency exchange rates today")
+exclude_titles: '^(today.?s\s+)?(latest\s+)?(petrol|diesel|gold|silver|dollar|currency|open market|exchange|forex|fuel)(\s+and\s+\w+)?\s+(prices?|rates?)(\s+in\s+pakistan)?(\s+(today|for|on|as of)\b|\s*[–:-]|\s*$)|exchange rates in pakistan today|^(gold|dollar|petrol) rate today'
 
 # Words that mark an item as noise even if a topic matches
 exclude: '\b(cricket|football|hockey|showbiz|film|drama|celebrity|recipe|horoscope|t20|odi|psl|fashion|wedding|phones?|smartphones?|indian rupee|rbi|sri lanka\w*|bangladesh\w*|nepal)\b'

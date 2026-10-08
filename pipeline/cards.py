@@ -65,10 +65,16 @@ _EMOJI = re.compile("[\U00010000-\U0010FFFF☀-➿️‍⬀-⯿←-⇿⌚-⏿]")
 def clean(s: str) -> str:
     """Plain text for images: no HTML, no emoji (the card font can't draw them)."""
     import html as _html
+
+    from .style import tidy
     s = re.sub(r"<[^>]+>", "", s or "")
-    s = _html.unescape(s)
+    s = tidy(_html.unescape(s))  # no emoji, no long dashes
     s = _EMOJI.sub("", s)
     return re.sub(r"[ \t]+", " ", s).strip()
+
+
+LEVEL_COL = {"High": "#d64545", "Medium": "#b8862a", "Low": "#5d7387"}
+TONE_COL = {"Positive": "#2f9e5b", "Negative": "#d64545", "Mixed": "#b8862a", "Neutral": "#5d7387"}
 
 
 def sp(s: str) -> str:
@@ -417,7 +423,7 @@ class Card:
 
     def chip(self, x, y, s, color, size=12.5) -> float:
         s = clean(s).upper()
-        w = 26 + len(s) * size * 0.95
+        w = 26 + len(s) * size * 1.08
         self.rect(x, y - 19, w, 38, color, radius=10, z=6)
         self.text(x + 13, y, s, size, "white", bold=True)
         return x + w + 10
@@ -691,24 +697,33 @@ def news_card(cfg: dict, now: datetime, items: list[dict], title2: str) -> bytes
     """Top stories: impact chip, topic, headline, sectors in focus, source."""
     if not items:
         return None
+    from .impact import sectors_line
     c = Card(cfg, "economy")
     y = c.title_block("Top stories", title2, f"{now:%a, %d %b %Y}")
     room = c.H - 172 - 16
     for it in items:
-        lines = _wrap(it["t"], 930, 17, bold=True)[:3]
-        h = 92 + len(lines) * 30
+        imp = it.get("impact") or {"level": "Medium", "tone": "Neutral", "summary": "", "pos": [], "neg": [],
+                                   "sectors": []}
+        lines = _wrap(it["t"], 930, 17, bold=True)[:2]
+        summ = _wrap(imp["summary"], 930, 12.5)[:2]
+        h = 88 + len(lines) * 30 + len(summ) * 24 + 28
         if y + h > room:
             break
         c.panel(c.L, y, 1000, h)
-        high = it.get("sc", 0) >= 8
-        x = c.chip(c.L + 26, y + 36, "High impact" if high else "Medium", "#d64545" if high else "#a77d1c", 10.5)
-        c.text(x + 6, y + 36, clean(it.get("topic_label", "")).upper(), 11, c.t["accent2"], bold=True)
-        for j, ln in enumerate(lines):
-            c.text(c.L + 26, y + 76 + j * 30, ln, 17, CREAM, bold=True)
-        meta = " · ".join(x for x in (clean(it.get("s", "")),
-                                      ("In focus: " + clean(it["sectors"])) if it.get("sectors") else "") if x)
-        c.text(c.L + 26, y + 76 + len(lines) * 30 + 2, meta, 12, c.t["muted"])
-        y += h + 14
+        x = c.chip(c.L + 26, y + 34, f"{imp['level']} impact", LEVEL_COL[imp["level"]], 10.5)
+        if imp["tone"] != "Neutral":
+            x = c.chip(x, y + 34, imp["tone"], TONE_COL[imp["tone"]], 10.5)
+        c.text(x + 6, y + 34, clean(it.get("topic_label", "")).upper(), 11, c.t["accent2"], bold=True)
+        yy = y + 74
+        for ln in lines:
+            c.text(c.L + 26, yy, ln, 17, CREAM, bold=True)
+            yy += 30
+        for ln in summ:
+            c.text(c.L + 26, yy, ln, 12.5, CREAM, alpha=0.85)
+            yy += 24
+        meta = " · ".join(x for x in (clean(it.get("s", "")), sectors_line(imp)) if x)
+        c.text(c.L + 26, yy + 4, meta[:120], 11.5, c.t["muted"], bold=True)
+        y += h + 12
     c.footer()
     return c.png()
 
@@ -797,8 +812,11 @@ def alert_card(cfg: dict, spec: dict, when: datetime, tiles: list | None = None)
     h = 175 + 60 + len(tlines) * title_size * 1.55 + 46
     h += 206 if spec.get("stats") else 0
     h += (80 + sum(18 + 30 * max(1, len(w)) for _, w in rows_wrapped)) if rows else 0
+    imp = spec.get("impact")
     h += (76 + len(why) * 32) + 16 if why else 0
-    h += 86 if spec.get("sectors") else 0
+    h += 60 if imp else 0
+    h += 86 * ((1 if imp["pos"] else 0) + (1 if imp["neg"] else 0)) if imp and (imp["pos"] or imp["neg"]) else \
+        (86 if spec.get("sectors") or (imp and imp.get("sectors")) else 0)
     h += 150 if tiles else 0
     h += 50 + 190
     c = Card(cfg, theme, height=int(max(1080, h)))
@@ -811,6 +829,11 @@ def alert_card(cfg: dict, spec: dict, when: datetime, tiles: list | None = None)
         y += title_size * 1.55 * 0.5
     c.text(c.L + 2, y + 24, sp(f"{when:%a, %d %b %Y · %H:%M} PKT"), 12.5, CREAM, alpha=0.8)
     y += 60
+    if imp:
+        x = c.chip(c.L, y + 18, f"{imp['level']} impact", LEVEL_COL[imp["level"]], 12)
+        if imp["tone"] != "Neutral":
+            c.chip(x, y + 18, imp["tone"], TONE_COL[imp["tone"]], 12)
+        y += 60
     if stats := spec.get("stats"):
         stats = stats[:3]
         pw = (1000 - 16 * (len(stats) - 1)) / len(stats)
@@ -843,15 +866,21 @@ def alert_card(cfg: dict, spec: dict, when: datetime, tiles: list | None = None)
         ph = 66 + len(why) * 32
         c.panel(c.L, y, 1000, ph)
         c._icon("search", c.L + 48, y + 38, 30)
-        c.label(c.L + 80, y + 38, "Why it matters", 13.5)
+        c.label(c.L + 80, y + 38, "What it means" if imp else "Why it matters", 13.5)
         for j, ln in enumerate(why):
             c.text(c.L + 30, y + 80 + j * 32, ln, 15, CREAM)
         y += ph + 16
-    if sectors := spec.get("sectors"):
-        c.label(c.L, y + 22, "Sectors in focus", 12, t["muted"])
+    groups = []
+    if imp and (imp["pos"] or imp["neg"]):
+        groups = [(lab, secs, col) for lab, secs, col in (("Positive for", imp["pos"], "#2f7d4f"),
+                                                          ("Pressure on", imp["neg"], "#a83a3a")) if secs]
+    elif sectors := (spec.get("sectors") or (imp or {}).get("sectors")):
+        groups = [("Sectors in focus", sectors, t["edge"])]
+    for lab, secs, col in groups:
+        c.label(c.L, y + 22, lab, 12, t["muted"])
         x = c.L
-        for s in sectors[:6]:
-            x = c.chip(x, y + 62, s, t["edge"], 11.5)
+        for s in secs[:6]:
+            x = c.chip(x, y + 62, s, col, 11.5)
         y += 86
     if tiles:
         c.label(c.L, y + 20, "Market right now", 12, t["muted"])

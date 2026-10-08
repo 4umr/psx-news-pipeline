@@ -108,6 +108,8 @@ def sbp_changes(new: dict, state: State) -> list[Alert]:
                     "source": "State Bank of Pakistan"}}))
 
         r_new, r_old = new.get("reserves"), old.get("reserves")
+        if r_new and r_new.get("sbp"):
+            record_hist(state, "reserves", r_new["as_on"], r_new["sbp"])
         if r_new and r_old and r_new.get("as_on") != r_old.get("as_on"):
             d_sbp = (r_new["sbp"] or 0) - (r_old["sbp"] or 0)
             d_tot = (r_new["total"] or 0) - (r_old["total"] or 0)
@@ -229,23 +231,50 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str]) -> list[
                   extra={"card": card})]
 
 
-def _fy_yoy(code: str, r: dict) -> str:
-    """Full-year EPS vs last year, from the company's PSX page (annual results only)."""
-    m = re.match(r"FY(\d{2})$", (r.get("bm_quarter_number") or "").strip())
-    if not m:
-        return ""
+def eps_yoy(code: str, r: dict) -> tuple[float, float, float | None] | None:
+    """(EPS now, EPS same period last year, % change or None) from the company's PSX page.
+
+    Annual results (FY26) compare the full-year EPS; quarterly ones (1QFY27 / Q1FY27) compare
+    the quarter with the same quarter a year earlier. None when it can't be matched reliably.
+    """
+    per = (r.get("bm_quarter_number") or "").strip().upper().replace(" ", "")
+    fy = re.match(r"FY(\d{2})$", per)
+    q = re.match(r"(?:(\d)Q|Q(\d))FY(\d{2})$", per)
+    if not fy and not q:
+        return None
     try:
-        cur = float((r.get("bm_eps_cum") or r.get("bm_eps_quarter") or "").strip())
+        cur = float(((r.get("bm_eps_cum") if fy else r.get("bm_eps_quarter")) or r.get("bm_eps_quarter") or "").strip())
     except ValueError:
-        return ""
+        return None
     from .sources import psx
-    page = psx.company(code)
-    prev = (page or {}).get("annual_eps", {}).get(str(2000 + int(m.group(1)) - 1))
+    page = psx.company(code) or {}
+    if fy:
+        prev = page.get("annual_eps", {}).get(str(2000 + int(fy.group(1)) - 1))
+    else:
+        n, yy = q.group(1) or q.group(2), int(q.group(3))
+        prev = page.get("quarterly_eps", {}).get(f"Q{n} {2000 + yy - 1}")
     if prev is None:
+        return None
+    return cur, prev, ((cur / prev - 1) * 100 if prev > 0 else None)
+
+
+def _fy_yoy(code: str, r: dict) -> str:
+    """Full-year / quarterly EPS vs last year, as a text snippet."""
+    res = eps_yoy(code, r)
+    if not res:
         return ""
-    if prev > 0:
-        return f" · <b>{(cur / prev - 1) * 100:+.0f}% YoY</b> (LY {prev:.2f})"
+    cur, prev, pct = res
+    if pct is not None:
+        return f" · <b>{pct:+.0f}% YoY</b> (LY {prev:.2f})"
     return f" · LY {prev:.2f}"
+
+
+def record_hist(state: State, series: str, key: str, value: float, keep: int = 30) -> None:
+    """Small dated history (CPI by month, reserves by week) for trend charts."""
+    h = state.data.setdefault("hist", {}).setdefault(series, {})
+    h[key] = value
+    for k in list(h)[:-keep]:
+        del h[k]
 
 
 # ---------------------------------------------------------------- FIPI
@@ -520,6 +549,8 @@ def pbs_releases(state: State) -> list[Alert]:
             continue
         if is_latest:
             state.set_snap(kind, d)
+            if kind == "cpi":
+                _record_cpi(state, d["general"])
         if not (fresh and recent):
             continue
         if kind == "cpi":
@@ -541,6 +572,19 @@ def pbs_releases(state: State) -> list[Alert]:
                                            "monthly CPI and the SBP's rate path.",
                                     "source": "Pakistan Bureau of Statistics"}}))
     return alerts
+
+
+def _record_cpi(state: State, g: dict) -> None:
+    try:
+        cur = datetime.strptime(g["month"], "%B %Y")
+    except ValueError:
+        return
+    prev = (cur.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    h = state.data.get("hist", {}).get("cpi", {})
+    if prev not in h and g.get("prev_yoy") is not None:
+        record_hist(state, "cpi", prev, g["prev_yoy"])
+    record_hist(state, "cpi", cur.strftime("%Y-%m"), g["yoy"])
+    state.data["hist"]["cpi"] = dict(sorted(state.data["hist"]["cpi"].items()))
 
 
 def _cpi_alert(d: dict, url: str, state: State) -> Alert:
