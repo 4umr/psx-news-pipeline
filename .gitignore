@@ -4,3 +4,5 @@ __pycache__/
 state/state.json
 out/
 .venv/
+samples/
+state/state.bak
