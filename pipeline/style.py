@@ -63,10 +63,9 @@ def tidy(text: str) -> str:
 
 
 def footer(cfg: dict, tags: list[str] | None = None, compact: bool = False) -> str:
-    """One quiet signature line: brand · author · disclaimer (+ Join link). `tags` kept for compatibility."""
+    """One quiet signature line: brand · disclaimer (+ Join link). `tags` kept for compatibility."""
     b = cfg.get("brand", {})
-    by = f"by {esc(b.get('author', ''))}" + (f", {esc(b.get('title'))}" if b.get("title") else "")
-    line = f"{esc(b.get('name', ''))} · {by}"
+    line = esc(b.get("name", ""))
     if cfg.get("disclaimer") and (cfg.get("disclaimer_on_alerts") or not compact):
         line += " · info only, not investment advice"
     out = f"\n\n<i>{line}</i>"

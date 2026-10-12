@@ -46,6 +46,14 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 - `scoring.py` keyword topics (config.yaml `topics`), dedupe (fuzzy + same-topic; numbers/units and rise=gain
   normalised), US ticker-list filter ("VLO, MPC, PSX" are NYSE tickers), `is_stale()` (old dates in title/URL),
   `exclude_titles` (daily price-list pages), `max_per_global_topic_3h` flood cap.
+- `analysis.py` Gemini (free tier, secret `GEMINI_API_KEY`) reads the actual article (HTML or PDF via pypdf) for
+  important news: relevant?, summary, why, key facts, level, tone, sectors (fixed list). Not relevant -> admin only.
+  Falls back to `impact.py` rules without key / on error / rate limit. Model in config `ai.model` (auto-picks newest flash).
+- Routing: main channel = infographic updates + important news (image + short explanation caption);
+  admin channel (`TELEGRAM_ADMIN_CHAT_ID`) = raw headline feed (`raw_news_to_admin`) + warnings + WhatsApp copies.
+- `sources/brokers.py` broker research list from ksealert.com/Research (broker, title, PDF) -> 13:00 "Broker Views"
+  card, always credited; feeds Street View. Research notes: `docs/broker-research.md`. Never copy broker posters.
+- Design (2026-10-13): ONE light scheme for all cards (warm white, deep green text, gold titles); no author tag.
 - `impact.py` rule-based impact engine: topic + direction words → level High/Medium/Low, tone, one-line summary,
   sectors positive/pressured. Used in every news post, news card and Top Stories card. General relationships only.
 - `style.tidy()` runs on every channel post/caption/WhatsApp copy: **no emojis, no long dashes (—)** (user request).

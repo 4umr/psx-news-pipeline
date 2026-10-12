@@ -25,6 +25,19 @@ brand:
   #   all = every channel post · off = none
   whatsapp_copy: important
 
+# Where things go:
+#   main channel  = infographic updates (briefs, data alerts) + important news (image + short explanation)
+#   admin channel = the raw news feed (every relevant headline) + warnings (TELEGRAM_ADMIN_CHAT_ID)
+raw_news_to_admin: true
+
+# AI reading of important news (Google Gemini, free tier). Needs the GEMINI_API_KEY secret in GitHub.
+# The article is opened and read; summary, facts, impact and sectors come from its actual content.
+# Without the key the rule-based impact engine is used.
+ai:
+  enabled: true
+  model: gemini-2.5-flash   # if Google retires this name, the newest available "flash" model is used
+  max_per_run: 6            # important news items analysed per run (free tier limits)
+
 # Messages appended to briefs / digests / alerts
 disclaimer: "For information only — not investment advice."
 disclaimer_on_alerts: true
@@ -58,6 +71,7 @@ briefs:
   morning:    {time: "08:45", days: [0, 1, 2, 3, 4]}
   opening:    {time: "10:00", days: [0, 1, 2, 3, 4], grace: 1}   # opening bell (skipped if later than 11:00)
   midday:     {time: "12:30", days: [0, 1, 2, 3, 4]}
+  brokers:    {time: "13:00", days: [0, 1, 2, 3, 4], grace: 5}   # broker research headlines, credited
   close:      {time: "17:15", days: [0, 1, 2, 3, 4]}
   results:    {time: "18:30", days: [0, 1, 2, 3, 4], grace: 4}   # results tracker, only on days with results
   week_ahead: {time: "19:00", days: [6]}

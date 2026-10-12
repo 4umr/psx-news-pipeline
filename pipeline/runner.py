@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import briefs, impact, street, watchers
+from . import analysis, briefs, impact, street, watchers
 from .common import Alert, NewsItem, esc, hours_ago, in_window, link, log, now_pkt, to_pkt
 from .links import short
 from .scoring import Scorer, is_duplicate, is_stale, title_tokens
@@ -157,8 +157,12 @@ def _flush_instant(cfg: dict, state: State, sender: Sender, now: datetime) -> in
     pending.sort(key=lambda p: (-p["sc"], p["ts"]))
     budget = cfg.get("max_news_posts_per_run", 15)
     send, keep = pending[:budget], pending[budget:]
+    raw_admin = cfg.get("raw_news_to_admin", True)
     for d in send:
-        sender.send(_fmt_compact(d, cfg))
+        if raw_admin:
+            sender.send_admin(_fmt_compact(d, cfg))  # raw pipeline feed: owner's admin channel only
+        else:
+            sender.send(_fmt_compact(d, cfg))
     state.data["pending"] = keep
     return len(send)
 
@@ -267,7 +271,10 @@ def _card_spec_from_alert(a: Alert) -> dict:
 
 
 def _alert_caption(cfg: dict, a: Alert, spec: dict) -> str:
-    head = a.text.split("\n", 1)[0]
+    title = re.sub(r"<[^>]+>", "", spec.get("title") or "")
+    head = f"<b>{esc(title)}</b>" if title else a.text.split("\n", 1)[0]
+    if spec.get("why"):
+        head += f"\n\n{esc(spec['why'])}"
     links = [ln for ln in a.text.split("\n") if ln.startswith("🔗")]
     links += [f"📄 {esc(sym)} · {esc(short(u))}" for sym, u in spec.get("links", [])]
     return _caption(cfg, head, links)
@@ -277,9 +284,8 @@ def about_text(cfg: dict) -> str:
     b = cfg.get("brand", {})
     sched = cfg.get("briefs", {})
     t = lambda n, d: sched.get(n, {}).get("time", d)  # noqa: E731
-    return (header("🇵🇰", f"Welcome to {b.get('name', 'PSX')}",
-                   f"Curated by {b.get('author', '')}" + (f", {b['title']}" if b.get("title") else "")) + "\n"
-            "Pakistan Stock Exchange news, data and macro indicators — automatic, 24/7, always with sources. "
+    return (header("", f"Welcome to {b.get('name', 'PSX')}", "PSX news, data and analysis") + "\n"
+            "Pakistan Stock Exchange news, data and macro indicators, 24/7, always with sources. "
             "Updates come as shareable infographics.\n\n"
             "<b>⏰ What you get & when (PKT)</b>\n"
             f"<b>{t('morning', '08:45')}</b> Morning brief: PSX, US market close, commodity update, top stories (Mon to Fri)\n"
@@ -499,19 +505,38 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         else:
             sender.send(msg, preview=a.preview)
         S("whatsapp copy", wa, msg, a.priority >= 9)
+    ai_budget = (cfg.get("ai") or {}).get("max_per_run", 6)
     for it in instant:
         imp = impact.assess(it.title, it.topic, it.score, cfg, it.summary)
+        ai = None
+        if ai_budget > 0:
+            ai_budget -= 1
+            ai = S("article analysis", analysis.analyse, it.title, it.url, it.source, cfg, it.summary)
+        if ai and not ai["relevant"]:
+            # Gemini read the article: not market-relevant after all -> raw feed only
+            sender.send_admin(_fmt_compact({"t": it.title, "u": it.url, "s": it.source, "sc": it.score, "l": it.label,
+                                            "topic": it.topic, "ts": int(time.time())}, cfg))
+            continue
+        if ai:
+            imp = {**ai, "sectors": imp["sectors"] if not (ai["pos"] or ai["neg"]) else []}
         msg = _fmt_instant(it, cfg, imp)
         _, topic = _split_label(it.label)
         when = to_pkt(it.published) or now
-        breaking = it.score >= 10
+        breaking = it.score >= 10 and imp["level"] == "High"
         spec = {"theme": "alert" if breaking else TOPIC_THEME.get(it.topic, "economy"),
                 "kicker": f"{'Breaking' if breaking else 'Important'} · {topic}", "title": it.title,
                 "impact": imp, "why": imp["summary"], "source": f"{it.source} · {when:%H:%M} PKT"}
-        lines = [f"<b>{_impact_line(imp)}</b>. {esc(imp['summary'])}"]
-        if sl := impact.sectors_line(imp):
-            lines.append(esc(sl))
-        cap = _caption(cfg, f"<b>{esc(it.title)}</b>\n" + "\n".join(lines), [link(it.url, it.source)])
+        if ai and ai["facts"]:
+            spec.update(rows_title="Key facts", rows=[("", f, "", None) for f in ai["facts"]])
+        if ai:
+            spec["why_title"] = "What happened"
+        # caption: short, plain explanation under the image
+        lines = [esc(imp["summary"])]
+        if ai and ai.get("why"):
+            lines.append(esc(ai["why"]))
+        lines.append("")
+        lines.append(f"<b>{_impact_line(imp)}</b>" + (f". {esc(sl)}" if (sl := impact.sectors_line(imp)) else ""))
+        cap = _caption(cfg, f"<b>{esc(it.title)}</b>\n\n" + "\n".join(lines), [link(it.url, it.source)])
         _post_with_card(sender, cfg, msg, spec, when, "news", _market_tiles(state, view_now), cap)
         S("whatsapp copy", wa, msg, it.score >= 10)
     _queue_digest(digest, state)

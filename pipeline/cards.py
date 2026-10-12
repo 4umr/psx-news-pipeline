@@ -32,32 +32,23 @@ from matplotlib.patches import Arc, Circle, FancyBboxPatch, Polygon, Rectangle  
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
-CREAM = "#f4ecd8"
-WORDMARK = "#ead9ae"
-GOLD = "#d4a640"
-GOLD_L = "#f0d38a"
-UP = "#46d27f"
-DOWN = "#ff5f5f"
-FLAT = "#b8bfb6"
+# One light, easy-to-read scheme for every post (brand: deep green + gold on warm white)
+CREAM = "#14281c"      # main text: near-black green (name kept from the old dark theme)
+WORDMARK = "#1d5c36"   # brand green
+GOLD = "#b8862a"
+GOLD_L = "#c99a3c"
+UP = "#1a8a4a"
+DOWN = "#c8372f"
+FLAT = "#8a928c"
 SERIF = "STIXGeneral"
 
-# bg2 = top of the gradient, bg = bottom; accent = category colour
-THEMES = {
-    "psx":       {"bg": "#04110b", "bg2": "#0a2617", "accent": "#43c36c", "accent2": "#9be3b2",
-                  "panel": "#0b2015", "edge": "#24553a", "muted": "#a9bbad", "nav": "MARKETS"},
-    "us":        {"bg": "#040b18", "bg2": "#0a1a36", "accent": "#4d94f5", "accent2": "#a8caff",
-                  "panel": "#0a1830", "edge": "#24426e", "muted": "#a6b6cc", "nav": "GLOBAL MARKETS"},
-    "commodity": {"bg": "#110b04", "bg2": "#2b1d08", "accent": "#e5ad3e", "accent2": "#f6d68e",
-                  "panel": "#1f160a", "edge": "#5e4519", "muted": "#c4b394", "nav": "COMMODITIES"},
-    "fixed":     {"bg": "#0d0818", "bg2": "#1f1238", "accent": "#a37bff", "accent2": "#d3c1ff",
-                  "panel": "#181030", "edge": "#43306e", "muted": "#b7abcf", "nav": "FIXED INCOME"},
-    "economy":   {"bg": "#090d11", "bg2": "#18232d", "accent": "#93abc2", "accent2": "#cfdbe6",
-                  "panel": "#131b23", "edge": "#33434f", "muted": "#a7b2bc", "nav": "ECONOMY"},
-    "alert":     {"bg": "#140506", "bg2": "#330b0e", "accent": "#f04f4f", "accent2": "#ffaaaa",
-                  "panel": "#240a0c", "edge": "#64202a", "muted": "#cfaaaa", "nav": "MARKETS"},
-    "gold":      {"bg": "#0a0d07", "bg2": "#1f2310", "accent": "#d9b04e", "accent2": "#f3d995",
-                  "panel": "#171a0c", "edge": "#4f4a1f", "muted": "#bdb798", "nav": "MARKETS"},
-}
+_LIGHT = {"bg": "#f3efe4", "bg2": "#fdfcf8", "accent": "#1d6b3c", "accent2": "#1d6b3c", "title2": "#a87b22",
+          "panel": "#ffffff", "edge": "#e1dccd", "tile": "#f7f5ef", "muted": "#6b766e", "glow": "#d8b45a",
+          "chip": "#1d6b3c", "chip2": "#55665b"}
+# Same colours everywhere; the name only sets the footer label
+THEMES = {name: {**_LIGHT, "nav": nav} for name, nav in (
+    ("psx", "MARKETS"), ("us", "GLOBAL MARKETS"), ("commodity", "COMMODITIES"), ("fixed", "FIXED INCOME"),
+    ("economy", "ECONOMY"), ("alert", "MARKETS"), ("gold", "MARKETS"))}
 
 _EMOJI = re.compile("[\U00010000-\U0010FFFF☀-➿️‍⬀-⯿←-⇿⌚-⏿]")
 
@@ -163,9 +154,9 @@ class Card:
         yy, xx = np.mgrid[0:1:220j, 0:1:220j]
         aspect = self.H / self.W
         glow = np.zeros((220, 220, 4))
-        glow[..., :3] = to_rgb(self.t["accent"])
+        glow[..., :3] = to_rgb(self.t["glow"])
         d = np.sqrt((xx - 0.86) ** 2 + ((yy - 0.10) * aspect) ** 2)
-        glow[..., 3] = np.clip(1 - d / 0.80, 0, 1) ** 2.2 * 0.30
+        glow[..., 3] = np.clip(1 - d / 0.80, 0, 1) ** 2.2 * 0.16
         ax.imshow(glow, extent=[0, 1, 0, 1], aspect="auto", origin="upper", interpolation="bilinear")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
@@ -212,7 +203,7 @@ class Card:
             if x0 <= 1040 - 220:
                 self._deco(series, base, x0)
         self.text(self.L, y + 70, t1.upper(), s1, CREAM, bold=True, serif=True)
-        self.text(self.L + 2, y + 150, t2.upper(), s2, self.t["accent"], bold=True, serif=True)
+        self.text(self.L + 2, y + 150, t2.upper(), s2, self.t["title2"], bold=True, serif=True)
         self.text(self.L + 4, y + 205, sp(sub), 14, CREAM, alpha=0.85)
         return y + 245
 
@@ -242,8 +233,7 @@ class Card:
             if i:
                 self.line(self.L + cw * i, y0 + 24, self.L + cw * i, y0 + 112, alpha=0.6)
         b = self.cfg.get("brand", {})
-        by = f"By {b.get('author', '')}" + (f" · {b.get('title')}" if b.get("title") else "")
-        self.text(self.L, self.H - 30, by, 11, CREAM, bold=True, alpha=0.9)
+        self.text(self.L, self.H - 30, "Sources: PSX · SBP · PBS · NCCPL", 10.5, self.t["muted"])
         if b.get("channel_link"):
             self.text(self.W / 2, self.H - 30, clean(b["channel_link"]).replace("https://", ""), 10.5,
                       self.t["accent2"], ha="center")
@@ -281,7 +271,7 @@ class Card:
 
     # ------------------------------------------------------------ blocks
     def panel(self, x, y, w, h, edge=None, fill=None, lw=1.3):
-        self.rect(x, y, w, h, fill or self.t["panel"], radius=20, edge=edge or self.t["edge"], lw=lw, alpha=0.92)
+        self.rect(x, y, w, h, fill or self.t["panel"], radius=20, edge=edge or self.t["edge"], lw=lw, alpha=1.0)
 
     def label(self, x, y, s, size=13, color=None, ha="left"):
         self.text(x, y, sp(s), size, color or CREAM, bold=True, ha=ha)
@@ -392,7 +382,7 @@ class Card:
         for i, (lab, val, chg) in enumerate(items):
             r, c = divmod(i, cols)
             x, yy = self.L + 22 + c * (tw + 12), y + top + r * (tile_h + 12)
-            self.rect(x, yy, tw, tile_h, self.t["bg2"], radius=14, edge=self.t["edge"], lw=0.8, alpha=0.75, z=2)
+            self.rect(x, yy, tw, tile_h, self.t["tile"], radius=14, edge=self.t["edge"], lw=0.8, alpha=1.0, z=2)
             self.text(x + 18, yy + 28, clean(lab), 11.5, self.t["muted"])
             self.text(x + 18, yy + 66, val, 20 if cols <= 3 else 17, CREAM, bold=True)
             if chg is not None:
@@ -813,6 +803,31 @@ def week_cards(cfg: dict, now: datetime, ctx: dict) -> list[bytes]:
     return out
 
 
+def broker_card(cfg: dict, now: datetime, items: list[dict]) -> bytes | None:
+    """Today's broker research headlines, each credited to its broker."""
+    if not items:
+        return None
+    c = Card(cfg, "psx")
+    y = c.title_block("Broker", "Views", f"{now:%a, %d %b %Y} · research notes")
+    room = c.H - 172 - 60
+    for it in items:
+        lines = _wrap(it["title"], 930, 15, bold=True)[:2]
+        h = 70 + len(lines) * 28
+        if y + h > room:
+            break
+        c.panel(c.L, y, 1000, h)
+        x = c.chip(c.L + 26, y + 32, it["short"], c.t["chip"], 10.5)
+        if it.get("kind"):
+            c.text(x + 6, y + 32, it["kind"].upper(), 10.5, c.t["muted"], bold=True)
+        for j, ln in enumerate(lines):
+            c.text(c.L + 26, y + 68 + j * 28, ln, 15, CREAM, bold=True)
+        y += h + 12
+    c.text(c.L, y + 18, "Views belong to the respective brokers. Compiled from their public research notes.",
+           11, c.t["muted"], italic=True)
+    c.footer()
+    return c.png()
+
+
 def opening_cards(cfg: dict, now: datetime, ctx: dict) -> list[bytes]:
     return [psx_card(cfg, now, ctx, "opening")]
 
@@ -885,7 +900,7 @@ def alert_card(cfg: dict, spec: dict, when: datetime, tiles: list | None = None)
     h += 50 + 190
     c = Card(cfg, theme, height=int(max(1080, h)))
     y = 190
-    c.chip(c.L, y, spec.get("kicker", "Market update"), t["accent"] if theme != "economy" else "#5d7387")
+    c.chip(c.L, y, spec.get("kicker", "Market update"), DOWN if theme == "alert" else t["chip"])
     y += 54
     for ln in tlines:
         y += title_size * 1.55 * 0.5
@@ -930,7 +945,7 @@ def alert_card(cfg: dict, spec: dict, when: datetime, tiles: list | None = None)
         ph = 66 + len(why) * 32
         c.panel(c.L, y, 1000, ph)
         c._icon("search", c.L + 48, y + 38, 30)
-        c.label(c.L + 80, y + 38, "What it means" if imp else "Why it matters", 13.5)
+        c.label(c.L + 80, y + 38, spec.get("why_title") or ("What it means" if imp else "Why it matters"), 13.5)
         for j, ln in enumerate(why):
             c.text(c.L + 30, y + 80 + j * 32, ln, 15, CREAM)
         y += ph + 16
@@ -939,7 +954,7 @@ def alert_card(cfg: dict, spec: dict, when: datetime, tiles: list | None = None)
         groups = [(lab, secs, col) for lab, secs, col in (("Positive for", imp["pos"], "#2f7d4f"),
                                                           ("Pressure on", imp["neg"], "#a83a3a")) if secs]
     elif sectors := (spec.get("sectors") or (imp or {}).get("sectors")):
-        groups = [("Sectors in focus", sectors, t["edge"])]
+        groups = [("Sectors in focus", sectors, t["chip2"])]
     for lab, secs, col in groups:
         c.label(c.L, y + 22, lab, 12, t["muted"])
         x = c.L

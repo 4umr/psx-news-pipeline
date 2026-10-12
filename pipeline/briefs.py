@@ -916,8 +916,62 @@ def esc_free(s: str) -> str:
     return _h.unescape(s)
 
 
+_BROKER_SHORT = [(r"arif habib|\bahl\b", "AHL"), (r"\bakd\b", "AKD"), (r"js global", "JS Global"),
+                 (r"topline", "Topline"), (r"taurus", "Taurus"), (r"darson", "Darson"), (r"\bbma\b", "BMA"),
+                 (r"rafi", "Rafi"), (r"insight", "Insight"), (r"optimus", "Optimus"), (r"awt", "AWT"),
+                 (r"stockintel|ahcml|al habib", "AHCML"), (r"sherman", "Sherman"), (r"chase", "Chase"),
+                 (r"igi", "IGI"), (r"foundation", "Foundation"), (r"pearl", "Pearl"), (r"ismail iqbal", "Ismail Iqbal")]
+
+
+def _broker_short(name: str) -> str:
+    for rx, short in _BROKER_SHORT:
+        if re.search(rx, name, re.I):
+            return short
+    return re.sub(r"\s+(securities|capital|limited|research|ltd\.?)\b", "", name, flags=re.I).strip()[:16]
+
+
+def brokers(cfg: dict, state: State, mk: dict, view=None):
+    """13:00 PKT: today's broker research headlines, credited (from public notes listed on KSE Alert)."""
+    from .common import NewsItem
+    from .sources import brokers as src
+
+    now = now_pkt()
+    notes = [r for r in src.reports() if r["date"].date() == now.date()]
+    if len(notes) < 3:
+        return None, None, ""
+    order = {"daily": 0, "technical": 1, "company": 2}
+    seen, items = set(), []
+    for r in sorted(notes, key=lambda r: (order.get(r["kind"], 3), r["date"])):
+        short = _broker_short(r["broker"])
+        key = (short, r["kind"])
+        if key in seen and r["kind"] != "company":
+            continue  # e.g. AHL's technical note listed twice under two names
+        seen.add(key)
+        items.append({**r, "short": short})
+    # brokerage forecasts (CPI, policy rate) feed the Street View scoreboard, credited to the broker
+    from . import street
+    street.capture([NewsItem(title=f"{r['broker']}: {r['title']}", url=r["url"], source=r["broker"]) for r in notes],
+                   state)
+    text = (header("", "Broker Views", f"{now:%A, %d %B %Y}") + "\n"
+            + "\n".join(f"<b>{esc(i['short'])}</b>: {esc(i['title'])}" for i in items)
+            + "\n\n<i>Views belong to the respective brokers.</i>" + footer(cfg))
+    cards = None
+    if cfg.get("brand", {}).get("cards", True):
+        from .cards import broker_card
+        cards = _safe_card(lambda: [broker_card(cfg, now, items[:8])])
+    from .telegram import Sender
+    lines = [f"<b>{esc(i['short'])}</b>: {esc(i['title'])}" for i in items[:8]]
+    while True:
+        cap = (f"<b>Broker Views</b> · {now:%A %d %b}\n\n" + "\n".join(lines)
+               + "\n\nViews belong to the respective brokers. Compiled from their public research notes."
+               + footer(cfg, compact=True))
+        if Sender.fits_caption(cap) or len(lines) <= 2:
+            return text, cards, cap
+        lines.pop()
+
+
 BUILDERS = {"morning": morning, "opening": opening, "midday": midday, "close": close, "results": results,
-            "macro": macro, "week_ahead": week_ahead}
+            "macro": macro, "brokers": brokers, "week_ahead": week_ahead}
 
 
 def due(cfg: dict, state: State, now: datetime, grace_hours: int = 3) -> list[str]:

@@ -68,7 +68,8 @@ class Sender:
         return ok
 
     def send_admin(self, text: str) -> bool:
-        """Operational message to the owner's private chat only."""
+        """Message to the owner's admin chat/channel only (warnings, raw news feed)."""
+        text = tidy(text)
         if self.dry:
             return self.send(f"[ADMIN ONLY] {text}")
         if not self.admin:
