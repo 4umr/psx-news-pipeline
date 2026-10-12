@@ -390,7 +390,9 @@ def _daily_report(cfg: dict, state: State, sender: Sender, now: datetime) -> Non
              f"Undelivered (retrying): {outbox}",
              f"Last SBP data: policy {sbp_s.get('policy_rate', 'n/a')}% · reserves as on "
              f"{(sbp_s.get('reserves') or {}).get('as_on', 'n/a')}",
-             f"Street forecasts tracked: {len(state.data.get('street', {}).get('forecasts', []))}"]
+             f"Street forecasts tracked: {len(state.data.get('street', {}).get('forecasts', []))}",
+             f"AI analysis: {state.snap('ai_status') or 'not checked'} · requests today "
+             f"{(state.data.get('ai_usage') or {}).get(str(now.date()), 0)}"]
     if day.get("runs", 0) < 30:
         lines.append("ℹ️ Fewer runs than expected — GitHub's free scheduler may be slow today; "
                      "the 2-minute cron-job.org trigger fixes this.")
@@ -449,6 +451,11 @@ def _refresh_broker_notes(state: State, now: datetime) -> None:
 
 def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, force_brief, t0: float) -> None:
     analysis.init(state, cfg)
+    if not state.flag(f"ai_check:{now:%Y-%m-%d}"):
+        state.set_flag(f"ai_check:{now:%Y-%m-%d}")
+        status = analysis.health(cfg)
+        log.info("AI health check: %s", status)
+        state.set_snap("ai_status", f"{now:%Y-%m-%d %H:%M} {status}")
     bootstrap = state.is_new
     if bootstrap:
         log.info("First run: recording current state silently (no flood of old news)")

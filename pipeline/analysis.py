@@ -182,6 +182,22 @@ def _call(cfg: dict, prompt: str) -> dict | None:
         return None
 
 
+def health(cfg: dict) -> str:
+    """Daily check: 'ok <model>' / 'no key' / 'refused' / 'error ...' (lists models; no generation quota used)."""
+    global _disabled
+    if not _key():
+        return "no key"
+    try:
+        r = http().get(f"{API}/models", headers={"x-goog-api-key": _key()}, timeout=20)
+        if r.status_code in (400, 401, 403):
+            _disabled = True
+            return f"refused (HTTP {r.status_code})"
+        r.raise_for_status()
+        return f"ok {_pick_model(cfg)}"
+    except Exception as e:  # noqa: BLE001
+        return f"error {type(e).__name__}"
+
+
 # ---------------------------------------------------------------- guardrails
 _NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
