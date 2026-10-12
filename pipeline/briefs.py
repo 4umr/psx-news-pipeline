@@ -425,7 +425,20 @@ def _safe_card(fn, *a, **kw):
         return None
 
 
-def brief_caption(cfg: dict, head: str, state: State, hours: int, n: int = 4) -> str:
+def _ai_points(cfg: dict, state: State, what: str, facts: list[str], view=None, mk=None) -> list[str]:
+    """AI commentary from today's facts + the market context pack ([] -> keep rule-based highlights)."""
+    from . import analysis, context
+    if not analysis.available(cfg):
+        return []
+    try:
+        data = "TODAY'S FACTS:\n" + "\n".join(f"- {f}" for f in facts if f) + "\n\n" + context.build(state, view, mk)
+        return analysis.narrate(cfg, what, data)
+    except Exception:  # noqa: BLE001 — commentary is optional
+        log.exception("AI commentary failed")
+        return []
+
+
+def brief_caption(cfg: dict, head: str, state: State, hours: int, n: int = 4, intro: list[str] | None = None) -> str:
     """Album caption: title + the top stories with visible source links (links can't live in an image)."""
     from .telegram import Sender
     cutoff = time.time() - hours * 3600
@@ -433,7 +446,7 @@ def brief_caption(cfg: dict, head: str, state: State, hours: int, n: int = 4) ->
                 key=lambda h: (-h["sc"], -h["ts"]))
     hs = dedupe(hs)
     for k in range(min(n, len(hs)), -1, -1):
-        lines = [head]
+        lines = [head] + (["", *[esc(p) for p in intro]] if intro else [])
         if k:
             lines += ["", "📰 <b>Top stories · sources</b>"]
             lines += [f"{i}. {esc(h['t'])}\n{link(h['u'], h['s'])}" for i, h in enumerate(hs[:k], 1)]
@@ -519,9 +532,15 @@ def morning(cfg: dict, state: State, mk: dict, view=None, title: str = "Morning 
                "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"), "mk": mk, "gmk": {**gmk, **mk},
                "hist": scs.index_history(45)[-22:], "headlines": card_headlines(cfg, state, 16, 8),
                "fipi": state.snap("fipi_last"), "highlights": hl}
+        pts = _ai_points(cfg, state, "a short 'What to watch today' note for PSX investors before the market opens",
+                         hl + _agenda(state, n_board, n_bc), view, {**gmk, **mk})
+        if pts:
+            ctx["highlights"], ctx["highlights_title"] = pts, "What to watch today"
         cards = _safe_card(morning_cards, cfg, now, ctx)
-    head = f"☀️ <b>PSX {esc(title)}</b> · {now:%A %d %b %Y}"
-    return text, cards, brief_caption(cfg, head, state, 16)
+    else:
+        pts = []
+    head = f"<b>PSX {esc(title)}</b> · {now:%A %d %b %Y}"
+    return text, cards, brief_caption(cfg, head, state, 16, intro=pts)
 
 
 def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
@@ -570,8 +589,21 @@ def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
                "intraday": (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}"),
                "sectors": _sector_rows_for_card(view, act), "headlines": card_headlines(cfg, state, 10, 8),
                "highlights": hl}
+        k = _kse(idx)
+        facts = ([f"KSE-100 closed at {k['kse_index_close']:,.0f}, {k['kse_index_change']:+,.0f} points, "
+                  f"day range {k['kse_index_low']:,.0f} to {k['kse_index_high']:,.0f}"] if k else [])
+        if act:
+            up, dn = sum(1 for r in act if (r.get("trading_change") or 0) > 0), sum(1 for r in act if (r.get("trading_change") or 0) < 0)
+            facts.append(f"{up} stocks advanced and {dn} declined; volume {sum(r.get('trading_vol') or 0 for r in act) / 1e6:,.0f} million shares")
+        facts += [f"Sector {n}: {p:+.2f}% ({pts_:+.0f} index points)" for n, p, pts_ in sector_rows(view, act)[:4] + sector_rows(view, act)[-3:]]
+        facts += hl
+        pts = _ai_points(cfg, state, "a short 'Why the market moved today' explanation of today's PSX session", facts, view, mk)
+        if pts:
+            ctx["highlights"], ctx["highlights_title"] = pts, "Why the market moved"
         cards = _safe_card(close_cards, cfg, now, ctx)
-    return text, cards, brief_caption(cfg, f"🔔 <b>PSX Market Close</b> · {now:%A %d %b %Y}", state, 10)
+    else:
+        pts = []
+    return text, cards, brief_caption(cfg, f"<b>PSX Market Close</b> · {now:%A %d %b %Y}", state, 10, intro=pts)
 
 
 class _NoFipi:
@@ -671,12 +703,22 @@ def week_ahead(cfg: dict, state: State, mk: dict, view=None):
         ctx = {"hist": hist[-22:], "week": wk, "week_label": f"Week ending {now:%d %b %Y}", "week_strip": strip,
                "week_gain": gain, "week_lose": lose, "week_highlights": hl,
                "ahead": ahead, "ahead_label": f"Week of {monday:%d %b %Y}"}
+        facts = ([f"KSE-100 this week: {wk['close']:,.0f}, {wk['chg']:+,.0f} points ({wk['pct']:+.2f}%)"] if wk else [])
+        facts += [f"Top gainer {c} {p:+.1f}%" for c, p in gain[:3]] + [f"Top loser {c} {p:+.1f}%" for c, p in lose[:3]]
+        if flows:
+            facts.append(f"Foreign investors net {sum(flows):+.2f} million USD over {len(flows)} sessions")
+        facts += hl + [f"{d}: {t}" for title_, rows in ahead for d, t in rows][:12]
+        pts = _ai_points(cfg, state, "'The big picture': a short weekly note on what drove PSX this week and what "
+                         "matters in the week ahead", facts, None, mk)
+        if pts:
+            ctx["week_highlights"], ctx["highlights_title"] = pts, "The big picture"
         cards = _safe_card(week_cards, cfg, now, ctx)
         from .cards import street_card
         if cards and (sc := _safe_card(street_card, cfg, now, street_ctx(state))):
             cards.append(sc)
-    head = f"📅 <b>PSX Week in Review & Week Ahead</b> · week of {monday:%d %b}"
-    return text, cards, brief_caption(cfg, head, state, 36)
+    head = f"<b>PSX Week in Review and Week Ahead</b> · week of {monday:%d %b}"
+    return text, cards, brief_caption(cfg, head, state, 36,
+                                      intro=(ctx.get("week_highlights") if cards and ctx.get("highlights_title") else None))
 
 
 def midday(cfg: dict, state: State, mk: dict, view=None):
@@ -716,9 +758,14 @@ def midday(cfg: dict, state: State, mk: dict, view=None):
                "mk": mk, "intraday": (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}"),
                "sectors": _sector_rows_for_card(view, act), "headlines": card_headlines(cfg, state, hours, 8),
                "highlights": hl}
+        pts = _ai_points(cfg, state, "a short 'What is driving the market so far today' midday note", gl + hl, view, mk)
+        if pts:
+            ctx["highlights"], ctx["highlights_title"] = pts, "What is driving the market"
         cards = _safe_card(midday_cards, cfg, now, ctx)
-    head = f"🕐 <b>PSX Midday Pulse</b> · {now:%A %d %b} · {now:%H:%M} PKT"
-    return text, cards, brief_caption(cfg, head, state, hours)
+    else:
+        pts = []
+    head = f"<b>PSX Midday Pulse</b> · {now:%A %d %b} · {now:%H:%M} PKT"
+    return text, cards, brief_caption(cfg, head, state, hours, intro=pts)
 
 
 def opening(cfg: dict, state: State, mk: dict, view=None):

@@ -37,6 +37,7 @@ ai:
   enabled: true
   model: gemini-2.5-flash   # if Google retires this name, the newest available "flash" model is used
   max_per_run: 6            # important news items analysed per run (free tier limits)
+  daily_limit: 200          # max AI requests per day (stays inside Google's free tier)
 
 # Messages appended to briefs / digests / alerts
 disclaimer: "For information only — not investment advice."

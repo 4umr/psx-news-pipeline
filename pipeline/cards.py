@@ -558,7 +558,8 @@ def psx_card(cfg: dict, now: datetime, ctx: dict, kind: str) -> bytes:
         y = c.strip(y, strip)
         g, losers = _pct_movers(view)
         y = c.movers(y, g, losers)
-    c.highlights(y, ctx.get("highlights") or [], h=c.H - 172 - 16 - y)
+    c.highlights(y, ctx.get("highlights") or [], title=ctx.get("highlights_title", "Key highlights"),
+                 h=c.H - 172 - 16 - y)
     c.footer()
     return c.png()
 
@@ -779,7 +780,8 @@ def week_cards(cfg: dict, now: datetime, ctx: dict) -> list[bytes]:
                    if len(series) >= 2 else None)
     y = c.strip(y, ctx.get("week_strip") or [])
     y = c.movers(y, ctx.get("week_gain") or [], ctx.get("week_lose") or [], "Week's top gainers", "Week's top losers")
-    c.highlights(y, ctx.get("week_highlights") or [], h=c.H - 172 - 16 - y)
+    c.highlights(y, ctx.get("week_highlights") or [], title=ctx.get("highlights_title", "Key highlights"),
+                 h=c.H - 172 - 16 - y)
     c.footer()
     out.append(c.png())
 
@@ -838,7 +840,8 @@ def results_card(cfg: dict, now: datetime, ctx: dict) -> bytes:
     y = c.title_block("Results", "Tracker", f"{now:%a, %d %b %Y}")
     y = c.strip(y, ctx.get("stats") or [])
     y = c.table(y, "Results today", ctx.get("rows") or [], "EPS vs last year", max_rows=12)
-    c.highlights(y, ctx.get("highlights") or [], h=c.H - 172 - 16 - y)
+    c.highlights(y, ctx.get("highlights") or [], title=ctx.get("highlights_title", "Key highlights"),
+                 h=c.H - 172 - 16 - y)
     c.footer()
     return c.png()
 
@@ -852,7 +855,8 @@ def macro_card(cfg: dict, now: datetime, ctx: dict) -> bytes:
     if len(cpi) >= 3:
         y = c.bars(y, "CPI inflation by month (% YoY)", [m for m, _ in cpi], [v for _, v in cpi], fmt="{:.1f}%",
                    signed=False, h=min(420, 80 + len(cpi) * 40), x0=200)
-    c.highlights(y, ctx.get("highlights") or [], h=c.H - 172 - 16 - y)
+    c.highlights(y, ctx.get("highlights") or [], title=ctx.get("highlights_title", "Key highlights"),
+                 h=c.H - 172 - 16 - y)
     c.footer()
     return c.png()
 
@@ -892,6 +896,8 @@ def alert_card(cfg: dict, spec: dict, when: datetime, tiles: list | None = None)
     h += 206 if spec.get("stats") else 0
     h += (80 + sum(18 + 30 * max(1, len(w)) for _, w in rows_wrapped)) if rows else 0
     imp = spec.get("impact")
+    h += (82 + 30 * min(5, sum(len(_wrap(x, 900, 14.5)) for x in spec.get("extra") or []))) if spec.get("extra") else 0
+    h += 86 if spec.get("stocks") else 0
     h += (76 + len(why) * 32) + 16 if why else 0
     h += 60 if imp else 0
     h += 86 * ((1 if imp["pos"] else 0) + (1 if imp["neg"] else 0)) if imp and (imp["pos"] or imp["neg"]) else \
@@ -949,12 +955,21 @@ def alert_card(cfg: dict, spec: dict, when: datetime, tiles: list | None = None)
         for j, ln in enumerate(why):
             c.text(c.L + 30, y + 80 + j * 32, ln, 15, CREAM)
         y += ph + 16
+    if extra := [ln for x in spec.get("extra") or [] for ln in _wrap(x, 900, 14.5)][:5]:
+        ph = 66 + len(extra) * 30
+        c.panel(c.L, y, 1000, ph)
+        c.label(c.L + 30, y + 38, spec.get("extra_title", "The bigger picture"), 13.5)
+        for j, ln in enumerate(extra):
+            c.text(c.L + 30, y + 80 + j * 30, ln, 14.5, CREAM)
+        y += ph + 16
     groups = []
     if imp and (imp["pos"] or imp["neg"]):
         groups = [(lab, secs, col) for lab, secs, col in (("Positive for", imp["pos"], "#2f7d4f"),
                                                           ("Pressure on", imp["neg"], "#a83a3a")) if secs]
     elif sectors := (spec.get("sectors") or (imp or {}).get("sectors")):
         groups = [("Sectors in focus", sectors, t["chip2"])]
+    if spec.get("stocks"):
+        groups.append(("Stocks in view", spec["stocks"], "#3d5a80"))
     for lab, secs, col in groups:
         c.label(c.L, y + 22, lab, 12, t["muted"])
         x = c.L

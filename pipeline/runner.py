@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import analysis, briefs, impact, street, watchers
+from . import analysis, briefs, context, impact, street, watchers
 from .common import Alert, NewsItem, esc, hours_ago, in_window, link, log, now_pkt, to_pkt
 from .links import short
 from .scoring import Scorer, is_duplicate, is_stale, title_tokens
@@ -420,7 +420,35 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
                  time.time() - t0, sender.sent, len(errors))
 
 
+def _contradicts_official(it: NewsItem, state: State, now: datetime) -> bool:
+    """A media report of a policy-rate cut/hike when SBP held no meeting today or yesterday (often an old
+    article resurfacing). The SBP watcher posts real decisions straight from SBP, so these are held back."""
+    from datetime import date as _date
+    if it.topic != "monetary_policy" or it.official:
+        return False
+    t = it.title.lower()
+    if not re.search(r"\b(cuts?|reduc\w*|lowers?|slash\w*|hikes?|raises?|increas\w*)\b", t):
+        return False
+    if re.search(r"expect|likely|\bmay\b|could|poll|forecast|seen|analyst|survey|preview|ahead|hope|demand|urge", t):
+        return False
+    dates = (state.snap("mpc") or {}).get("dates", [])
+    return not any(0 <= (now.date() - _date.fromisoformat(d)).days <= 1 for d in dates)
+
+
+def _refresh_broker_notes(state: State, now: datetime) -> None:
+    """Hourly on weekdays: today's broker research headlines, for the AI context pack."""
+    from .briefs import _broker_short
+    from .sources import brokers
+    if now.weekday() > 4 or not 8 <= now.hour <= 18 or state.flag(f"bn:{now:%Y-%m-%d-%H}"):
+        return
+    state.set_flag(f"bn:{now:%Y-%m-%d-%H}")
+    notes = [f"{_broker_short(r['broker'])}: {r['title']}" for r in brokers.reports() if r["date"].date() == now.date()]
+    if notes:
+        state.set_snap("broker_notes", notes[:10])
+
+
 def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, force_brief, t0: float) -> None:
+    analysis.init(state, cfg)
     bootstrap = state.is_new
     if bootstrap:
         log.info("First run: recording current state silently (no flood of old news)")
@@ -509,12 +537,23 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
             sender.send(msg, preview=a.preview)
         S("whatsapp copy", wa, msg, a.priority >= 9)
     ai_budget = (cfg.get("ai") or {}).get("max_per_run", 6)
+    ctx_text, tickers = "", context.tickers(view_now)
+    if instant and analysis.available(cfg):
+        S("broker notes", _refresh_broker_notes, state, now)
+        ctx_text = S("market context", context.build, state, view_now, mk, default="") or ""
     for it in instant:
         imp = impact.assess(it.title, it.topic, it.score, cfg, it.summary)
+        if _contradicts_official(it, state, now):
+            log.warning("unconfirmed policy-rate claim kept off main channel: %s", it.title[:80])
+            sender.send_admin("<b>Unconfirmed (no SBP meeting today):</b>\n" + _fmt_compact(
+                {"t": it.title, "u": it.url, "s": it.source, "sc": it.score, "l": it.label, "topic": it.topic,
+                 "ts": int(time.time())}, cfg))
+            continue
         ai = None
         if ai_budget > 0:
             ai_budget -= 1
-            ai = S("article analysis", analysis.analyse, it.title, it.url, it.source, cfg, it.summary)
+            ai = S("article analysis", analysis.analyse, it.title, it.url, it.source, cfg, it.summary,
+                   ctx_text, tickers)
         if ai and (not ai["relevant"] or ai["kind"] != "news" or ai["stale"]):
             # Gemini read the article: not market news (opinion, promo, old event) -> raw feed only
             log.info("kept off main channel (%s): %s", "stale" if ai["stale"] else ai["kind"] if ai["relevant"]
@@ -536,11 +575,22 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         if ai:
             spec["why_title"] = "What happened"
         # caption: short, plain explanation under the image
+        if ai and (ai.get("context") or ai.get("watch")):
+            spec["extra_title"] = "The bigger picture"
+            spec["extra"] = [x for x in (ai.get("context"), ("Watch: " + ai["watch"]) if ai.get("watch") else "") if x]
+        if ai and ai.get("stocks"):
+            spec["stocks"] = ai["stocks"]
         lines = [esc(imp["summary"])]
         if ai and ai.get("why"):
             lines.append(esc(ai["why"]))
+        if ai and ai.get("context"):
+            lines.append(esc(ai["context"]))
         lines.append("")
         lines.append(f"<b>{_impact_line(imp)}</b>" + (f". {esc(sl)}" if (sl := impact.sectors_line(imp)) else ""))
+        if ai and ai.get("stocks"):
+            lines.append("Stocks in view: " + ", ".join(ai["stocks"]))
+        if ai and ai.get("watch"):
+            lines.append("Watch: " + esc(ai["watch"]))
         cap = _caption(cfg, f"<b>{esc(it.title)}</b>\n\n" + "\n".join(lines), [link(it.url, it.source)])
         _post_with_card(sender, cfg, msg, spec, when, "news", _market_tiles(state, view_now), cap)
         S("whatsapp copy", wa, msg, it.score >= 10)
