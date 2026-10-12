@@ -48,6 +48,8 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   `exclude_titles` (daily price-list pages), `max_per_global_topic_3h` flood cap.
 - `analysis.py` Gemini (free tier, secret `GEMINI_API_KEY`) reads the actual article (HTML or PDF via pypdf) for
   important news: relevant?, summary, why, key facts, level, tone, sectors (fixed list). Not relevant -> admin only.
+  Also returns kind (news/opinion/analysis/promo) + event_date: only fresh real news reaches main channel.
+  Main channel also requires published <= `max_important_age_hours` (6). Bad key -> one admin warning/day.
   Falls back to `impact.py` rules without key / on error / rate limit. Model in config `ai.model` (auto-picks newest flash).
 - Routing: main channel = infographic updates + important news (image + short explanation caption);
   admin channel (`TELEGRAM_ADMIN_CHAT_ID`) = raw headline feed (`raw_news_to_admin`) + warnings + WhatsApp copies.

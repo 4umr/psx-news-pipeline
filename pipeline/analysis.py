@@ -27,6 +27,8 @@ do not invent numbers. If the article text is missing or thin, say less rather t
 
 Return JSON with exactly these keys:
 "relevant": true if this news can affect Pakistani markets, the economy, rates, the rupee or listed companies; otherwise false.
+"kind": "news" for a report of a new event or official data; "opinion" for an editorial, column or comment piece; "analysis" for explainers or background; "promo" for advertising or sponsored content.
+"event_date": the date the main event happened or was announced, as YYYY-MM-DD, taken from the article; null if the article does not say.
 "summary": two short, simple sentences explaining what happened, including the key numbers from the article.
 "why": one short sentence on why it matters for Pakistani investors.
 "key_facts": up to 3 short factual points with numbers, taken from the article.
@@ -142,7 +144,15 @@ def analyse(title: str, url: str, source: str, cfg: dict, summary: str = "") -> 
     tone = d.get("tone") if d.get("tone") in ("Positive", "Negative", "Mixed", "Neutral") else "Neutral"
     pos = [s for s in d.get("positive_sectors") or [] if s in SECTORS][:4]
     neg = [s for s in d.get("pressured_sectors") or [] if s in SECTORS and s not in pos][:4]
-    out = {"relevant": bool(d.get("relevant", True)), "summary": _clean(d.get("summary")), "why": _clean(d.get("why")),
+    stale = False
+    if ev := d.get("event_date"):
+        try:
+            from datetime import date
+            stale = (date.today() - date.fromisoformat(str(ev)[:10])).days > 3
+        except ValueError:
+            stale = False
+    kind = d.get("kind") if d.get("kind") in ("news", "opinion", "analysis", "promo") else "news"
+    out = {"kind": kind, "stale": stale, "event_date": d.get("event_date"), "relevant": bool(d.get("relevant", True)), "summary": _clean(d.get("summary")), "why": _clean(d.get("why")),
            "facts": [_clean(f) for f in (d.get("key_facts") or [])][:3], "level": level, "tone": tone,
            "pos": pos, "neg": neg, "sectors": [], "read_article": len(text) >= 300, "ai": True}
     if not out["summary"]:

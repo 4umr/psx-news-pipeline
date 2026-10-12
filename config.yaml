@@ -53,6 +53,8 @@ digest_quiet_hours: []
 
 # Ignore news older than this (stops old feed items flooding the channel)
 max_item_age_hours: 18
+# Important news reaches the MAIN channel only if published within this many hours (older -> admin feed)
+max_important_age_hours: 6
 
 # Score thresholds (see `topics` below). 8+ = instant standalone alert,
 # 4–7 = grouped into a "News Update" digest, below 4 = ignored.

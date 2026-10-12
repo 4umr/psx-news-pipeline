@@ -49,7 +49,10 @@ def _news_alerts(items: list[NewsItem], state: State, cfg: dict) -> tuple[list[N
                             "l": it.label, "topic": it.topic, "ts": int(time.time())})
         picked.append(it)
     picked.sort(key=lambda i: -i.score)
-    instant = [i for i in picked if i.score >= cfg["min_score_instant"]][: cfg["max_instant_per_run"]]
+    # Main channel only gets FRESH important news; older items go to the admin raw feed instead
+    max_h = cfg.get("max_important_age_hours", 6)
+    fresh = lambda i: (hours_ago(i.published) <= max_h) if i.published else i.official  # noqa: E731
+    instant = [i for i in picked if i.score >= cfg["min_score_instant"] and fresh(i)][: cfg["max_instant_per_run"]]
     digest, n_global = [], 0
     for i in picked:
         if i in instant:
@@ -512,8 +515,10 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         if ai_budget > 0:
             ai_budget -= 1
             ai = S("article analysis", analysis.analyse, it.title, it.url, it.source, cfg, it.summary)
-        if ai and not ai["relevant"]:
-            # Gemini read the article: not market-relevant after all -> raw feed only
+        if ai and (not ai["relevant"] or ai["kind"] != "news" or ai["stale"]):
+            # Gemini read the article: not market news (opinion, promo, old event) -> raw feed only
+            log.info("kept off main channel (%s): %s", "stale" if ai["stale"] else ai["kind"] if ai["relevant"]
+                     else "not relevant", it.title[:80])
             sender.send_admin(_fmt_compact({"t": it.title, "u": it.url, "s": it.source, "sc": it.score, "l": it.label,
                                             "topic": it.topic, "ts": int(time.time())}, cfg))
             continue
@@ -539,6 +544,11 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         cap = _caption(cfg, f"<b>{esc(it.title)}</b>\n\n" + "\n".join(lines), [link(it.url, it.source)])
         _post_with_card(sender, cfg, msg, spec, when, "news", _market_tiles(state, view_now), cap)
         S("whatsapp copy", wa, msg, it.score >= 10)
+    if analysis._disabled and not state.flag(f"gemini_bad:{now:%Y-%m-%d}"):
+        state.set_flag(f"gemini_bad:{now:%Y-%m-%d}")
+        sender.send_admin("<b>Gemini key problem:</b> Google refused the GEMINI_API_KEY secret, so important news "
+                          "is using the backup rules today. Create a new key at aistudio.google.com/apikey and "
+                          "update the secret in GitHub.")
     _queue_digest(digest, state)
     if cfg.get("news_mode", "instant") == "instant":
         S("news posts", _flush_instant, cfg, state, sender, now)
