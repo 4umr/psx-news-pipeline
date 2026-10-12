@@ -10,7 +10,7 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   manual "Run workflow" with a **What to do** menu: run · test --admin-only · test · brief morning/midday/close/week_ahead · about · chats.
 - `.github/workflows/keepalive.yml`: monthly commit so GitHub never pauses the schedule.
 - State (what was sent, snapshots, history) = `state/state.json`, kept in the **Actions cache** (key `psx-state-v2-*`)
-  with a backup copy force-pushed to the orphan branch **`state`** (~every 15 min); auto-restored if cache is lost.
+  with a backup copy force-pushed to the orphan branch **`state`** (after every run); auto-restored if cache is lost.
 - Secrets (GitHub → Settings → Secrets → Actions): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (channel `-1004482191611`),
   `TELEGRAM_ADMIN_CHAT_ID` (Umer's *personal* chat id — NOT the bot id 8714104355; bot can't message itself).
   **Never** print/echo secrets or personal ids; Actions logs are public. Don't ask the user to paste tokens in chat.
