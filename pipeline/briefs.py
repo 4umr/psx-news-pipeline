@@ -286,7 +286,7 @@ def _payout(r: dict) -> str:
 
 
 def calendar_data(start: datetime, days: int) -> tuple[dict[str, list[str]], list[dict]]:
-    """(board meetings by day -> company codes, payout book closures) in [start, start + days)."""
+    """(board meetings by day -> company codes, payout ex-dates) in [start, start + days)."""
     s0 = start.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     e0 = s0 + timedelta(days=days)
     bms = [r for r in scs.board_meetings() if r.get("date") and s0 <= r["date"].replace(tzinfo=None) < e0]
@@ -311,12 +311,12 @@ def calendar_block(start: datetime, days: int, data=None) -> tuple[str, int, int
             shown = ", ".join(codes[:25]) + (f" +{len(codes) - 25}" if len(codes) > 25 else "")
             out.append(f"   {d}: {esc(shown)}")
     if bcs:
-        out.append("💰 <b>Payout book closures</b>")
+        out.append("💰 <b>Payout ex-dates (buy before this date to receive it)</b>")
         for r in bcs[:20]:
             out.append(f"   {r['date']:%d %b}: {esc(r['company_code'])} {esc(_payout(r))}")
         if len(bcs) > 20:
             out.append(f"   …and {len(bcs) - 20} more")
-    return "\n".join(out) or "No board meetings or book closures scheduled.", n_board, len(bcs)
+    return "\n".join(out) or "No board meetings or payout ex-dates scheduled.", n_board, len(bcs)
 
 
 def _rate(state: State) -> float:
@@ -411,7 +411,7 @@ def _agenda(state: State, n_board: int, n_bc: int) -> list[str]:
     if note := _mpc_note(state):
         out.append(note)
     if n_board or n_bc:
-        out.append(f"Today: {n_board} board meeting(s) · {n_bc} payout book closure(s)")
+        out.append(f"Today: {n_board} board meeting(s) · {n_bc} payout ex-date(s)")
     if a := upcoming_auctions((state.snap("sbp") or {}).get("upcoming_auctions", "")):
         out.append(f"Next govt securities auctions: {a}")
     return out
@@ -697,7 +697,7 @@ def week_ahead(cfg: dict, state: State, mk: dict, view=None):
         by_day, bcs = caldata
         ahead.append(("Results expected · board meetings",
                       [(d, ", ".join(c[:9]) + (f" +{len(c) - 9} more" if len(c) > 9 else "")) for d, c in by_day.items()][:5]))
-        ahead.append(("Payouts · book closures", [(f"{r['date']:%a %d %b}", f"{r['company_code']}  {_payout(r)}")
+        ahead.append(("Payouts · ex-dates", [(f"{r['date']:%a %d %b}", f"{r['company_code']}  {_payout(r)}")
                                                   for r in bcs[:5]]))
         ahead.append(("Regular data releases", _releases(monday)))
         ctx = {"hist": hist[-22:], "week": wk, "week_label": f"Week ending {now:%d %b %Y}", "week_strip": strip,

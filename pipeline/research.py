@@ -107,3 +107,46 @@ def events(df: pd.DataFrame, res: pd.DataFrame, sectors: dict[str, str], min_adt
             add(top, last & (sec == b))
             add(low, last & (sec == w))
     return pd.concat(out) if out else pd.DataFrame()
+
+
+# ---------------------------------------------------------------- sector valuations (public cards, website)
+def _sector_pe_path():
+    from .common import ROOT
+    return ROOT / "state" / "sector_pe.csv"
+
+
+def sector_pe(v: pd.DataFrame, sectors: dict[str, str], min_adtv: float, weekly: bool = True) -> pd.DataFrame:
+    """Median trailing P/E of liquid stocks per sector (at least 3 stocks with a usable P/E), by week."""
+    d = v[(v["adtv20"] >= min_adtv) & v["pe"].notna() & (v["pe"] < 200)].copy()
+    if weekly:
+        d = d[_weekly(d)]
+    d["sector"] = d["sym"].map(lambda s: (sectors.get(s) or "").strip().title())
+    g = d.groupby(["date", "sector"])["pe"].agg(["median", "count"]).reset_index()
+    return g[(g["count"] >= 3) & (g["sector"] != "")]
+
+
+def save_sector_history(v: pd.DataFrame, sectors: dict[str, str], min_adtv: float) -> None:
+    sector_pe(v, sectors, min_adtv).to_csv(_sector_pe_path(), index=False)
+
+
+def load_sector_history() -> pd.DataFrame | None:
+    p = _sector_pe_path()
+    if not p.exists():
+        return None
+    try:
+        h = pd.read_csv(p, parse_dates=["date"])
+        return h if len(h) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def sector_table(now_pe: pd.DataFrame, hist: pd.DataFrame | None) -> pd.DataFrame:
+    """Per sector: P/E now, its usual (median) P/E since 2018, and how often it was cheaper than now."""
+    rows = []
+    for _, r in now_pe.iterrows():
+        h = hist[hist["sector"] == r["sector"]]["median"] if hist is not None else pd.Series(dtype=float)
+        rows.append({"sector": r["sector"], "pe": r["median"], "n": int(r["count"]),
+                     "usual": float(h.median()) if len(h) >= 52 else np.nan,
+                     "cheaper_share": float((h < r["median"]).mean()) if len(h) >= 52 else np.nan,
+                     "since": f"{hist[hist['sector'] == r['sector']]['date'].min():%Y}" if len(h) >= 52 else ""})
+    return pd.DataFrame(rows).sort_values("pe")

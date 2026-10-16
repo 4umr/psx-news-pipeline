@@ -19,7 +19,7 @@ import shutil
 import numpy as np
 import pandas as pd
 
-from . import earnings, prices
+from . import earnings, prices, research
 from .common import ROOT, log, now_pkt
 from .signals import features
 from .sources import scs
@@ -61,7 +61,7 @@ def _page(title: str, body: str, depth: int = 0, asof: str = "") -> str:
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{H(title)} | PAKISTAN INVESTORS</title>
 <link rel="stylesheet" href="{up}style.css"></head><body>
 <header><div class="wrap top"><a class="brand" href="{up}index.html">PAKISTAN INVESTORS<small>DATA HUB</small></a>
-<nav><a href="{up}index.html">Screener</a><a href="{up}results.html">Results</a><a href="{up}about.html">About</a></nav>
+<nav><a href="{up}index.html">Screener</a><a href="{up}sectors.html">Sectors</a><a href="{up}results.html">Results</a><a href="{up}about.html">About</a></nav>
 </div></header><main class="wrap">{body}</main>
 <footer class="wrap">Data: PSX via SCS Trade and dps.psx.com.pk. {('Updated ' + H(asof) + '. ') if asof else ''}
 Information only, not investment advice. Check the official filing before acting.</footer></body></html>"""
@@ -136,6 +136,8 @@ def build(cfg: dict) -> int:
     kse = {r.get("company_code") for r in scs.kse100_view()}
     res = earnings.classify(earnings.load_all(syms))
     res = res.sort_values("date")
+    v = research.valuation(df, res)
+    v_last = v[v["date"] == last_d].set_index("sym")
     by_sym = {s: g for s, g in res.groupby("sym")}
     meet: dict[str, pd.Timestamp] = {}
     meet_lab: dict[str, str] = {}
@@ -181,7 +183,8 @@ def build(cfg: dict) -> int:
                "v": round(float(last["adtv20"]) / 1e6, 1) if pd.notna(last["adtv20"]) else None,
                "liq": bool(pd.notna(last["adtv20"]) and last["adtv20"] >= min_adtv),
                "r": last_res["label"] if last_res else "", "ry": last_res["yoy"] if last_res else None,
-               "bm": f"{meet[s]:%d %b}" if s in meet else ""}
+               "bm": f"{meet[s]:%d %b}" if s in meet else "",
+               "pe": round(float(v_last.at[s, "pe"]), 1) if s in v_last.index and pd.notna(v_last.at[s, "pe"]) else None}
         rows.append(row)
         # company page
         tiles = "".join(f'<div class="tile"><small>{lab}</small><b>{_pct(v) if v is not None else "-"}</b></div>'
@@ -195,6 +198,11 @@ def build(cfg: dict) -> int:
             facts.append(f"Free float: <b>{m['free_float_pct']:.0f}%</b>")
         if row["v"] is not None:
             facts.append(f"Average traded: <b>Rs {row['v']:,.1f} m a day</b>")
+        if row["pe"] is not None:
+            facts.append(f"P/E (last 12 months): <b>{row['pe']:.1f}</b> on EPS of Rs {v_last.at[s, 'ttm']:,.2f}")
+        elif s in v_last.index and pd.notna(v_last.at[s, "ttm"]):
+            facts.append("P/E: not shown (loss over the last 12 months)" if v_last.at[s, "ttm"] <= 0 else
+                         "P/E: not shown (share split or bonus issue in the last two years makes reported EPS not comparable)")
         events = []
         if s in meet:
             events.append(f"Board meeting on <b>{meet[s]:%a %d %b %Y}</b>"
@@ -203,7 +211,8 @@ def build(cfg: dict) -> int:
             pay = " ".join(x for x in (f"Dividend {b.get('bm_dividend')}" if b.get("bm_dividend") else "",
                                         f"Bonus {b.get('bm_bonus')}" if b.get("bm_bonus") else "",
                                         f"Right {b.get('bm_right_per')}" if b.get("bm_right_per") else "") if x)
-            events.append(f"Book closure from <b>{b['date']:%d %b %Y}</b>" + (f": {H(pay)}" if pay else ""))
+            events.append(f"Payout ex-date <b>{b['date']:%d %b %Y}</b>" + (f": {H(pay)}" if pay else "")
+                          + " (buy before this date to receive it)")
         body = (f'<h1>{H(s)} <span>{H(name)}</span>{"<span class=tag>KSE-100</span>" if s in kse else ""}</h1>'
                 f'<p class="sub">{H(sector)} · Rs {row["p"]:,.2f} at the {asof}</p>'
                 f'<div class="panel"><div class="tiles">{tiles}</div></div>'
@@ -218,6 +227,7 @@ def build(cfg: dict) -> int:
     if len(rows) < 0.6 * len(syms):
         raise RuntimeError(f"only {len(rows)} company pages built; keeping the previous site")
     _index(rows, asof)
+    _sectors(v[v["date"] == last_d], {s: (act.get(s, {}).get("sector_name") or "") for s in syms}, min_adtv, asof)
     _results_page(by_sym, meet, meet_lab, today, act, asof, now)
     _about(asof)
     log.info("site: %d company pages built", len(rows))
@@ -237,7 +247,7 @@ def _index(rows: list[dict], asof: str) -> None:
 <div class="scroll"><table id="t"><thead><tr>
 <th data-k="s" class=l>Symbol</th><th data-k="n" class="l hm">Company</th><th data-k="z" class=l>Size</th><th data-k="p">Price</th>
 <th data-k="d1">Today</th><th data-k="w1">1W</th><th data-k="m1">1M</th><th data-k="m3">3M</th><th data-k="y1">1Y</th>
-<th data-k="v">Rs m/day</th><th data-k="ry">Last result</th><th data-k="bm">Board meeting</th></tr></thead><tbody></tbody></table></div>
+<th data-k="v">Rs m/day</th><th data-k="pe">P/E</th><th data-k="ry">Last result</th><th data-k="bm">Board meeting</th></tr></thead><tbody></tbody></table></div>
 <p class="muted" id="count"></p></div>
 <script>
 const D={data};let key="v",asc=false;
@@ -250,7 +260,7 @@ return (p>o?1:p<o?-1:0)*(asc?1:-1)}});
 document.querySelector('#t tbody').innerHTML=r.map(x=>'<tr><td><a href="s/'+x.s+'.html">'+x.s+'</a>'+(x.k?' <span class=tag>100</span>':'')+'</td><td class="l hm">'+x.n+
 '</td><td class=l>'+x.z+'</td><td>'+x.p.toLocaleString(undefined,{{minimumFractionDigits:2,maximumFractionDigits:2}})+
 '</td><td>'+pc(x.d1)+'</td><td>'+pc(x.w1)+'</td><td>'+pc(x.m1)+'</td><td>'+pc(x.m3)+'</td><td>'+pc(x.y1)+'</td><td>'+
-(x.v==null?'-':x.v.toLocaleString())+'</td><td>'+(x.r?x.r+' '+pc(x.ry):'-')+'</td><td>'+(x.bm||'')+'</td></tr>').join('');
+(x.v==null?'-':x.v.toLocaleString())+'</td><td>'+(x.pe==null?'-':x.pe.toFixed(1))+'</td><td>'+(x.r?x.r+' '+pc(x.ry):'-')+'</td><td>'+(x.bm||'')+'</td></tr>').join('');
 document.getElementById('count').textContent=r.length+' companies shown. Tap a column to sort.'}}
 document.querySelectorAll('#t th').forEach(th=>th.onclick=()=>{{const k=th.dataset.k;asc=(key==k)?!asc:(k=='s'||k=='n');key=k;draw()}});
 ['q','sec','size','liq'].forEach(i=>document.getElementById(i).addEventListener('input',draw));draw();
@@ -293,3 +303,26 @@ price PSX itself sets, so a payout does not look like a fall.</p>
 <p>Everything here is information only, not investment advice. Numbers can contain errors from the sources:
 always check the official PSX filing before acting.</p></div>"""
     (OUT / "about.html").write_text(_page("About", body, 0, asof), encoding="utf-8")
+
+
+def _sectors(v_now: pd.DataFrame, sectors: dict[str, str], min_adtv: float, asof: str) -> None:
+    now_pe = research.sector_pe(v_now, sectors, min_adtv, weekly=False)
+    t = research.sector_table(now_pe[["sector", "median", "count"]], research.load_sector_history())
+    rows = []
+    for _, r in t.iterrows():
+        usual = "-" if pd.isna(r["usual"]) else f"{r['usual']:.1f}"
+        if pd.isna(r["cheaper_share"]):
+            note = '<span class="muted">history building</span>'
+        else:
+            pct = r["cheaper_share"] * 100
+            note = (f'<span class="up">cheaper than {100 - pct:.0f}% of weeks</span>' if pct <= 30 else
+                    f'<span class="down">dearer than {pct:.0f}% of weeks</span>' if pct >= 70 else "around its usual level")
+        rows.append(f"<tr><td class=l>{H(r['sector'])}</td><td>{r['pe']:.1f}</td><td>{usual}</td><td class=l>{note}</td>"
+                    f"<td>{r['n']}</td></tr>")
+    body = (f'<h1>Sector <span>valuations</span></h1><p class="sub">Median P/E (price / last 12 months EPS) of liquid '
+            f'stocks in each sector, compared with the same sector since 2018</p><div class="panel"><div class="scroll"><table>'
+            f'<tr><th class=l>Sector</th><th>P/E now</th><th>Usual P/E</th><th class=l>Compared with its history</th>'
+            f'<th>Stocks</th></tr>{"".join(rows)}</table></div><p class="muted">Only stocks trading Rs 10m+ a day with '
+            f'positive earnings. Companies with a split or bonus issue in the last two years are left out, because their '
+            f'reported EPS mixes old and new share counts. A low P/E can mean cheap, or that profits are expected to fall.</p></div>')
+    (OUT / "sectors.html").write_text(_page("Sector valuations", body, 0, asof), encoding="utf-8")

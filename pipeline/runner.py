@@ -520,6 +520,7 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         return
 
     S("outbox retry", sender.retry_outbox, state.data.pop("outbox", []))
+    S("MPC poll", watchers.mpc_poll, now, state, sender)
 
     wa_mode = cfg.get("brand", {}).get("whatsapp_copy", "important")
 

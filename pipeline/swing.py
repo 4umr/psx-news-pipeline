@@ -534,10 +534,153 @@ def weekly(cfg: dict, dry: bool = False, force: bool = False) -> None:
            "quiet": quiet, "notes": notes, "calendar": cal, "cal_notes": cal_notes,
            "cal_label": f"Week of {s0:%d %b %Y}"}
     cards = weekly_cards(cfg, ctx)
-    caption = (f"<b>Mid and small caps this week</b> · week ending {end:%d %b}"
-               + (f"\n<b>Results due next week</b>: {len(cal)} liquid companies" if cal else "")
+    _, sectors = prices.universe()
+    extra, problems = weekly_extras(cfg, df, last, this_week, end, start, now, min_adtv, sectors, force)
+    cards = (cards + extra)[:10]  # Telegram albums hold up to 10 images
+    caption = (f"<b>The week for PSX investors</b> · week ending {end:%d %b}\n"
+               "Mid and small caps, market health, payouts coming up"
+               + (f", results due next week ({len(cal)} liquid companies)" if cal else "")
                + "\nData only, not investment advice.")
     s = Sender(dry)
+    if problems:
+        s.send_admin("<b>Sunday cards check</b>\n" + "\n".join(esc(p) for p in problems))
     if s.send_album(cards, caption, name="weekly_midsmall"):
         st["weekly"] = week_id
         _save(st)
+
+
+# ---------------------------------------------------------------- more Sunday cards (each optional and independent)
+def _health(cfg, df: pd.DataFrame, min_adtv: float, this_week: list, end, start) -> bytes | None:
+    from .cards import _col, market_health_card
+    liq = df["adtv20"] >= min_adtv
+    d = df[liq & df["sma200"].notna()]
+    share = (d["ac"] > d["sma200"]).groupby(d["date"]).mean()
+    share = share[share.index >= end - pd.Timedelta(days=365)]
+    if share.empty:
+        return None
+    g = df.groupby("sym", sort=False)
+    ll250 = g["al"].shift(1).groupby(df["sym"]).rolling(250, min_periods=230).min().reset_index(level=0, drop=True)
+    in_week = df["date"].isin(this_week) & liq
+    hi = df[in_week & (df["ac"] > df["hh250"])].groupby("sym")["chg"].size()
+    lo = df[in_week & (df["ac"] < ll250)].groupby("sym")["chg"].size()
+    last = df[(df["date"] == end) & liq].set_index("sym")["ac"]
+    base = df[df["date"] == start].set_index("sym")["ac"]
+    move = (last / base.reindex(last.index) - 1) * 100  # same week definition as the mid & small caps card
+    wk_ret = lambda syms: [(s, float(move[s])) for s in syms if s in move.index and pd.notna(move[s])]  # noqa: E731
+    highs = sorted(wk_ret(hi.index), key=lambda x: -x[1])[:4]
+    lows = sorted(wk_ret(lo.index), key=lambda x: x[1])[:4]
+    now = share.iloc[-1]
+    month = share.iloc[-21] if len(share) > 21 else share.iloc[0]
+    strip = [("Above 200-day avg", f"{now * 100:.0f}%", _col(now - 0.5)),
+             ("A month ago", f"{month * 100:.0f}%", None),
+             ("52-week highs", str(len(hi)), None), ("52-week lows", str(len(lo)), None)]
+    notes = ["Above 50%: most stocks are in an uptrend. Index up but this down: fewer stocks carry it.",
+             "Liquid stocks only (Rs 10m+ a day); % next to a stock = its move this week."]
+    return market_health_card(cfg, {"label": f"Week ending {end:%d %b %Y}", "strip": strip, "series": share,
+                                    "highs": highs, "lows": lows, "notes": notes})
+
+
+def _payouts(cfg, last: pd.DataFrame, min_adtv: float, now) -> bytes | None:
+    from .cards import payouts_card
+    s0 = pd.Timestamp(now.strftime("%Y-%m-%d"))
+    rows = []
+    for b in scs.book_closures():
+        sym = (b.get("company_code") or "").strip()
+        if not b.get("date") or not (s0 <= pd.Timestamp(b["date"]) < s0 + pd.Timedelta(days=15)):
+            continue
+        pay = " ".join(x for x in (f"Dividend {b['bm_dividend'].strip()}" if (b.get("bm_dividend") or "").strip() else "",
+                                    f"Bonus {b['bm_bonus'].strip()}" if (b.get("bm_bonus") or "").strip() else "",
+                                    f"Right {b['bm_right_per'].strip()}" if (b.get("bm_right_per") or "").strip() else "") if x)
+        if not pay:
+            continue
+        liquid = sym in last.index and last.at[sym, "adtv20"] >= min_adtv
+        price = f"Rs {last.at[sym, 'c']:,.2f}" if sym in last.index else ""
+        rows.append((not liquid, pd.Timestamp(b["date"]), sym, pay, price))
+    if not rows:
+        return None
+    rows.sort(key=lambda r: (r[0], r[1]))
+    shown = rows[:15]
+    n_more = len(rows) - len(shown)
+    notes = ["Payouts are % of face value as announced (Rs 10 for most companies, not all).",
+             "On the ex-date the price usually drops by about the payout."]
+    if n_more:
+        notes.insert(0, f"{n_more} more payouts (thinly traded stocks) are not shown.")
+    return payouts_card(cfg, {"label": f"Next two weeks from {s0:%d %b %Y}",
+                              "rows": [(f"{d:%a %d %b}", s, p, pr) for _, d, s, p, pr in sorted(shown, key=lambda r: r[1])],
+                              "notes": notes})
+
+
+def _sector_results(cfg, res: pd.DataFrame, sectors: dict, now) -> bytes | None:
+    from .cards import _col, _p, sector_results_card
+    since = pd.Timestamp(now.strftime("%Y-%m-%d")) - pd.Timedelta(days=7)
+    r = res[pd.to_datetime(res["date"]) >= since].copy()
+    if len(r) < 8:
+        return None  # not results season
+    r["sector"] = r["sym"].map(lambda s: (sectors.get(s) or "Other").strip().title())
+    annual = r["kind"].isin(["FY", "CY"])
+    r["g"] = r["yoy_cum"].where(annual, r["yoy_q"])
+    eps, ly = r["eps_cum"].where(annual, r["eps_q"]), r["eps_cum_ly"].where(annual, r["eps_q_ly"])
+    r["up"] = (r["g"] > 0) | ((eps > 0) & (ly < 0))
+    r["down"] = (r["g"] < 0) | ((eps < 0) & (ly > 0))
+    rows = []
+    for sec, g in r.groupby("sector"):
+        med = g["g"].median()
+        rows.append((len(g), sec[:34], str(len(g)), f"{int(g['up'].sum())} / {int(g['down'].sum())}",
+                     (_p(med) if pd.notna(med) else "-", _col(med) if pd.notna(med) else None)))
+    rows.sort(key=lambda x: -x[0])
+    up, down = int(r["up"].sum()), int(r["down"].sum())
+    strip = [("Results this week", str(len(r)), None), ("Profit up", str(up), _col(1)), ("Profit down", str(down), _col(-1)),
+             ("Typical change", _p(r["g"].median()), _col(r["g"].median()))]
+    notes = ["Compared with the same quarter a year earlier (full year for annual results). Typical = median company.",
+             "Back to profit counts as up, a new loss as down."]
+    return sector_results_card(cfg, {"label": f"{since:%d %b} to {now:%d %b %Y}", "strip": strip,
+                                     "rows": [x[1:] for x in rows], "notes": notes})
+
+
+def _sector_values(cfg, v_now: pd.DataFrame, sectors: dict, min_adtv: float, end) -> bytes | None:
+    from . import research
+    from .cards import DOWN, UP, sector_value_card
+    hist = research.load_sector_history()
+    now_pe = research.sector_pe(v_now, sectors, min_adtv, weekly=False)
+    if hist is None or now_pe.empty:
+        return None
+    t = research.sector_table(now_pe[["sector", "median", "count"]], hist)
+    rows = []
+    for _, r in t.iterrows():
+        if pd.isna(r["cheaper_share"]):
+            continue
+        pct = r["cheaper_share"] * 100
+        vs = ((f"cheaper than {100 - pct:.0f}% of weeks", UP) if pct <= 30 else
+              (f"dearer than {pct:.0f}% of weeks", DOWN) if pct >= 70 else ("near usual", None))
+        rows.append((r["sector"][:30], f"{r['pe']:.1f}", f"{r['usual']:.1f}", vs))
+    if not rows:
+        return None
+    notes = ["P/E = price / last 12 months EPS; median of liquid stocks with profits. Usual = median since 2018.",
+             "Low can mean cheap, or that profits are expected to fall. Split or bonus in the last two years: left out."]
+    return sector_value_card(cfg, {"label": f"{end:%B %Y}", "rows": rows, "notes": notes})
+
+
+def weekly_extras(cfg, df, last, this_week, end, start, now, min_adtv, sectors, force=False) -> tuple[list[bytes], list[str]]:
+    """The extra Sunday cards; each one is skipped (with a note) if its data is missing or fails."""
+    from . import research
+    cards, notes = [], []
+    res = None
+    try:
+        res = earnings.classify(earnings.load_all(sorted(df["sym"].unique())))
+    except Exception as e:  # noqa: BLE001
+        notes.append(f"results history unavailable ({type(e).__name__}): results and valuation cards skipped")
+    jobs = [("market health", lambda: _health(cfg, df, min_adtv, this_week, end, start)),
+            ("payouts", lambda: _payouts(cfg, last, min_adtv, now))]
+    if res is not None:
+        jobs.append(("results by sector", lambda: _sector_results(cfg, res, sectors, now)))
+        if now.day <= 7 or force:  # first Sunday of the month
+            jobs.append(("sector valuations",
+                         lambda: _sector_values(cfg, research.valuation(df, res).query("date == @end"), sectors, min_adtv, end)))
+    for name, job in jobs:
+        try:
+            if png := job():
+                cards.append(png)
+        except Exception as e:  # noqa: BLE001
+            log.exception("weekly card %s failed", name)
+            notes.append(f"{name} card skipped ({type(e).__name__})")
+    return cards, notes

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 from .common import Alert, arrow, esc, fmt_num, fmt_pct, in_window, link, log, now_pkt, now_utc
@@ -1097,3 +1098,58 @@ def global_moves(mk: dict, state: State, cfg: dict) -> list[Alert]:
     if alerts:
         log.info("global alerts: %d", len(alerts))
     return alerts
+
+
+# ---------------------------------------------------------------- community poll before each SBP decision
+POLL_OPTIONS = ["Cut 1% or more", "Cut less than 1%", "Hold", "Hike"]
+
+
+def _outcome(change: float) -> int:
+    if change <= -0.995:
+        return 0
+    if change < -0.005:
+        return 1
+    if change <= 0.005:
+        return 2
+    return 3
+
+
+def mpc_poll(now, state: State, sender) -> None:
+    """Two days before an MPC decision: post a poll. After the decision: close it and show how the community called it."""
+    from datetime import date
+    polls = state.data.setdefault("mpc_polls", {})
+    pr = (state.snap("sbp") or {}).get("policy_rate")
+    nxt = next_mpc(state, now)
+    if nxt and (nxt - now.date()).days == 2 and now.hour >= 10 and pr is not None:
+        p = polls.setdefault(str(nxt), {"pr": pr, "tries": 0})
+        if not p.get("mid") and p["tries"] < 3:
+            p["tries"] += 1
+            mid = sender.send_poll(f"SBP announces its policy rate decision on {nxt:%A %d %B}. The rate is {pr:.2f}% now. "
+                                   "What will SBP do?", POLL_OPTIONS)
+            if mid is not None and mid >= 0:
+                p.update(mid=mid, pr=pr, opened=int(time.time()))
+    for d, p in list(polls.items()):
+        day = date.fromisoformat(d)
+        if (now.date() - day).days > 60:
+            del polls[d]
+            continue
+        if not p.get("mid") or p.get("closed") or now.date() <= day or now.hour < 9:
+            continue
+        # The decision day has passed. Close once SBP's new rate is in our data; if the rate is unchanged
+        # (a hold, or the website not updated yet), wait until the evening after the decision to be sure.
+        days = (now.date() - day).days
+        if pr is None or (pr == p["pr"] and not (days >= 2 or now.hour >= 18)):
+            continue
+        res = sender.stop_poll(p["mid"])
+        p["closed"] = True
+        if not res or not res["total"]:
+            continue
+        change = pr - p["pr"]
+        right = _outcome(change)
+        lines = [f"{text}: {votes / res['total'] * 100:.0f}%" for text, votes in res["options"]]
+        what = ("held the rate at" if abs(change) < 0.005 else ("cut the rate by" if change < 0 else "raised the rate by"))
+        decision = f"SBP {what} {pr:.2f}%" if abs(change) < 0.005 else f"SBP {what} {abs(change):.2f}% to {pr:.2f}%"
+        called = res["options"][right][1] / res["total"] * 100
+        sender.send(header("📊", "How our community called the SBP decision", f"{day:%d %B %Y}") + "\n"
+                    + "\n".join(lines) + f"\n\n<b>{decision}.</b> {called:.0f}% of {res['total']} voters called it right."
+                    "\n\nThanks for voting. The next poll opens two days before the next decision.")

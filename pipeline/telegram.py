@@ -94,6 +94,41 @@ class Sender:
             ok &= sent
         return ok
 
+    def send_poll(self, question: str, options: list[str]) -> int | None:
+        """Anonymous poll in the channel (first chat). Returns the message id, -1 in a dry run, None on failure."""
+        if self.dry:
+            with open(self.preview, "a", encoding="utf-8") as f:
+                f.write(f"\n{'=' * 60}\n[POLL] {question}\n" + "\n".join(f"  o {o}" for o in options) + "\n")
+            return -1
+        import json as _json
+        try:
+            r = http().post(f"https://api.telegram.org/bot{self.token}/sendPoll", timeout=30, data={
+                "chat_id": self.chats[0], "question": question[:300], "is_anonymous": "true",
+                "options": _json.dumps([{"text": o[:100]} for o in options])})
+            if r.ok:
+                self.sent += 1
+                return r.json()["result"]["message_id"]
+            log.error("Telegram poll error %s: %s", r.status_code, r.text[:200])
+        except Exception as e:  # noqa: BLE001
+            log.warning("Telegram poll failed: %s", e)
+        return None
+
+    def stop_poll(self, message_id: int) -> dict | None:
+        """Close a poll the bot posted; returns {'options': [(text, votes)], 'total': n} or None."""
+        if self.dry or message_id is None or message_id < 0:
+            return None
+        try:
+            r = http().post(f"https://api.telegram.org/bot{self.token}/stopPoll", timeout=30,
+                            data={"chat_id": self.chats[0], "message_id": message_id})
+            if not r.ok:
+                log.error("Telegram stopPoll error %s: %s", r.status_code, r.text[:200])
+                return None
+            p = r.json()["result"]
+            return {"options": [(o["text"], o["voter_count"]) for o in p["options"]], "total": p["total_voter_count"]}
+        except Exception as e:  # noqa: BLE001
+            log.warning("Telegram stopPoll failed: %s", e)
+            return None
+
     def send_admin_photo(self, png: bytes, caption: str = "", name: str = "card") -> bool:
         """Image card to the owner's admin chat only (private research, never the channel)."""
         caption = tidy(caption)

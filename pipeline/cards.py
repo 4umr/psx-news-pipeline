@@ -1267,3 +1267,61 @@ def portfolio_card(cfg: dict, o: dict) -> bytes:
                  title="What it means", h=c.H - 172 - 16 - y)
     c.footer()
     return c.png()
+
+
+def market_health_card(cfg: dict, ctx: dict) -> bytes:
+    """Sunday: how broad is the market? (share of liquid stocks above their 200-day average, highs vs lows)."""
+    c = Card(cfg, "psx")
+    y = c.title_block("Market", "Health check", ctx["label"])
+    y = c.strip(y, ctx["strip"])
+    s = ctx["series"]
+    if len(s) >= 20:
+        c.panel(c.L, y, 1000, 330)
+        c.label(c.L + 30, y + 38, "Share of liquid stocks above their 200-day average", 14)
+        ax = c.axes(c.L + 70, y + 64, 900, 230)
+        ax.fill_between(range(len(s)), s.values * 100, color=UP, alpha=0.10, lw=0)
+        ax.plot(range(len(s)), s.values * 100, color=UP, lw=2.2)
+        ax.axhline(50, color=FLAT, lw=1, ls=(0, (3, 4)))
+        ax.set_ylim(0, 100)
+        ax.set_xlim(0, len(s) - 1)
+        c.text(c.L + 64, y + 70, "100%", 10, c.t["muted"], ha="right")
+        c.text(c.L + 64, y + 179, "50%", 10, c.t["muted"], ha="right")
+        c.text(c.L + 64, y + 290, "0%", 10, c.t["muted"], ha="right")
+        c.text(c.L + 70, y + 312, f"{s.index[0]:%b %Y}", 10.5, c.t["muted"])
+        c.text(c.L + 970, y + 312, f"{s.index[-1]:%d %b %Y}", 10.5, c.t["muted"], ha="right")
+        y += 346
+    y = c.movers(y, ctx["highs"], ctx["lows"], "New 52-week highs", "New 52-week lows", n=4)
+    c.highlights(y, ctx["notes"], title="How to read", h=c.H - 172 - 16 - y)
+    c.footer()
+    return c.png()
+
+
+def payouts_card(cfg: dict, ctx: dict) -> bytes:
+    c = Card(cfg, "psx")
+    y = c.title_block("Payouts", "Coming up", ctx["label"])
+    y = c.grid(y, "Ex-dates: buy before this date to receive the payout", ["Ex-date", "Stock", "Payout", "Price"],
+               ctx["rows"], [30, 190, 790, 970], ["left", "left", "right", "right"], max_rows=15, row_h=40)
+    c.highlights(y, ctx["notes"], title="Good to know", h=c.H - 172 - 16 - y)
+    c.footer()
+    return c.png()
+
+
+def sector_results_card(cfg: dict, ctx: dict) -> bytes:
+    c = Card(cfg, "psx")
+    y = c.title_block("Results season", "By sector", ctx["label"])
+    y = c.strip(y, ctx["strip"])
+    y = c.grid(y, "Results reported this week", ["Sector", "Reported", "Profit up / down", "Typical change"],
+               ctx["rows"], [30, 600, 800, 970], ["left", "right", "right", "right"], max_rows=14, row_h=40)
+    c.highlights(y, ctx["notes"], title="How to read", h=c.H - 172 - 16 - y)
+    c.footer()
+    return c.png()
+
+
+def sector_value_card(cfg: dict, ctx: dict) -> bytes:
+    c = Card(cfg, "psx")
+    y = c.title_block("Sector", "Valuations", ctx["label"])
+    y = c.grid(y, "Median P/E of liquid stocks vs the same sector since 2018", ["Sector", "P/E now", "Usual", "Vs history"],
+               ctx["rows"], [30, 480, 590, 970], ["left", "right", "right", "right"], max_rows=16, row_h=40)
+    c.highlights(y, ctx["notes"], title="How to read", h=c.H - 172 - 16 - y)
+    c.footer()
+    return c.png()

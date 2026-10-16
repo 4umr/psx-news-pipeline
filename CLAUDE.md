@@ -158,6 +158,21 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   4Q -> FY/CY label compared with the quarter EPS. Shown as "beat/missed expected EPS x (source) by y%" in the
   intraday results post and the Results Tracker highlights. Coverage is thin (about 1-2 previews a week).
 
+## Phase 6 (built 2026-10-16): valuation, market health, payouts, sector results, MPC poll
+- scstrade `bm_bc_exp` (book_closures 'date') is the EX-DATE ("xDate" on the page), not the book closure start:
+  labels everywhere now say "ex-date (buy before this date to receive it)".
+- `research.sector_pe/save_sector_history/sector_table`: weekly median trailing P/E per sector of liquid stocks
+  (>= 3 stocks), history saved by the Saturday re-test to `state/sector_pe.csv` (cached + backup).
+- Website: P/E column in the screener, P/E line on company pages (or why not: loss / split-bonus in 2 years),
+  new sectors.html (P/E now vs usual since 2018, "cheaper than x% of weeks").
+- Sunday album (`swing.weekly_extras`, each card independent, failures -> admin note): Market health (share of liquid
+  stocks above 200-day average, 1-year line, 52-week highs/lows this week), Payouts coming up (ex-dates next 15
+  days, liquid first), Results by sector (only if >= 8 results that week), Sector valuations (first Sunday of month).
+  Week return everywhere = this week's close vs last week's close (adjusted).
+- `watchers.mpc_poll` (runner, every run): anonymous channel poll 2 days before each MPC (>= 10:00, max 3 tries);
+  after the decision closes it via stopPoll (waits for the new rate, or the evening after if unchanged) and posts
+  how the community called it. `Sender.send_poll/stop_poll` (InputPollOption format).
+
 ## Data sources that DON'T work (don't retry)
 dps.psx.com.pk/announcements POST (403), SECP & IMF sites (403), APP feeds (403 from GitHub), Profit/Mettis RSS (404),
 Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not shown.
