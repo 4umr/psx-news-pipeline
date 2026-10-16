@@ -91,7 +91,7 @@ def _results_signals(df: pd.DataFrame, sess: pd.Timestamp, since: pd.Timestamp, 
     today = df[df["date"] == sess].set_index("sym")
     todo = []
     for r in scs.results():
-        sym, lab = (r.get("company_code") or "").strip(), (r.get("bm_quarter_number") or "").strip().upper()
+        sym, lab = (r.get("company_code") or "").strip(), earnings.norm_label(r.get("bm_quarter_number") or "")[0]
         if not r.get("date") or sym not in today.index or f"res:{sym}:{lab}" in st["done"]:
             continue
         d = pd.Timestamp(r["date"].strftime("%Y-%m-%d"))
@@ -278,6 +278,56 @@ def radar(cfg: dict, sess: pd.Timestamp, new: list[dict], st: dict, closed: list
 
 
 # ---------------------------------------------------------------- main
+def active_rules(st: dict) -> dict[str, str]:
+    """Rules the scanner may use now -> why not, for the others ('' = on).
+
+    A rule is on only if it is marked live, its latest re-test verdict still qualifies, and its
+    live track record has not failed (see _monitor)."""
+    stats = backtest.load_stats().get("rules", {})
+    out = {}
+    for name, spec in SPECS.items():
+        if not spec.get("live"):
+            continue
+        v = (stats.get(name) or {}).get("verdict", "")
+        if v not in backtest.ACTIVE:
+            out[name] = f"re-test verdict: {v or 'none'}"
+        elif name in st.get("paused", {}):
+            out[name] = st["paused"][name]
+        else:
+            out[name] = ""
+    return out
+
+
+def _band_ok(df: pd.DataFrame, sess: pd.Timestamp) -> bool:
+    """PSX price limits are coded from history (10% since Jun 2024). If several stocks moved beyond the
+    limit today, PSX has probably changed it: circuit-based rules pause until the code is updated."""
+    d = df[(df["date"] == sess) & (df["c"] > 20)]
+    beyond = (d["chg"].abs() > d["limit"] + 0.012).sum()
+    return beyond < 3
+
+
+def _monitor(st: dict, notes: list[str]) -> None:
+    """Live track record per rule. Warn when it falls short of the backtest; pause a rule that keeps failing."""
+    paused = st.setdefault("paused", {})
+    for name, spec in SPECS.items():
+        if not spec.get("live") or name in paused:
+            continue
+        done = [e["edge"] for e in st["log"] if e["sig"] == name and e["status"] == "closed"]
+        if len(done) < 20:
+            continue
+        avg = sum(done) / len(done)
+        failing = avg < 0 if spec["kind"] == "long" else avg > 0
+        if not failing:
+            continue
+        if len(done) >= 40 and abs(avg) >= 0.01:
+            paused[name] = f"paused: live record {avg * 100:+.1f}% vs similar stocks over {len(done)} cases"
+            notes.append(f"{spec['name']} is now PAUSED: after {len(done)} live cases it did {avg * 100:+.1f}% vs "
+                         "similar stocks, the opposite of the backtest.")
+        else:
+            notes.append(f"Watch: {spec['name']} has done {avg * 100:+.1f}% vs similar stocks over {len(done)} live "
+                         "cases, weaker than the backtest. It pauses itself if this continues to 40 cases.")
+
+
 def scan(cfg: dict, dry: bool = False, force: bool = False) -> None:
     from .telegram import Sender
     sw = cfg.get("swing", {})
@@ -285,9 +335,16 @@ def scan(cfg: dict, dry: bool = False, force: bool = False) -> None:
         return
     min_adtv = float(sw.get("min_adtv", 10e6))
     now = now_pkt()
+    s = Sender(dry)
+    started_fresh = not LOG_PATH.exists()
     raw = prices.update_live(now)
     if raw.empty:
         log.warning("swing: no price data")
+        s.send_admin("<b>Swing scanner check</b>\nNo price data could be loaded today (scstrade). It retries automatically.")
+        return
+    if raw.attrs.get("stale"):
+        s.send_admin("<b>Swing scanner check</b>\nToday's prices could not be loaded completely (scstrade). "
+                     "The database was not changed; the next run retries.")
         return
     sess = raw["date"].max()
     st = _load()
@@ -297,27 +354,164 @@ def scan(cfg: dict, dry: bool = False, force: bool = False) -> None:
     if sess < pd.Timestamp(now.strftime("%Y-%m-%d")) - pd.Timedelta(days=4) and not force:
         log.info("swing: latest session %s is old (holiday?), nothing to scan", sess.date())
         return
+    notes: list[str] = []
+    if started_fresh:
+        notes.append("Swing log started fresh (no saved data was found). Earlier open ideas, if any, are not tracked.")
+    n_today = int((raw["date"] == sess).sum())
+    if n_today < 250:
+        notes.append(f"Only {n_today} stocks have prices for {sess:%d %b}; the data source may be incomplete today.")
     meta = prices.meta(sorted(raw["sym"].unique()))
+    if sum(1 for m in meta.values() if m.get("shares")) < 0.8 * raw["sym"].nunique():
+        notes.append("Company share counts are missing for many stocks (PSX pages); size groups may be wrong today.")
     df = features(prices.adjust(raw), meta)
+    on = active_rules(st)
+    if not _band_ok(df, sess):
+        for name in ("lower_lock", "upper_lock2"):
+            if name in on and not on[name]:
+                on[name] = "paused today: PSX price limit looks different from 10%"
+        notes.append("Several stocks moved beyond the 10% price limit today: has PSX changed the limit? "
+                     "Circuit-based rules are paused until the code is checked.")
+    use = {k for k, why in on.items() if not why}
+    if not use:
+        notes.append("All swing rules are switched off (re-test verdicts or live record). No new signals until one qualifies again.")
     since = pd.Timestamp(st.get("last_scan") or sorted(df["date"].unique())[-2])
     new: list[dict] = []
-    for part in (lambda: _price_signals(df, sess, min_adtv),
-                 lambda: _results_signals(df, sess, since, min_adtv, st),
-                 lambda: _pre_results(df, sess, min_adtv, st)):
+    groups = [("price rules", lambda: _price_signals(df, sess, min_adtv)),
+              ("results rules", lambda: _results_signals(df, sess, since, min_adtv, st))]
+    if "pre_results_risk" in use:
+        groups.append(("pre-results rule", lambda: _pre_results(df, sess, min_adtv, st)))
+    for label, part in groups:
         try:
             new += part()
         except Exception as e:  # noqa: BLE001  one failing source must not stop the scan
-            log.exception("swing: rule group failed: %s", e)
+            log.exception("swing: %s failed", label)
+            notes.append(f"{label} failed today ({type(e).__name__}); the other rules still ran.")
+    new = [e for e in new if e["sig"] in use]
     new = fresh(new, st["log"], sorted(df["date"].unique()))
     st["log"].extend(new)
-    closed = _track(st, df, min_adtv)
-    log.info("swing: %s, %d new signals, %d closed", sess.date(), len(new), len(closed))
-    weekly = sess.dayofweek == 4
-    if new or closed or weekly or force:
+    try:
+        closed = _track(st, df, min_adtv)
+    except Exception as e:  # noqa: BLE001
+        log.exception("swing: tracking failed")
+        notes.append(f"Tracking of open ideas failed today ({type(e).__name__}).")
+        closed = []
+    _monitor(st, notes)
+    off = [f"{SPECS[k]['name']}: {why}" for k, why in on.items() if why]
+    log.info("swing: %s, %d new signals, %d closed, rules off: %s", sess.date(), len(new), len(closed), off or "none")
+    if new or closed or sess.dayofweek == 4 or force:
         cards, text = radar(cfg, sess, new, st, closed)
-        s = Sender(dry)
         for i, png in enumerate(cards, 1):
             s.send_admin_photo(png, "Swing Radar" if i == 1 else "", name=f"swing_{i}")
+        if off:
+            text += "\n\n<b>Rules switched off</b>\n" + "\n".join(esc(x) for x in off)
         s.send_admin(text)
+    if notes:
+        s.send_admin("<b>Swing scanner check</b>\n" + "\n".join(esc(n) for n in notes))
     st["last_scan"] = f"{sess:%Y-%m-%d}"
     _save(st)
+
+
+# ---------------------------------------------------------------- Sunday public cards (data only)
+def _no_recent_filing(syms: list[str], days: int = 14) -> set[str]:
+    from .sources import psx
+    cut = f"{now_pkt() - timedelta(days=days):%Y-%m-%d}"
+    with ThreadPoolExecutor(6) as ex:
+        pages = dict(zip(syms, ex.map(psx.company, syms)))
+    return {s for s, p in pages.items() if p is not None and not any(f["date"] >= cut for f in p["filings"])}
+
+
+def weekly(cfg: dict, dry: bool = False, force: bool = False) -> None:
+    """Sunday: 'Mid & small caps this week' + 'Results week ahead' to the public channel."""
+    from .cards import _p, _col, weekly_cards
+    from .telegram import Sender
+    now = now_pkt()
+    st = _load()
+    week_id = f"{now:%G-W%V}"
+    if st.get("weekly") == week_id and not force:
+        log.info("weekly cards already posted for %s", week_id)
+        return
+    min_adtv = float(cfg.get("swing", {}).get("min_adtv", 10e6))
+    raw = prices.update_live(now)
+    meta = prices.meta(sorted(raw["sym"].unique()))
+    df = features(prices.adjust(raw), meta)
+    sessions = sorted(df["date"].unique())
+    wk = pd.Series(sessions).dt.to_period("W")
+    this_week = [s for s, w in zip(sessions, wk) if w == wk.iloc[-1]]
+    if not this_week or (pd.Timestamp(now.strftime("%Y-%m-%d")) - pd.Timestamp(this_week[-1])).days > 6:
+        log.info("weekly: no session this week")
+        return
+    end, start = pd.Timestamp(this_week[-1]), pd.Timestamp(sessions[sessions.index(this_week[0]) - 1])
+    last = df[df["date"] == end].set_index("sym")
+    prev = df[df["date"] == start].set_index("sym")["ac"]
+    pool = last[(last["adtv20"] >= min_adtv) & last["tier"].isin(["Mid", "Small", "Micro"])].copy()
+    pool["wk"] = (pool["ac"] / prev.reindex(pool.index) - 1) * 100
+    pool = pool.dropna(subset=["wk"])
+    big = last[last["tier"] == "Large"].copy()
+    big_wk = ((big["ac"] / prev.reindex(big.index) - 1) * 100).dropna()
+    up, down = int((pool["wk"] > 0).sum()), int((pool["wk"] < 0).sum())
+    strip = [("Liquid mid & small", str(len(pool)), None), ("Up / down", f"{up} / {down}", None),
+             ("Typical move", f"{pool['wk'].median():+.1f}%", _col(pool["wk"].median()))]
+    if len(big_wk):
+        strip.append(("Large caps typical", f"{big_wk.median():+.1f}%", _col(big_wk.median())))
+    srt = pool.sort_values("wk")
+    gain = [(s, float(v)) for s, v in srt["wk"][::-1].head(5).items() if v > 0]
+    lose = [(s, float(v)) for s, v in srt["wk"].head(5).items() if v < 0]
+    # trading value this week vs the 4 weeks before
+    wk_rows = df[df["date"].isin(this_week)].groupby("sym")["val"].mean()
+    before = df[(df["date"] < this_week[0]) & (df["date"] >= sessions[max(0, sessions.index(this_week[0]) - 20)])]
+    usual = before.groupby("sym")["val"].mean()
+    ratio = (wk_rows / usual).reindex(pool.index).dropna().sort_values(ascending=False)
+    active = [(s, pool.at[s, "tier"], f"{x:.1f}x", (_p(pool.at[s, "wk"] / 100), _col(pool.at[s, "wk"])))
+              for s, x in ratio.head(5).items() if x >= 1.5]
+    movers = [s for s in pool.index if abs(pool.at[s, "wk"]) >= 15][:10]
+    quiet = []
+    if movers:
+        for s in sorted(_no_recent_filing(movers), key=lambda s: -abs(pool.at[s, "wk"])):
+            quiet.append((s, f"{pool.at[s, 'wk']:+.1f}% this week", "No company filing on PSX in the last 2 weeks. "
+                          "Check the facts before acting on rumours.", f"Rs {pool.at[s, 'c']:,.2f}", pool.at[s, "wk"]))
+    notes = ["Mid and small caps: stocks ranked 31st and below by market value, trading Rs 10m+ a day.",
+             "Week = last close of the previous week to this week's close; dividends and bonuses included."]
+    # Results week ahead: board meetings in the next 7 days for liquid stocks
+    nxt = now + timedelta(days=(7 - now.weekday()) % 7 or 7)
+    s0 = pd.Timestamp(nxt.strftime("%Y-%m-%d"))
+    meetings = {}
+    for b in scs.board_meetings():
+        sym = (b.get("company_code") or "").strip()
+        if not b.get("date") or sym not in last.index or last.at[sym, "adtv20"] < min_adtv:
+            continue
+        d = pd.Timestamp(b["date"].strftime("%Y-%m-%d"))
+        if s0 <= d < s0 + pd.Timedelta(days=7):
+            meetings[sym] = min(meetings.get(sym, d), d)
+    cal, n_more = [], 0
+    if meetings:
+        with ThreadPoolExecutor(6) as ex:
+            last_res = dict(zip(meetings, ex.map(lambda s: earnings.assess(s), meetings)))
+        order = sorted(meetings, key=lambda s: (meetings[s], -(last.at[s, "mcap"] if pd.notna(last.at[s, "mcap"]) else 0)))
+        for s in order:
+            a = last_res.get(s)
+            txt, chg = "no earlier result found", ""
+            if a and pd.notna(a["eps"]):
+                txt = f"{a['label']}: EPS {a['eps']:.2f}" + (f" vs {a['eps_ly']:.2f}" if pd.notna(a["eps_ly"]) else "")
+                if a["yoy"] is not None:
+                    chg = (f"{a['yoy'] * 100:+,.0f}%" if abs(a["yoy"]) >= 1 else _p(a["yoy"]), _col(a["yoy"]))
+                elif a["turnaround"]:
+                    chg = ("Profit", _col(1))
+                elif a["eps"] < 0:
+                    chg = ("Loss", _col(-1))
+            cal.append((f"{meetings[s]:%a %d}", s, txt, chg))
+        n_more = max(0, len(cal) - 17)
+    cal_notes = ["Board meeting dates from PSX notices; most are for quarterly results.",
+                 "Last result = the latest announcement, compared with the same period a year earlier."]
+    if n_more:
+        cal_notes.insert(0, f"{n_more} more liquid companies also meet next week.")
+    ctx = {"label": f"Week ending {end:%d %b %Y}", "strip": strip, "gain": gain, "lose": lose, "active": active,
+           "quiet": quiet, "notes": notes, "calendar": cal, "cal_notes": cal_notes,
+           "cal_label": f"Week of {s0:%d %b %Y}"}
+    cards = weekly_cards(cfg, ctx)
+    caption = (f"<b>Mid and small caps this week</b> · week ending {end:%d %b}"
+               + (f"\n<b>Results due next week</b>: {len(cal)} liquid companies" if cal else "")
+               + "\nData only, not investment advice.")
+    s = Sender(dry)
+    if s.send_album(cards, caption, name="weekly_midsmall"):
+        st["weekly"] = week_id
+        _save(st)

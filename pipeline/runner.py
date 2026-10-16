@@ -492,7 +492,7 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
     alerts += S("PSX filings", watchers.psx_filings, now, state, cfg, view_now, default=[])
     alerts += S("unusual volume", watchers.unusual_volume, now, state, cfg, kse_symbols, default=[])
     alerts += S("SBP changes", watchers.sbp_changes, sbp_snap, state, default=[])
-    alerts += S("corporate results", watchers.corporate_results, f_res.result(), state, kse_symbols, default=[])
+    alerts += S("corporate results", watchers.corporate_results, f_res.result(), state, kse_symbols, cfg, default=[])
     alerts += S("FIPI", watchers.fipi_alert, now, state, default=[])
     kse_alerts, view = S("KSE moves", watchers.kse_moves, now, state, cfg, default=([], []))
     alerts += kse_alerts

@@ -174,7 +174,38 @@ def _auction_card(name: str, n: dict, o: dict, pr: float | None) -> dict:
 
 
 # ---------------------------------------------------------------- results
-def corporate_results(rows: list[dict], state: State, kse100: set[str]) -> list[Alert]:
+def avg_values(state: State, act: dict[str, dict], n: int = 10) -> dict[str, float]:
+    """Average daily traded value (Rs) per stock: recorded volumes of the last sessions x today's price."""
+    daily = state.data.get("daily", {})
+    vols = [daily[d]["vol"] for d in sorted(daily) if daily[d].get("vol")][-n:]
+    out = {}
+    for code, r in act.items():
+        px = r.get("trading_close") or 0
+        past = [v.get(code, 0) for v in vols]
+        if past and px:
+            out[code] = sum(past) / len(past) * px
+    return out
+
+
+def _assess_all(rows: list[dict]) -> dict[str, dict]:
+    """Results vs the same period last year for each announcement (company results history)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from . import earnings
+
+    def one(r):
+        try:
+            return earnings.assess(r.get("company_code") or "", r.get("bm_quarter_number") or "")
+        except Exception as e:  # noqa: BLE001
+            log.warning("results history %s failed: %s", r.get("company_code"), e)
+            return None
+    todo = [r for r in rows if (r.get("bm_quarter_number") or "").strip()]
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        return {r["company_code"]: a for r, a in zip(todo, ex.map(one, todo)) if a}
+
+
+def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dict | None = None) -> list[Alert]:
+    from . import earnings
     cutoff = now_pkt() - timedelta(days=4)
     fresh = []
     for r in rows:
@@ -189,48 +220,106 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str]) -> list[
         return []
     fresh.sort(key=lambda r: (r.get("company_code") not in kse100, r.get("company_code") or ""))
     limit = 25
+    try:
+        act = {r["company_code"]: r for r in scs.daily_activity() if r.get("company_code")}
+    except Exception:  # noqa: BLE001
+        act = {}
+    yoy = _assess_all(fresh[:limit])
+
+    def move(code):
+        r = act.get(code) or {}
+        c, ch = r.get("trading_close"), r.get("trading_change")
+        return ch / (c - ch) * 100 if c and ch is not None and c - ch else None
+
     lines = []
     for r in fresh[:limit]:
         code = r.get("company_code", "")
-        star = "⭐" if code in kse100 else "▫️"
         bits = []
-        if r.get("bm_eps_quarter"):
+        a = yoy.get(code)
+        if a:
+            line = earnings.eps_line(a)
+            bits.append(line[:1].upper() + line[1:])
+        elif r.get("bm_eps_quarter"):
             eps = f"EPS {r['bm_eps_quarter']}"
             if r.get("bm_eps_cum") and r["bm_eps_cum"] != r["bm_eps_quarter"]:
                 eps += f" (cum {r['bm_eps_cum']})"
             bits.append(eps)
         if r.get("bm_dividend", "").strip():
-            bits.append(f"💰Div {esc(r['bm_dividend'].strip())}")
+            bits.append(f"Div {esc(r['bm_dividend'].strip())}")
         if r.get("bm_bonus", "").strip():
-            bits.append(f"🎁Bonus {esc(r['bm_bonus'].strip())}")
+            bits.append(f"Bonus {esc(r['bm_bonus'].strip())}")
         if r.get("bm_right_per", "").strip():
             bits.append(f"Right {esc(r['bm_right_per'].strip())}")
+        if (pm := move(code)) is not None:
+            bits.append(f"stock {pm:+.1f}% today")
         period = esc(r.get("bm_quarter_number") or "")
-        doc = link(r["bm_PDFLink"], "📄") if r.get("bm_PDFLink") else ""
-        yoy = _fy_yoy(code, r) if code in kse100 else ""
-        lines.append(f"{star}<b>{esc(code)}</b> {period}: {' · '.join(bits) or 'see filing'}{yoy} {doc}".rstrip())
-    more = f"\n…and {len(fresh) - limit} more" if len(fresh) > limit else ""
+        doc = link(r["bm_PDFLink"], "filing") if r.get("bm_PDFLink") else ""
+        tag = " (KSE-100)" if code in kse100 else ""
+        lines.append(f"<b>{esc(code)}</b>{tag} {period}: {' · '.join(bits) or 'see filing'}" + (f" · {doc}" if doc else ""))
+    more = f"\n...and {len(fresh) - limit} more" if len(fresh) > limit else ""
     has_major = any(r.get("company_code") in kse100 for r in fresh)
     text = (header("📊", "Corporate Results & Payouts", f"{len(fresh)} new announcement(s)") + "\n"
-            f"⭐ KSE-100 company · EPS in Rs · 📄 PSX filing\n\n" + "\n".join(lines) + more +
-            f"\n\n🔗 {link(SCS_URL + 'MarketStatistics/MS_Announcements.aspx', 'SCS Trade')} · filings from PSX")
-    rows, links = [], []
+            "EPS in Rs, compared with the same period last year\n\n" + "\n".join(lines) + more +
+            f"\n\n{link(SCS_URL + 'MarketStatistics/MS_Announcements.aspx', 'SCS Trade')} · filings from PSX")
+    rows_, links = [], []
     for r in fresh[:12]:
         code = r.get("company_code", "")
+        a = yoy.get(code)
         bits = [f"EPS {r['bm_eps_quarter']}" if r.get("bm_eps_quarter") else ""]
+        if a and not pd_isna(a["eps_ly"]):
+            bits = [f"EPS {a['eps']:.2f} vs {a['eps_ly']:.2f}"]
         bits += [f"Div {r['bm_dividend'].strip()}" if (r.get("bm_dividend") or "").strip() else "",
                  f"Bonus {r['bm_bonus'].strip()}" if (r.get("bm_bonus") or "").strip() else ""]
-        rows.append((code, f"{r.get('bm_quarter_number') or ''} · " + (" · ".join(b for b in bits if b) or "see filing"),
-                     "KSE-100" if code in kse100 else "", None))
+        right, sign = ("KSE-100" if code in kse100 else ""), None
+        if a and a["yoy"] is not None:
+            right, sign = f"{a['yoy'] * 100:+.0f}% YoY", a["yoy"]
+        elif a and a["turnaround"]:
+            right, sign = "Back to profit", 1
+        elif a and a["to_loss"]:
+            right, sign = "Loss", -1
+        rows_.append((code, f"{r.get('bm_quarter_number') or ''} · " + (" · ".join(b for b in bits if b) or "see filing"),
+                      right, sign))
         if r.get("bm_PDFLink"):
             links.append((code, r["bm_PDFLink"]))
     card = {"theme": "psx", "kicker": "Corporate results & payouts",
             "title": f"{len(fresh)} new result / payout announcement(s)",
-            "rows_title": "Company · period · EPS (Rs) · payout", "rows": rows,
-            "why": "Results and payouts move individual stocks and their sector peers — open the filing for details.",
+            "rows_title": "Company · period · EPS (Rs) vs last year", "rows": rows_,
+            "why": "Results and payouts move individual stocks and their sector peers. Open the filing for details.",
             "source": "PSX filings via SCS Trade", "links": links}
-    return [Alert(text, 8 if has_major else 7, "results", tags=["Results", "Dividends", "Corporate"],
-                  extra={"card": card})]
+    out = [Alert(text, 8 if has_major else 7, "results", tags=["Results", "Dividends", "Corporate"],
+                 extra={"card": card})]
+    out += _results_hits(fresh[:limit], yoy, act, state, kse100, cfg or {}, move)
+    return out
+
+
+def pd_isna(x) -> bool:
+    return x is None or x != x
+
+
+def _results_hits(rows, yoy, act, state: State, kse100: set[str], cfg: dict, move) -> list[Alert]:
+    """Private: liquid companies with a big profit jump, as soon as the result is out (admin chat only).
+
+    The tested rule (Swing Radar) also needs the stock to close 3%+ higher on the day, so this is
+    an early heads-up, not the signal itself.
+    """
+    from . import earnings
+    min_val = float((cfg.get("swing") or {}).get("min_adtv", 10e6))
+    values = avg_values(state, act)
+    hits = []
+    for r in rows:
+        code = r.get("company_code", "")
+        a = yoy.get(code)
+        if not a or a["cls"] not in earnings.GOOD or values.get(code, 0) < min_val:
+            continue
+        pm = move(code)
+        hits.append(f"<b>{esc(code)}</b>{' (KSE-100)' if code in kse100 else ''} {esc(a['label'])}: "
+                    f"{esc(earnings.eps_line(a))}" + (f"; stock {pm:+.1f}% so far today" if pm is not None else ""))
+    if not hits:
+        return []
+    text = ("<b>Results hit</b> (private)\n\n" + "\n".join(hits) +
+            "\n\nBig profit jump vs last year in a liquid stock. The tested rule also needs a close 3%+ higher today "
+            "(mid and small caps); tonight's Swing Radar confirms it.")
+    return [Alert(text, 9, "resultshit", admin=True)]
 
 
 def eps_yoy(code: str, r: dict) -> tuple[float, float, float | None] | None:
@@ -746,15 +835,27 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
     ranked = [r["company_code"] for r in sorted(view, key=lambda r: -(r.get("IndexWeightCur") or 0))]
     if not ranked:
         return []
+    # then every other liquid stock (mid and small caps), most traded first
+    act: dict[str, dict] = {}
+    try:
+        act = {r["company_code"]: r for r in scs.daily_activity() if r.get("company_code")}
+        min_val = float((cfg.get("swing") or {}).get("min_adtv", 10e6))
+        vals = avg_values(state, act)
+        ranked += [c for c, v in sorted(vals.items(), key=lambda x: -x[1]) if v >= min_val and c not in ranked]
+    except Exception as e:  # noqa: BLE001  KSE-100 rotation still works without it
+        log.warning("liquid stock list for filings failed: %s", e)
     per_run = cfg.get("psx_filings_per_run", 30)
     cur = state.data.get("psx_cursor", 0) % len(ranked)
     batch = (ranked + ranked)[cur:cur + per_run]
     state.data["psx_cursor"] = cur + per_run
     symbols = list(dict.fromkeys(wl + ranked[:10] + batch))  # top-10 weights checked every run
+    kse_set = {r["company_code"] for r in view}
     with ThreadPoolExecutor(max_workers=8) as ex:
         pages = [p for p in ex.map(psx.company, symbols) if p]
     known = set(state.data.setdefault("psx_known", []))
-    px = {r["company_code"]: r for r in view}
+    px = {c: {"CurrentPrice": r["trading_close"], "LDCP": r["trading_close"] - r["trading_change"]}
+          for c, r in act.items() if r.get("trading_close") and r.get("trading_change") is not None}
+    px.update({r["company_code"]: r for r in view})
     fresh = []
     since = f"{now - timedelta(days=2):%Y-%m-%d}"
     for p in pages:
@@ -774,6 +875,16 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
     state.data["psx_known"] = sorted(known)
     if not fresh:
         return []
+    # Keep a log of insider dealings and material information with the price at the time, so these
+    # events can be tested later (PSX pages only show a few recent filings, so history must be collected)
+    ev = state.data.setdefault("events", [])
+    for sym, f in fresh:
+        kind = "insider" if re.search(r"disclosure of interest|transaction in shares|director", f["title"], re.I)             else ("material" if "material" in f["title"].lower() else "")
+        r = px.get(sym, {})
+        if kind:
+            ev.append({"d": f["date"], "t": f"{now:%Y-%m-%d %H:%M}", "sym": sym, "kind": kind, "title": f["title"][:160],
+                       "px": r.get("CurrentPrice"), "url": f["url"]})
+    state.data["events"] = ev[-1500:]
     lines, done = [], set()
     for sym, f in fresh:
         if (sym, f["title"].lower()) in done:  # same notice filed twice (e.g. daily buy-back reports)
@@ -784,7 +895,7 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
         if r.get("CurrentPrice") and r.get("LDCP"):
             pct = (r["CurrentPrice"] / r["LDCP"] - 1) * 100
             price = f" · Rs {r['CurrentPrice']:,.2f} ({pct:+.1f}%)"
-        star = "👁️" if sym in wl else "⭐"
+        star = "👁️" if sym in wl else ("⭐" if sym in kse_set else "▫️")
         title = f["title"]
         if re.search(r"disclosure of interest", title, re.I):
             title = "👤 Insider dealing disclosure (director / executive / major shareholder traded shares)"

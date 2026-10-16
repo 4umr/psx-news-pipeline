@@ -47,31 +47,44 @@ def main() -> None:
     sw = sub.add_parser("swing", help="daily swing scanner after the close (admin chat only)")
     sw.add_argument("--dry-run", action="store_true")
     sw.add_argument("--force", action="store_true", help="scan again even if this session was already scanned")
+    sw.add_argument("--weekly", action="store_true", help="Sunday public cards: mid & small caps + results week ahead")
     bt = sub.add_parser("backtest", help="test the swing rules on PSX history since 2018")
     bt.add_argument("--refresh", action="store_true", help="download the full history again")
     bt.add_argument("--send", action="store_true", help="send the report cards to the admin chat")
+    bt.add_argument("--notify-changes", action="store_true", help="send the report only if a live rule's verdict changed")
     args = p.parse_args()
 
     if args.cmd in ("swing", "backtest"):
         cfg = load_config()
         if args.cmd == "swing":
-            from .swing import scan
-            scan(cfg, args.dry_run, args.force)
+            from .swing import scan, weekly
+            if args.weekly:
+                weekly(cfg, args.dry_run, args.force)
+            else:
+                scan(cfg, args.dry_run, args.force)
         else:
             from . import backtest
             from .cards import backtest_cards
             from .common import ROOT
+            before = backtest.load_stats()
             summary, _ = backtest.run(cfg, args.refresh)
+            changes = backtest.verdict_changes(before, backtest.load_stats())
             pngs = backtest_cards(cfg, summary, backtest.load_stats())
             out = ROOT / "out" / "backtest"
             for i, png in enumerate(pngs, 1):
                 (out / f"report_{i}.png").write_bytes(png)
-            print(f"Report: {len(pngs)} cards in {out}")
-            if args.send:
-                from .telegram import Sender
+            from .cards import education_card
+            (out / "education.png").write_bytes(education_card(cfg, summary, backtest.load_stats()))
+            print(f"Report: {len(pngs)} cards + education.png in {out}")
+            from .telegram import Sender
+            if args.send or (args.notify_changes and changes):
                 s = Sender()
+                if changes:
+                    s.send_admin("<b>Swing rules re-test: verdicts changed</b>\n" + "\n".join(changes) +
+                                 "\n\nThe scanner follows the new verdicts automatically.")
                 for i, png in enumerate(pngs, 1):
                     s.send_admin_photo(png, "Swing rules backtest" if i == 1 else "", name=f"backtest_{i}")
+            print("Verdict changes: " + ("; ".join(changes) if changes else "none"))
         return
 
     from .runner import run_once

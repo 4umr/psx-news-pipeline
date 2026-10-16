@@ -801,8 +801,6 @@ def opening(cfg: dict, state: State, mk: dict, view=None):
 
 def results(cfg: dict, state: State, mk: dict, view=None):
     """Results-season tracker (evening): today's results, EPS vs last year, season tally."""
-    from concurrent.futures import ThreadPoolExecutor
-
     now = now_pkt()
     today = now.date()
     rows = [r for r in scs.results() if r.get("date") and r["date"].date() == today]
@@ -824,22 +822,45 @@ def results(cfg: dict, state: State, mk: dict, view=None):
     n_kse = sum(1 for b in items if b["code"] in kse)
     if n_kse == 0 and len(items) < 5:
         return None, None, ""  # quiet day: nothing worth a tracker post
-    major = [b for b in items if b["code"] in kse and b["per"]][:15]
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        yoy = dict(zip([b["code"] for b in major], ex.map(lambda b: w.eps_yoy(b["code"], b["raw"]), major)))
+    # Same period last year from each company's results history (all companies, not only KSE-100)
+    from . import earnings
+    assessed = w._assess_all([b["raw"] for b in items if b["per"]][:40])
+    try:
+        act = {r["company_code"]: r for r in scs.daily_activity() if r.get("company_code")}
+    except Exception:  # noqa: BLE001
+        act = {}
+
+    def move(code):
+        r = act.get(code) or {}
+        c, ch = r.get("trading_close"), r.get("trading_change")
+        return ch / (c - ch) * 100 if c and ch is not None and c - ch else None
+
     season = state.data.setdefault("season", {})
-    for b in major:
-        if res := yoy.get(b["code"]):
-            season[b["code"]] = {"d": f"{today}", "per": b["per"], "eps": res[0], "prev": res[1], "yoy": res[2]}
+    for b in items:
+        if (a := assessed.get(b["code"])) and a["yoy"] is not None:
+            season[b["code"]] = {"d": f"{today}", "per": b["per"], "eps": a["eps"], "prev": a["eps_ly"],
+                                 "yoy": a["yoy"] * 100, "kse": b["code"] in kse}
     cutoff = f"{today - timedelta(days=60)}"
     for c in [c for c, v in season.items() if v["d"] < cutoff]:
         del season[c]
     table = []
     for b in items:
-        res = yoy.get(b["code"])
-        mid = " · ".join(x for x in (b["per"], f"EPS {b['eps']}" if b["eps"] else "", " ".join(b["pay"])) if x)
-        right = (f"{res[2]:+.0f}%" if res and res[2] is not None else (f"LY {res[1]:.2f}" if res else ""))
-        table.append((b["code"], mid or "see filing", right, res[2] if res and res[2] is not None else None))
+        a = assessed.get(b["code"])
+        eps = f"EPS {a['eps']:.2f} vs {a['eps_ly']:.2f}" if a and a["eps_ly"] == a["eps_ly"] and a["eps"] == a["eps"] \
+            else (f"EPS {b['eps']}" if b["eps"] else "")
+        pm = move(b["code"])
+        mid = " · ".join(x for x in (b["per"], eps, " ".join(b["pay"]), f"stock {pm:+.1f}%" if pm is not None else "") if x)
+        if a and a["yoy"] is not None:
+            right, sign = f"{a['yoy'] * 100:+.0f}%", a["yoy"]
+        elif a and a["turnaround"]:
+            right, sign = "Profit", 1
+        elif a and a["to_loss"]:
+            right, sign = "Loss", -1
+        elif a and a["eps"] < 0:
+            right, sign = "Still loss", -1
+        else:
+            right, sign = "", None
+        table.append((b["code"], mid or "see filing", right, sign))
     grew = [(c, v["yoy"]) for c, v in season.items() if v.get("yoy") is not None]
     up = sum(1 for _, p in grew if p > 0)
     stats = [("Reported today", str(len(items)), None), ("KSE-100 names", str(n_kse), None),
@@ -848,18 +869,20 @@ def results(cfg: dict, state: State, mk: dict, view=None):
         from .cards import DOWN, UP
         stats.append(("Season: EPS up", f"{up} of {len(grew)}", UP if up >= len(grew) - up else DOWN))
     hl = []
-    today_yoy = sorted([(b["code"], yoy[b["code"]][2]) for b in major
-                        if yoy.get(b["code"]) and yoy[b["code"]][2] is not None], key=lambda x: -x[1])
+    today_yoy = sorted([(c, a["yoy"] * 100) for c, a in assessed.items() if a["yoy"] is not None], key=lambda x: -x[1])
     if today_yoy:
         hl.append(f"Strongest EPS growth today: {today_yoy[0][0]} {today_yoy[0][1]:+.0f}% vs last year")
         if today_yoy[-1][1] < 0:
             hl.append(f"Weakest: {today_yoy[-1][0]} {today_yoy[-1][1]:+.0f}% vs last year")
+    agree = [c for c, a in assessed.items() if a["cls"] in earnings.GOOD and (move(c) or 0) >= 3]
+    if agree:
+        hl.append("Profit up strongly and the stock rose 3%+ today: " + ", ".join(agree[:8]))
     pays = [b for b in items if b["pay"]]
     if pays:
         hl.append("Payouts announced: " + ", ".join(f"{b['code']} ({' '.join(b['pay'])})" for b in pays[:5]))
     if grew:
-        hl.append(f"Season so far (KSE-100, last 60 days): {up} of {len(grew)} companies grew EPS vs last year")
-    hl.append("EPS in Rs. Growth compares with the same period last year from PSX company data.")
+        hl.append(f"Season so far (last 60 days): {up} of {len(grew)} companies grew EPS vs last year")
+    hl.append("EPS in Rs vs the same period last year (quarter for quarterly results, full year for annual).")
     text = (header("📊", "Results Tracker", f"{now:%A, %d %B %Y}") + "\n"
             + "\n".join(f"{esc(code)}: {esc(mid)}" + (f" ({esc(right)} YoY)" if right and "%" in right else "")
                         for code, mid, right, _ in table[:25]) + footer(cfg))

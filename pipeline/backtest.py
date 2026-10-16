@@ -26,7 +26,10 @@ from .common import ROOT, log
 from .signals import SIGNALS, events, features
 
 OUT = ROOT / "out" / "backtest"
-STATS_PATH = ROOT / "pipeline" / "swing_stats.json"
+STATS_PATH = ROOT / "pipeline" / "swing_stats.json"      # committed: the result of the research
+LIVE_STATS_PATH = ROOT / "state" / "swing_stats.json"    # refreshed by the weekly re-test in GitHub Actions
+# Verdicts that keep a rule switched on. If a re-test moves a rule out of these, the scanner stops using it.
+ACTIVE = {"Works", "Promising", "Reliable warning", "Weak warning"}
 HORIZONS = (4, 5, 10, 20, 40, 60)
 YEARS = [str(y) for y in range(2018, 2027)]
 DEFAULT_COST = {"Large": 0.005, "Mid": 0.006, "Small": 0.009, "Micro": 0.013, "n/a": 0.013}
@@ -153,11 +156,33 @@ def save_stats(summary: pd.DataFrame, df: pd.DataFrame, n_syms: int) -> None:
             "avg": round(float(r["avg"]), 4), "edge": round(float(r["edge"]), 4),
             "med_edge": round(float(r["med_edge"]), 4), "t": round(float(r["t"]), 2) if pd.notna(r["t"]) else None,
             "p10": round(float(r["p10"]), 4), "verdict": r["verdict"]}
-    STATS_PATH.write_text(json.dumps(out, indent=1), encoding="utf-8")
+    out["tested"] = datetime.now().strftime("%Y-%m-%d")
+    for path in (STATS_PATH, LIVE_STATS_PATH):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(out, indent=1), encoding="utf-8")
 
 
 def load_stats() -> dict:
-    try:
-        return json.loads(STATS_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"rules": {}}
+    """Latest track record: the weekly re-test if there is one, else the committed research result."""
+    for path in (LIVE_STATS_PATH, STATS_PATH):
+        try:
+            d = json.loads(path.read_text(encoding="utf-8"))
+            if d.get("rules"):
+                return d
+        except (OSError, json.JSONDecodeError):
+            continue
+    return {"rules": {}}
+
+
+def verdict_changes(old: dict, new: dict) -> list[str]:
+    """Plain-language list of live rules whose verdict changed between two re-tests."""
+    out = []
+    for name, spec in SPECS.items():
+        if not spec.get("live"):
+            continue
+        a = (old.get("rules", {}).get(name) or {}).get("verdict")
+        b = (new.get("rules", {}).get(name) or {}).get("verdict")
+        if a and b and a != b:
+            state = "switched OFF" if b not in ACTIVE else ("switched ON" if a not in ACTIVE else "still on")
+            out.append(f"{spec['name']}: {a} -> {b} ({state})")
+    return out

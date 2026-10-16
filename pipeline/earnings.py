@@ -75,7 +75,9 @@ def fetch_all(symbols: list[str], workers: int = 8) -> pd.DataFrame:
 
 
 def load_all(symbols: list[str], refresh: bool = False) -> pd.DataFrame:
-    if HIST_PATH.exists() and not refresh:
+    """Cached for a day; new results then need a fresh download."""
+    import time
+    if HIST_PATH.exists() and not refresh and time.time() - HIST_PATH.stat().st_mtime < 86400:
         return pd.read_csv(HIST_PATH)
     return fetch_all(symbols)
 
@@ -89,9 +91,26 @@ def after_hours(t: str) -> bool:
     return h * 60 + int(m.group(2)) >= 15 * 60 + 30
 
 
+KIND_ALIAS = {"1HY": "HY", "1H": "HY", "6M": "HY", "9M": "3Q", "3M": "1Q", "12M": "FY"}
+
+
+def norm_label(lab: str) -> tuple[str, str, int | None]:
+    """'CY-24' -> ('CY24', 'CY', 24); '9M-26' -> ('3Q26', '3Q', 26); '1HY26' -> ('HY26', 'HY', 26)."""
+    lab = re.sub(r"[^A-Z0-9]", "", str(lab or "").upper())
+    m = _LABEL.match(lab)
+    if not m:
+        return lab, "", None
+    kind = KIND_ALIAS.get(m.group(1), m.group(1))
+    return f"{kind}{m.group(2)}", kind, int(m.group(2))
+
+
 def surprises(res: pd.DataFrame) -> pd.DataFrame:
     """Add same-period-last-year EPS, YoY growth and a simple class for each announcement."""
     res = res.copy()
+    parts = [norm_label(x) for x in res["label"].fillna("")]
+    res["label"] = [p[0] for p in parts]
+    res["kind"] = [p[1] for p in parts]
+    res["yy"] = [p[2] for p in parts]
     res["date"] = pd.to_datetime(res["date"])
     res = res.sort_values(["sym", "date"]).drop_duplicates(["sym", "label"], keep="first")
     prev = res[["sym", "kind", "yy", "eps_q", "eps_cum", "div"]].copy()
@@ -177,3 +196,51 @@ def event_rows(res: pd.DataFrame, df: pd.DataFrame, min_adtv: float) -> pd.DataF
         e["signal"] = name
         out.append(e)
     return pd.concat(out) if out else pd.DataFrame()
+
+
+# ---------------------------------------------------------------- live use (one company at a time)
+_COMPANY: dict[str, pd.DataFrame] = {}
+
+
+def company(sym: str) -> pd.DataFrame | None:
+    """Classified results history of one company (cached for this run)."""
+    if sym not in _COMPANY:
+        rows = rows_for(sym)
+        _COMPANY[sym] = classify(pd.DataFrame(rows)) if rows else None
+    return _COMPANY[sym]
+
+
+def assess(sym: str, label: str = "") -> dict | None:
+    """The announcement with this label (or the latest one) compared with the same period last year."""
+    h = company(sym)
+    if h is None or h.empty:
+        return None
+    label = norm_label(label)[0] if label else ""
+    row = h[h["label"] == label] if label else h
+    if row.empty:
+        return None
+    r = row.sort_values("date").iloc[-1]
+    annual = r["kind"] in ("FY", "CY")
+    now_, ly = (r["eps_cum"], r["eps_cum_ly"]) if annual else (r["eps_q"], r["eps_q_ly"])
+    yoy = r["yoy_cum"] if annual else r["yoy_q"]
+    both = pd.notna(now_) and pd.notna(ly)
+    return {"label": r["label"], "date": r["date"], "annual": annual, "eps": now_, "eps_ly": ly,
+            "yoy": None if pd.isna(yoy) else float(yoy), "cls": r["cls"], "div": r["div"],
+            "turnaround": bool(both and now_ > 0 > ly), "to_loss": bool(both and now_ < 0 < ly)}
+
+
+def eps_line(a: dict) -> str:
+    """'quarterly EPS 1.89 vs 0.85 a year ago (+122%)' in plain words."""
+    what = "full-year EPS" if a["annual"] else "quarterly EPS"
+    if pd.isna(a["eps"]):
+        return "EPS not given"
+    if pd.isna(a["eps_ly"]):
+        return f"{what} {a['eps']:.2f}"
+    s = f"{what} {a['eps']:.2f} vs {a['eps_ly']:.2f} a year ago"
+    if a["yoy"] is not None:
+        s += f" ({a['yoy'] * 100:+.0f}%)"
+    elif a["eps"] > 0 > a["eps_ly"]:
+        s += " (back to profit)"
+    elif a["eps"] < 0 < a["eps_ly"]:
+        s += " (turned to a loss)"
+    return s

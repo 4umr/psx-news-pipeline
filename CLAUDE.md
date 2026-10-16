@@ -100,6 +100,26 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   same-tier peers; Radar card + Tracker card (`cards.swing_cards`) + text to admin. Sent only if new/closed signals or Friday.
 - No Gemini/AI text in this feature (user asked "no AI traces"): plain rule-based wording only.
 
+## Phase 2 (built 2026-10-16): results edge everywhere + self-checking automation
+- `earnings.assess(sym, label)` / `eps_line()`: same-period-last-year EPS for ANY company from scstrade history
+  (quarter for 1Q/HY/3Q, full year for FY/CY; `norm_label` maps CY-24, 9M-26, 1HY26...). Used by:
+  `watchers.corporate_results` (intraday public post now shows YoY + price move for all companies; plus private
+  "Results hit" admin alert for liquid stocks with EPS +50%/turnaround), `briefs.results` (18:30 tracker for all
+  companies, reaction on the day, season tally). Old `eps_yoy` (PSX page, FY only) is no longer used there.
+- `watchers.psx_filings`: rotation now covers KSE-100 then every liquid stock (avg value >= swing.min_adtv via
+  `avg_values()` = recorded volumes x price). Insider/material filings logged to `state.data["events"]` with price
+  (for a future backtest: PSX pages keep only ~5 recent filings, so history must be collected).
+- Sunday PUBLIC cards from `swing.weekly()` (workflow 18:00/20:00 PKT Sunday): "Mid & small caps this week" (liquid,
+  market-cap rank 31+, adjusted week returns, value traded vs usual, big moves with no PSX filing in 2 weeks) and
+  "Results week ahead" (board meetings next 7 days, liquid stocks, last result vs a year ago). Data only, no calls.
+- `education_card` (out/backtest/education.png): public-ready lesson from the backtest; NOT auto-posted (owner decides).
+- Robustness (user asked "error proof, accurate in future"): Saturday re-test (`backtest --notify-changes`) refreshes
+  `state/swing_stats.json`; `swing.active_rules()` uses only rules whose latest verdict is in `backtest.ACTIVE`;
+  `_monitor()` warns at 20 live cases and auto-pauses at 40 if the live record is the opposite of the backtest;
+  `_band_ok()` pauses circuit rules if PSX changes the 10% limit; `prices.update_live` never saves partial downloads
+  (attrs["stale"] -> admin note); backtest never uses an unfinished session; workflow failure -> admin message;
+  fresh-start / missing data / all-rules-off -> admin note. Drill script idea: simulate scs._post=[] etc.
+
 ## Data sources that DON'T work (don't retry)
 dps.psx.com.pk/announcements POST (403), SECP & IMF sites (403), APP feeds (403 from GitHub), Profit/Mettis RSS (404),
 Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not shown.
@@ -134,6 +154,6 @@ Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not sh
 6. Ideas not built: QR/join link on cards, weekly poll before MPC, web archive page (GitHub Pages), Urdu summaries,
    Sunday "Learn" explainer card, dividend/book-closure tracker, cron-job.org.
 7. Rupee 1-month move tile on the macro dashboard appears after ~20 days of recorded SBP interbank rates (`hist.usdpkr`).
-8. Swing Phase 2+ (not built): public data-only "Small & Mid Cap Radar", pump-risk flags, filings for all liquid stocks,
-   director dealings (forward-tracked only: PSX pages keep ~5 recent filings), GitHub Pages screener, intraday early movers
-   (needs cron-job.org). Check the first live swing runs (`swing.yml`) and the admin chat output.
+8. Swing Phase 3 ideas (not built): director-dealing backtest once `events` has ~6 months, GitHub Pages screener,
+   intraday early movers (needs cron-job.org), dividend calendar, KSE-100 recomposition preview. Post education card?
+   Check the first live swing runs (`swing.yml`), Sunday public cards and the admin chat output.

@@ -170,6 +170,7 @@ def update_live(now: datetime | None = None, keep_days: int = 460) -> pd.DataFra
     sess = last_session(now)
     if sess is None or not syms:
         log.warning("price update: no session data from SCS")
+        df.attrs["stale"] = True
         return df
     today = pd.Timestamp(now.strftime("%Y-%m-%d"))
     have = df["date"].max() if len(df) else None
@@ -178,7 +179,13 @@ def update_live(now: datetime | None = None, keep_days: int = 460) -> pd.DataFra
     if have is None or have < complete - pd.Timedelta(days=12):
         start = (now - timedelta(days=keep_days)).replace(tzinfo=None)
         log.info("price database: full load since %s for %d symbols", start.date(), len(syms))
-        df = fetch(syms, start, now.replace(tzinfo=None))
+        full = fetch(syms, start, now.replace(tzinfo=None))
+        if full["sym"].nunique() < 0.6 * len(syms):  # source failing: keep what we have
+            log.error("price database: full load returned only %d of %d symbols, not saved",
+                      full["sym"].nunique(), len(syms))
+            df.attrs["stale"] = True
+            return df
+        df = full
     elif have < complete:
         # Missed sessions (or just today): use the one-request daily table for today, history for gaps
         gap_start = have + pd.Timedelta(days=1)
@@ -189,9 +196,18 @@ def update_live(now: datetime | None = None, keep_days: int = 460) -> pd.DataFra
                                  round(r["trading_close"] - r["trading_change"], 4)
                                  if r.get("trading_change") is not None and r.get("trading_close") else None)
                                 for r in act if r.get("company_code") and r.get("trading_close")], columns=COLS)
-            new = new[new["sym"].isin(syms)]
+            new = new[new["sym"].isin(syms) & (pd.to_numeric(new["c"], errors="coerce") > 0)]
+            if len(new) < 0.6 * len(syms):  # partial table: take the session from the history endpoint instead
+                log.warning("daily activity has only %d rows, using price history for %s", len(new), sess.date())
+                new = fetch(syms, sess.to_pydatetime(), sess.to_pydatetime())
         else:
             new = fetch(syms, gap_start.to_pydatetime(), complete.to_pydatetime())
+        if new.empty or new["sym"].nunique() < 0.5 * len(syms):
+            log.error("price database: update for %s returned %d symbols, not saved", complete.date(),
+                      new["sym"].nunique() if len(new) else 0)
+            df.attrs["stale"] = True
+            df.attrs["sectors"] = sectors
+            return df
         df = pd.concat([df, new]).drop_duplicates(["sym", "date"], keep="last")
         log.info("price database: added %d rows up to %s", len(new), complete.date())
     cut = pd.Timestamp((now - timedelta(days=keep_days)).strftime("%Y-%m-%d"))
@@ -208,5 +224,10 @@ def build_history(start: str = "2018-01-01") -> pd.DataFrame:
     syms, _ = universe()
     log.info("downloading full price history for %d symbols since %s", len(syms), start)
     df = fetch(syms, datetime.fromisoformat(start), datetime.now())
+    now = now_pkt()
+    if now.hour < 17:  # today's session is not finished: never test on half a day
+        df = df[df["date"] < pd.Timestamp(now.strftime("%Y-%m-%d"))]
+    if df["sym"].nunique() < 0.6 * len(syms):
+        raise RuntimeError(f"price history download incomplete: {df['sym'].nunique()} of {len(syms)} symbols")
     save(df, HIST_PATH)
     return df

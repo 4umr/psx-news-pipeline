@@ -1151,3 +1151,54 @@ def backtest_cards(cfg: dict, summary, stats: dict) -> list[bytes]:
         c.footer()
         out.append(c.png())
     return out
+
+
+def weekly_cards(cfg: dict, ctx: dict) -> list[bytes]:
+    """Sunday public cards (data only): mid and small caps this week, and results due next week."""
+    out = []
+    c = Card(cfg, "psx")
+    y = c.title_block("Mid & small caps", "This week", ctx["label"])
+    y = c.strip(y, ctx["strip"])
+    y = c.movers(y, ctx["gain"], ctx["lose"], "Top gainers", "Top losers")
+    if ctx.get("active"):
+        y = c.grid(y, "Trading picked up the most", ["Stock", "Size", "Value traded vs usual", "Week"],
+                   ctx["active"], [30, 190, 790, 970], ["left", "left", "right", "right"], max_rows=5)
+    room = c.H - 172 - 16 - y
+    if ctx.get("quiet") and room > 170:
+        y = c.entries(y, "Big moves, no company filing in 2 weeks", ctx["quiet"], max_h=room)
+    room = c.H - 172 - 16 - y
+    if room > 130:
+        c.highlights(y, ctx["notes"], title="How to read", h=room)
+    c.footer()
+    out.append(c.png())
+    if ctx.get("calendar"):
+        c = Card(cfg, "psx")
+        y = c.title_block("Results", "Week ahead", ctx["cal_label"])
+        y = c.grid(y, "Board meetings (results expected)", ["Day", "Stock", "Last result vs a year ago", "Change"],
+                   ctx["calendar"], [30, 190, 790, 970], ["left", "left", "right", "right"], max_rows=17, row_h=40)
+        room = c.H - 172 - 16 - y
+        if room > 130:
+            c.highlights(y, ctx["cal_notes"], title="Good to know", h=room)
+        c.footer()
+        out.append(c.png())
+    return out
+
+
+def education_card(cfg: dict, summary, stats: dict) -> bytes:
+    """Public-ready lesson from the backtest (no stock names). Posted only if the owner chooses to."""
+    plain = {"Works": ("Worked", UP), "Promising": ("Worked, weaker", GOLD), "Reliable warning": ("Useful warning", DOWN),
+             "Weak warning": ("Mild warning", GOLD), "No edge": ("Did not work", FLAT),
+             "Not a warning": ("Not a warning", FLAT), "Too few cases": ("Too few cases", FLAT)}
+    s = summary.sort_values(["live", "edge"], ascending=[False, False])
+    c = Card(cfg, "research")
+    y = c.title_block("Trading rules", "Put to the test", f"PSX {stats.get('period', '')}  ·  {int(s['n'].sum()):,} trades")
+    rows = [(r["name"][:34], f"{int(r['n']):,}", (_p(r["edge"]), _col(r["edge"])),
+             plain.get(r["verdict"], (r["verdict"], FLAT))) for _, r in s.iterrows()]
+    y = c.grid(y, "Each rule vs simply holding similar stocks", ["Rule", "Cases", "Avg vs similar", "Result"], rows,
+               [30, 560, 760, 970], ["left", "right", "right", "right"], row_h=36, max_rows=16)
+    c.highlights(y, ["Chart patterns did not beat similar stocks once costs were counted.",
+                     "Strong results the market liked kept doing better for about 3 months.",
+                     "Even that worked only half the time: never bet big on one signal."],
+                 title="Lessons", h=c.H - 172 - 16 - y)
+    c.footer()
+    return c.png()

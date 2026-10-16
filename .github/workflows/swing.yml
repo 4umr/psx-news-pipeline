@@ -1,12 +1,16 @@
 name: Swing scanner
 
-# Private research scan after the PSX close (results by the admin chat only).
-# Several triggers because GitHub's schedule is often late; a session is scanned only once.
+# Private research scan after the PSX close (admin chat only), the Sunday public cards
+# (mid & small caps + results week ahead) and a weekly re-test of the rules.
+# Several triggers because GitHub's schedule is often late; each job runs only once per session/week.
 on:
   schedule:
-    - cron: "40 12 * * 1-5"   # 17:40 PKT
-    - cron: "40 14 * * 1-5"   # 19:40 PKT (catch-up)
-    - cron: "10 3 * * 2-6"    # 08:10 PKT next morning (catch-up)
+    - cron: "40 12 * * 1-5"   # 17:40 PKT  daily scan
+    - cron: "40 14 * * 1-5"   # 19:40 PKT  daily scan (catch-up)
+    - cron: "10 3 * * 2-6"    # 08:10 PKT  daily scan (next-morning catch-up)
+    - cron: "0 13 * * 0"      # 18:00 PKT Sunday  public weekly cards
+    - cron: "0 15 * * 0"      # 20:00 PKT Sunday  public weekly cards (catch-up)
+    - cron: "0 5 * * 6"       # 10:00 PKT Saturday  re-test the rules on the latest data
   workflow_dispatch:
     inputs:
       command:
@@ -16,7 +20,10 @@ on:
         options:
           - swing
           - swing --force
+          - swing --weekly
+          - swing --weekly --force
           - backtest --send
+          - backtest --notify-changes
 
 concurrency:
   group: psx-swing
@@ -28,7 +35,7 @@ permissions:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -40,7 +47,7 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt || (sleep 20 && pip install -r requirements.txt)
 
-      # Price database, company facts and the private signal log
+      # Price database, company facts, the private signal log and the latest re-test results
       - name: Restore swing data
         id: cache
         uses: actions/cache/restore@v4
@@ -49,6 +56,7 @@ jobs:
             state/prices.csv.gz
             state/meta.json
             state/swing.json
+            state/swing_stats.json
           key: psx-swing-v1-${{ github.run_id }}
           restore-keys: psx-swing-v1-
 
@@ -73,7 +81,10 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
           TZ: Asia/Karachi
-        run: python -m pipeline ${{ inputs.command || 'swing' }}
+          CMD: ${{ inputs.command || (github.event.schedule == '0 13 * * 0' && 'swing --weekly') || (github.event.schedule == '0 15 * * 0' && 'swing --weekly') || (github.event.schedule == '0 5 * * 6' && 'backtest --notify-changes') || 'swing' }}
+        run: |
+          echo "Command: $CMD"
+          python -m pipeline $CMD
 
       - name: Save swing data
         if: always() && hashFiles('state/prices.csv.gz') != ''
@@ -83,6 +94,7 @@ jobs:
             state/prices.csv.gz
             state/meta.json
             state/swing.json
+            state/swing_stats.json
           key: psx-swing-v1-${{ github.run_id }}
 
       - name: Back up swing data (encrypted)
@@ -91,7 +103,7 @@ jobs:
           KEY: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           tmp=$(mktemp -d)
-          files=$(cd state && ls prices.csv.gz meta.json swing.json 2>/dev/null)
+          files=$(cd state && ls prices.csv.gz meta.json swing.json swing_stats.json 2>/dev/null)
           tar cz -C state $files | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:KEY -out "$tmp/swing.tgz.enc"
           cd "$tmp"
           git init -q -b swing-data
@@ -101,3 +113,16 @@ jobs:
           git commit -qm "swing data backup $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" swing-data \
             && echo "Backed up" || echo "Backup push failed (will retry next time)"
+
+      # A failed run is reported privately (never more than one message per run)
+      - name: Notify owner on failure
+        if: failure()
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ADMIN: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+        run: |
+          if [ -n "$ADMIN" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+              -d chat_id="${ADMIN}" \
+              --data-urlencode text="Swing scanner: a run failed. It retries at the next scheduled time. Details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > /dev/null
+          fi

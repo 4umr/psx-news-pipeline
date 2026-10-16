@@ -90,8 +90,9 @@ market_hours: {start: "09:15", end: "16:45"} # window for intraday checks (PKT)
 big_stock_move_pct: 7.5
 # Unusual volume: alert when a KSE-100/watchlist stock trades this multiple of its 10-day average
 unusual_volume_x: 3.0
-# PSX company filings: company pages checked per run (top-10 by index weight + watchlist every run)
-psx_filings_per_run: 20
+# PSX company filings: company pages checked per run (top-10 by index weight + watchlist every run;
+# the rest rotates through the KSE-100 and then every liquid mid and small cap)
+psx_filings_per_run: 25
 
 # ---------------------------------------------------------------------
 # Swing scanner (private research, admin chat only). Runs after the close
