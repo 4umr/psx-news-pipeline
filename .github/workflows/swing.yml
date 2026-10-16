@@ -57,14 +57,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            state/prices.csv.gz
-            state/meta.json
-            state/swing.json
-            state/swing_stats.json
-            state/sector_pe.csv
-            state/stock_pe.csv
-            data/results.csv.gz
-            data/flows.csv.gz
+            state
+            data
           key: psx-swing-v1-${{ github.run_id }}
           restore-keys: psx-swing-v1-
 
@@ -126,14 +120,8 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            state/prices.csv.gz
-            state/meta.json
-            state/swing.json
-            state/swing_stats.json
-            state/sector_pe.csv
-            state/stock_pe.csv
-            data/results.csv.gz
-            data/flows.csv.gz
+            state
+            data
           key: psx-swing-v1-${{ github.run_id }}
 
       - name: Back up swing data (encrypted)
@@ -142,9 +130,8 @@ jobs:
           KEY: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           tmp=$(mktemp -d)
-          # only the files that exist yet (the re-test files appear after the first Saturday run)
-          files=$(cd state && ls prices.csv.gz meta.json swing.json swing_stats.json sector_pe.csv stock_pe.csv 2>/dev/null || true)
-          tar cz -C state $files | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:KEY -out "$tmp/swing.tgz.enc"
+          # everything the swing workflow keeps in state/ (it never touches the news pipeline's state.json)
+          tar cz -C state --exclude=state.json --exclude=state.bak . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:KEY -out "$tmp/swing.tgz.enc"
           cd "$tmp"
           git init -q -b swing-data
           git config user.name "pipeline-bot"
