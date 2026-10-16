@@ -162,7 +162,7 @@ def last_session(now: datetime) -> pd.Timestamp | None:
     return pd.Timestamp(rows[-1]["date"].strftime("%Y-%m-%d")) if rows else None
 
 
-def update_live(now: datetime | None = None, keep_days: int = 460) -> pd.DataFrame:
+def update_live(now: datetime | None = None, keep_days: int = 800) -> pd.DataFrame:
     """Bring state/prices.csv.gz up to the latest completed session. Returns raw rows."""
     now = now or now_pkt()
     df = load(LIVE_PATH)
@@ -211,6 +211,12 @@ def update_live(now: datetime | None = None, keep_days: int = 460) -> pd.DataFra
         df = pd.concat([df, new]).drop_duplicates(["sym", "date"], keep="last")
         log.info("price database: added %d rows up to %s", len(new), complete.date())
     cut = pd.Timestamp((now - timedelta(days=keep_days)).strftime("%Y-%m-%d"))
+    # One-time backfill when the kept history became longer (e.g. 460 -> 800 days for the P/E rules)
+    if len(df) and df["date"].min() > cut + pd.Timedelta(days=30):
+        older = fetch(syms, cut.to_pydatetime(), (df["date"].min() - pd.Timedelta(days=1)).to_pydatetime())
+        if older["sym"].nunique() >= 0.6 * len(syms):
+            log.info("price database: backfilled %d older rows", len(older))
+            df = pd.concat([older, df]).drop_duplicates(["sym", "date"], keep="last")
     df = df[(df["date"] >= cut) & (df["date"] <= complete)]  # never keep a half-finished session
     save(df, LIVE_PATH)
     df.attrs["sectors"] = sectors

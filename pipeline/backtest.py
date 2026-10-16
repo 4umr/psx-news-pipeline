@@ -21,7 +21,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from . import earnings, prices
+from . import earnings, flows, prices, research
 from .common import ROOT, log
 from .signals import SIGNALS, events, features
 
@@ -33,7 +33,8 @@ ACTIVE = {"Works", "Promising", "Reliable warning", "Weak warning"}
 HORIZONS = (4, 5, 10, 20, 40, 60)
 YEARS = [str(y) for y in range(2018, 2027)]
 DEFAULT_COST = {"Large": 0.005, "Mid": 0.006, "Small": 0.009, "Micro": 0.013, "n/a": 0.013}
-SPECS = {**SIGNALS, **earnings.EVENT_SIGNALS}
+SPECS = {**SIGNALS, **earnings.EVENT_SIGNALS, **research.EXTRA_SIGNALS}
+SPLIT = "2023-01-01"   # rules are designed on data before this date and must also work after it
 
 
 def forward(df: pd.DataFrame, kse: pd.Series, min_adtv: float, cost: dict) -> pd.DataFrame:
@@ -91,6 +92,10 @@ def summarize(tr: pd.DataFrame) -> pd.DataFrame:
                "win": (e["net"] > 0).mean(), "beat": (e["edge"] > 0).mean(), "avg": e["net"].mean(),
                "edge": e["edge"].mean(), "med_edge": e["edge"].median(), "t": _tstat(daily),
                "p10": e["net"].quantile(0.10), "kse": e["kse"].mean()}
+        for tag, part in (("d", e[e["date"] < SPLIT]), ("t", e[e["date"] >= SPLIT])):
+            row[f"n_{tag}"] = len(part)
+            row[f"edge_{tag}"] = part["edge"].mean() if len(part) >= 10 else np.nan
+            row[f"t_{tag}"] = _tstat(part.groupby("date")["edge"].mean()) if len(part) >= 10 else np.nan
         yr = e["date"].dt.year.astype(str)
         for y in YEARS:
             p = e[yr == y]
@@ -108,13 +113,17 @@ def verdict(r: pd.Series) -> str:
     pos = sum(1 for x in yrs if x > 0) / max(1, len(yrs))
     if pd.isna(edge) or n < 40:
         return "Too few cases"
+    # must hold in BOTH halves: the design period and the later test period
+    ed, et = r.get("edge_d"), r.get("edge_t")
     if r["kind"] == "risk":
-        if edge <= -0.01 and t <= -2.5 and pos <= 0.35:
+        both = pd.notna(ed) and pd.notna(et) and ed < 0 and et < 0
+        if edge <= -0.01 and t <= -2.5 and pos <= 0.35 and both:
             return "Reliable warning"
-        return "Weak warning" if edge < 0 and t <= -1.5 else "Not a warning"
-    if n >= 100 and edge >= 0.02 and t >= 2 and pos >= 0.75:
+        return "Weak warning" if edge < 0 and t <= -1.5 and both else "Not a warning"
+    both = pd.notna(ed) and pd.notna(et) and ed > 0 and et > 0
+    if n >= 100 and edge >= 0.02 and t >= 2 and pos >= 0.75 and both:
         return "Works"
-    if edge >= 0.0075 and t >= 1.5 and pos >= 0.6:
+    if edge >= 0.0075 and t >= 1.5 and pos >= 0.6 and both:
         return "Promising"
     return "No edge"
 
@@ -134,7 +143,14 @@ def run(cfg: dict, refresh: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
     kse = prices.index_history(datetime.fromisoformat(start))
     df = forward(df, kse, min_adtv, cost)
     res = earnings.classify(earnings.load_all(syms, refresh=refresh))
-    ev = pd.concat([events(df, min_adtv), earnings.event_rows(res, df, min_adtv)])
+    _, sectors = prices.universe()
+    try:
+        fl = flows.history()
+    except Exception as e:  # noqa: BLE001  flow rules are skipped, the rest still runs
+        log.warning("sector flows unavailable: %s", e)
+        fl = None
+    ev = pd.concat([events(df, min_adtv), earnings.event_rows(res, df, min_adtv),
+                    research.events(df, res, sectors, min_adtv, fl)])
     cols = ["no_fill", "cost"] + [f"{p}{h}" for h in HORIZONS for p in ("ret", "bad", "kse", "base")]
     ev = ev.join(df[cols])
     tr = trades(ev)
@@ -155,7 +171,9 @@ def save_stats(summary: pd.DataFrame, df: pd.DataFrame, n_syms: int) -> None:
             "n": int(r["n"]), "h": int(r["h"]), "win": round(float(r["win"]), 3), "beat": round(float(r["beat"]), 3),
             "avg": round(float(r["avg"]), 4), "edge": round(float(r["edge"]), 4),
             "med_edge": round(float(r["med_edge"]), 4), "t": round(float(r["t"]), 2) if pd.notna(r["t"]) else None,
-            "p10": round(float(r["p10"]), 4), "verdict": r["verdict"]}
+            "p10": round(float(r["p10"]), 4), "verdict": r["verdict"],
+            "edge_d": None if pd.isna(r["edge_d"]) else round(float(r["edge_d"]), 4),
+            "edge_t": None if pd.isna(r["edge_t"]) else round(float(r["edge_t"]), 4)}
     out["tested"] = datetime.now().strftime("%Y-%m-%d")
     for path in (STATS_PATH, LIVE_STATS_PATH):
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -25,7 +25,7 @@ from .signals import SIGNALS, detect, features
 from .sources import scs
 
 LOG_PATH = ROOT / "state" / "swing.json"
-SPECS = {**SIGNALS, **earnings.EVENT_SIGNALS}
+SPECS = backtest.SPECS
 COST = backtest.DEFAULT_COST
 
 
@@ -121,6 +121,9 @@ def _results_signals(df: pd.DataFrame, sess: pd.Timestamp, since: pd.Timestamp, 
             out.append(_signal("results_momentum", r, detail, label=lab))
         if react >= 0.05:
             out.append(_signal("results_reaction", r, detail, label=lab))
+        prev = h.get("prev_yoy_q")
+        if pd.notna(h.get("yoy_q")) and pd.notna(prev) and h["yoy_q"] >= 0.2 and prev >= 0 and h["yoy_q"] - prev >= 0.3:
+            out.append(_signal("earn_accel", r, f"{detail}; growth up from {prev * 100:+.0f}% last quarter", label=lab))
         if react <= -0.05 and earnings.EVENT_SIGNALS["results_drop"].get("live"):
             out.append(_signal("results_drop", r, detail, label=lab))
     return out
@@ -172,6 +175,27 @@ def fresh(new: list[dict], logged: list[dict], sessions: list) -> list[dict]:
             continue
         last[k] = i
         out.append(e)
+    return out
+
+
+def _valuation_signals(df: pd.DataFrame, sess: pd.Timestamp, min_adtv: float) -> list[dict]:
+    """Weekly (Friday): most expensive 20% of liquid stocks by trailing P/E whose last result showed EPS down 20%+."""
+    from . import research
+    res = earnings.classify(earnings.load_all(sorted(df["sym"].unique())))
+    v = research.valuation(df, res)
+    t = v[(v["date"] == sess) & (v["adtv20"] >= min_adtv) & v["pe"].notna()].copy()
+    if len(t) < 50:  # too few stocks with a usable P/E: something is wrong with the data, skip
+        log.warning("swing: only %d stocks with a P/E, valuation rule skipped", len(t))
+        return []
+    t["pct"] = t["pe"].rank(pct=True)
+    out = []
+    if t["date"].min() - df["date"].min() < pd.Timedelta(days=700):
+        log.warning("swing: price history shorter than 2 years, valuation rule skipped until it is backfilled")
+        return []
+    for _, r in t[(t["pct"] >= 0.8) & (t["last_yoy"] <= -0.2)].iterrows():
+        last = "turned to a loss" if r["last_yoy"] <= -1 else f"EPS {r['last_yoy'] * 100:+.0f}% vs a year ago"
+        out.append(_signal("dear_worsening", r, f"P/E {r['pe']:.0f} on trailing 12-month EPS of Rs {r['ttm']:.2f} "
+                           f"(most expensive fifth of liquid stocks); last result {last}"))
     return out
 
 
@@ -380,6 +404,8 @@ def scan(cfg: dict, dry: bool = False, force: bool = False) -> None:
               ("results rules", lambda: _results_signals(df, sess, since, min_adtv, st))]
     if "pre_results_risk" in use:
         groups.append(("pre-results rule", lambda: _pre_results(df, sess, min_adtv, st)))
+    if "dear_worsening" in use and (sess.dayofweek == 4 or force):
+        groups.append(("valuation rule", lambda: _valuation_signals(df, sess, min_adtv)))
     for label, part in groups:
         try:
             new += part()

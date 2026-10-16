@@ -155,11 +155,21 @@ def classify(res: pd.DataFrame) -> pd.DataFrame:
     res = surprises(res)
     res["cls"] = res.apply(label_class, axis=1)
     res["prev_cls"] = res.groupby("sym")["cls"].shift(1)
-    return res
+    res["prev_yoy_q"] = res.groupby("sym")["yoy_q"].shift(1)
+    # Trailing 12-month EPS: year-to-date EPS + last full year - the same year-to-date a year earlier
+    annual = res[res["kind"].isin(["FY", "CY"])][["sym", "yy", "eps_cum"]].rename(columns={"eps_cum": "annual_prev"})
+    annual = annual.drop_duplicates(["sym", "yy"], keep="last")
+    annual["yy"] = annual["yy"] + 1
+    res = res.merge(annual, on=["sym", "yy"], how="left")
+    is_annual = res["kind"].isin(["FY", "CY"])
+    res["ttm"] = res["eps_cum"].where(is_annual, res["eps_cum"] + res["annual_prev"] - res["eps_cum_ly"])
+    return res.sort_values(["sym", "date"]).reset_index(drop=True)
 
 
-def event_rows(res: pd.DataFrame, df: pd.DataFrame, min_adtv: float) -> pd.DataFrame:
-    """Map announcements to price rows and apply EVENT_SIGNALS. Returns rows like signals.events()."""
+def event_rows(res: pd.DataFrame, df: pd.DataFrame, min_adtv: float, rules: dict | None = None,
+               react_min: dict | None = None) -> pd.DataFrame:
+    """Map announcements to price rows and apply EVENT_SIGNALS (or the given rules: name -> mask on res).
+    Returns rows like signals.events()."""
     res = res[res["date"] >= df["date"].min()].copy()
     rowid = pd.Series(range(len(df)), index=df.index)
     pos = {s: (sub["date"].values, rowid[sub.index].values) for s, sub in df.groupby("sym", sort=False)}
@@ -177,17 +187,22 @@ def event_rows(res: pd.DataFrame, df: pd.DataFrame, min_adtv: float) -> pd.DataF
     res["tier"] = df["tier"].values[res["R"].values]
     res["liquid"] = df["adtv20"].values[res["R"].values] >= min_adtv
     mid_small = res["tier"].isin(EVENT_SIGNALS["results_momentum"]["tiers"])
-    rules = {
-        "results_momentum": res["cls"].isin(GOOD) & (res["react"] >= 0.03) & mid_small,
-        "results_reaction": res["react"] >= 0.05,
-        "results_drop": res["react"] <= -0.05,
-        "pre_results_risk": res["prev_cls"].isin(BAD),
-    }
+    if rules is None:
+        rules = {
+            "results_momentum": res["cls"].isin(GOOD) & (res["react"] >= 0.03) & mid_small,
+            "results_reaction": res["react"] >= 0.05,
+            "results_drop": res["react"] <= -0.05,
+            "pre_results_risk": res["prev_cls"].isin(BAD),
+        }
+    else:
+        rules = {k: v.reindex(res.index).fillna(False).astype(bool) for k, v in rules.items()}
     out = []
     for name, m in rules.items():
         m = m & res["liquid"]
+        if react_min and name in react_min:
+            m = m & (res["react"] >= react_min[name])
         rows, syms = res.loc[m, "R"].values, res.loc[m, "sym"].values
-        if off := EVENT_SIGNALS[name].get("offset"):  # signal earlier, same stock only
+        if off := EVENT_SIGNALS.get(name, {}).get("offset"):  # signal earlier, same stock only
             rows = rows - off
             ok = rows >= 0
             rows, syms = rows[ok], syms[ok]

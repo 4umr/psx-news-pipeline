@@ -133,6 +133,17 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   Build raises on bad data -> previous site stays; admin told. Local preview: .claude/launch.json "site" (port 8765).
 - Face value is not on PSX pages, so dividend YIELD is deliberately not computed (dividends shown as % of face value).
 
+## Phase 4 (built 2026-10-16): research round 2 with a design/test split
+- Verdicts now require the rule to work in BOTH 2018-22 (design) and 2023-26 (test) (`backtest.SPLIT`); report cards
+  show both halves. `research.py` EXTRA_SIGNALS: earnings momentum (streak, acceleration), dividend raise, valuation
+  (trailing P/E from results history: ttm = YTD EPS + last full year - YTD a year earlier; `research.valuation`, no
+  P/E within 2 years (520 sessions) of a split/bonus because announced EPS mixes share counts, e.g. SYS 2025 split),
+  sector flows (`flows.py`: weekly foreign + mutual fund net/gross by sector from scstrade, back to 2019).
+- Result: ONLY `earn_accel` (EPS growth >= +20% and >= 30 points faster than last quarter, previous >= 0; +3.0% vs
+  similar over 60 sessions, +2.3%/+3.5% in the two halves) is new and live. Sector flows: no edge. Cheap P/E worked only
+  since 2023 (regime) -> rejected. Expensive+worsening failed after the split guard -> auto switched off, live=False.
+- Live DB now keeps 800 days (one-time backfill in `update_live`); the valuation rule refuses to run with < 2 years.
+
 ## Data sources that DON'T work (don't retry)
 dps.psx.com.pk/announcements POST (403), SECP & IMF sites (403), APP feeds (403 from GitHub), Profit/Mettis RSS (404),
 Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not shown.

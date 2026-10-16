@@ -62,6 +62,7 @@ jobs:
             state/swing.json
             state/swing_stats.json
             data/results.csv.gz
+            data/flows.csv.gz
           key: psx-swing-v1-${{ github.run_id }}
           restore-keys: psx-swing-v1-
 
@@ -127,6 +128,7 @@ jobs:
             state/swing.json
             state/swing_stats.json
             data/results.csv.gz
+            data/flows.csv.gz
           key: psx-swing-v1-${{ github.run_id }}
 
       - name: Back up swing data (encrypted)

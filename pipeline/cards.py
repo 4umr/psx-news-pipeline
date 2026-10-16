@@ -1111,26 +1111,41 @@ def swing_cards(cfg: dict, ctx: dict) -> list[bytes]:
     return out
 
 
+def _rule_rows(s) -> list:
+    return [(r["name"][:32], f"{int(r['n']):,}", (_p(r["edge"]), _col(r["edge"])),
+             (_p(r.get("edge_d")), _col(r.get("edge_d"))), (_p(r.get("edge_t")), _col(r.get("edge_t"))),
+             (r["verdict"], VERDICT_COL.get(r["verdict"], FLAT))) for _, r in s.iterrows()]
+
+
+_RULE_COLS = (["Rule", "Cases", "All years", "2018-22", "2023-26", "Verdict"],
+              [30, 430, 545, 655, 765, 970], ["left", "right", "right", "right", "right", "right"])
+
+
 def backtest_cards(cfg: dict, summary, stats: dict) -> list[bytes]:
     """Research report: every rule tested on PSX since 2018, with the verdict."""
     out = []
     s = summary.sort_values(["live", "edge"], ascending=[False, False])
+    on, off = s[s["live"].astype(bool)], s[~s["live"].astype(bool)]
     c = Card(cfg, "research")
     y = c.title_block("Swing rules", "Backtest", f"PSX {stats.get('period', '')}  ·  {stats.get('stocks', 0)} stocks")
     works = int(s["verdict"].isin(["Works", "Promising"]).sum())
     warns = int(s["verdict"].isin(["Reliable warning", "Weak warning"]).sum())
     y = c.strip(y, [("Rules tested", str(len(s)), None), ("Trades", f"{int(s['n'].sum()):,}", None),
                     ("Work", str(works), UP), ("Warnings", str(warns), DOWN)])
-    rows = [(r["name"][:34], f"{int(r['n']):,}", f"{r['beat'] * 100:.0f}%", (_p(r["edge"]), _col(r["edge"])),
-             (r["verdict"], VERDICT_COL.get(r["verdict"], FLAT))) for _, r in s.iterrows()]
-    y = c.grid(y, "Every rule, after costs, vs similar stocks", ["Rule", "Cases", "Beat", "Avg edge", "Verdict"], rows,
-               [30, 500, 590, 710, 970], ["left", "right", "right", "right", "right"], row_h=36, max_rows=16)
-    c.highlights(y, ["Avg edge: return after costs minus same-size stocks bought the same day.",
-                     "Beat: share of cases that did better than those stocks. Entry at the next open."],
+    y = c.grid(y, "Switched on: avg vs similar stocks", *_RULE_COLS[:1], _rule_rows(on), *_RULE_COLS[1:], max_rows=10)
+    c.highlights(y, ["Avg: return after costs minus same-size stocks bought the same day; entry at the next open.",
+                     "A rule must work in BOTH 2018-22 and 2023-26 to be switched on.",
+                     "Re-tested every Saturday; a rule that stops qualifying switches off by itself."],
                  title="How to read", h=c.H - 172 - 16 - y)
     c.footer()
     out.append(c.png())
-    for _, r in s[s["live"]].iterrows():
+    if len(off):
+        c = Card(cfg, "research")
+        y = c.title_block("Tested", "Not used", "Rules that did not hold up after costs, in both periods")
+        c.grid(y, "Avg vs similar stocks", *_RULE_COLS[:1], _rule_rows(off), *_RULE_COLS[1:], row_h=36, max_rows=20)
+        c.footer()
+        out.append(c.png())
+    for _, r in on.iterrows():
         c = Card(cfg, "research")
         y = c.title_block("Rule test", r["name"], f"Hold {int(r['h'])} sessions  ·  verdict: {r['verdict']}")
         y = c.strip(y, [("Cases", f"{int(r['n']):,}", None), ("Avg vs similar", _p(r["edge"]), _col(r["edge"])),
@@ -1184,6 +1199,11 @@ def weekly_cards(cfg: dict, ctx: dict) -> list[bytes]:
     return out
 
 
+def pd_concat(parts):
+    import pandas as pd
+    return pd.concat(parts)
+
+
 def education_card(cfg: dict, summary, stats: dict) -> bytes:
     """Public-ready lesson from the backtest (no stock names). Posted only if the owner chooses to."""
     plain = {"Works": ("Worked", UP), "Promising": ("Worked, weaker", GOLD), "Reliable warning": ("Useful warning", DOWN),
@@ -1192,12 +1212,17 @@ def education_card(cfg: dict, summary, stats: dict) -> bytes:
     s = summary.sort_values(["live", "edge"], ascending=[False, False])
     c = Card(cfg, "research")
     y = c.title_block("Trading rules", "Put to the test", f"PSX {stats.get('period', '')}  ·  {int(s['n'].sum()):,} trades")
+    live = s["live"].astype(bool)
+    shown = pd_concat([s[live], s[~live].sort_values("n", ascending=False).head(16 - int(live.sum()))])
     rows = [(r["name"][:34], f"{int(r['n']):,}", (_p(r["edge"]), _col(r["edge"])),
-             plain.get(r["verdict"], (r["verdict"], FLAT))) for _, r in s.iterrows()]
+             plain.get(r["verdict"], (r["verdict"], FLAT))) for _, r in shown.iterrows()]
+    more = len(s) - len(shown)
     y = c.grid(y, "Each rule vs simply holding similar stocks", ["Rule", "Cases", "Avg vs similar", "Result"], rows,
-               [30, 560, 760, 970], ["left", "right", "right", "right"], row_h=36, max_rows=16)
+               [30, 560, 760, 970], ["left", "right", "right", "right"], row_h=33, max_rows=16,
+               right_title=f"+{more} more tested" if more else "")
     c.highlights(y, ["Chart patterns did not beat similar stocks once costs were counted.",
-                     "Strong results the market liked kept doing better for about 3 months.",
+                     "Following foreign or mutual fund sector buying did not help either.",
+                     "Strong, accelerating results did better for about 3 months.",
                      "Even that worked only half the time: never bet big on one signal."],
                  title="Lessons", h=c.H - 172 - 16 - y)
     c.footer()
