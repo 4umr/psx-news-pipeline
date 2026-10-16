@@ -192,7 +192,7 @@ Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not sh
 - Wants things to run unattended and robustly; prefers I do the work (incl. via his Chrome) over long instructions.
 
 ## Open items (as of 2026-10-16)
-1. **Admin channel id**: Umer must create a private Telegram channel, add the bot as admin, run `chats`, and put the id
+1. **Admin channel id**: CONFIRMED SET in GitHub secrets (2026-10-16 live run). Earlier note: Umer had to create a private Telegram channel, add the bot as admin, run `chats`, and put the id
    (starts -100) into the `TELEGRAM_ADMIN_CHAT_ID` secret, then run `test --admin-only`. Not confirmed done: until then the raw
    headline feed, "Unconfirmed" items, health warnings and the 23:45 report have nowhere to go (check the Telegram channel/logs).
 2. **cron-job.org** 2-minute trigger (POST `https://api.github.com/repos/4umr/psx-news-pipeline/actions/workflows/pipeline.yml/dispatches`,
@@ -210,3 +210,20 @@ Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not sh
 8. Swing Phase 3 ideas (not built): director-dealing backtest once `events` has ~6 months, GitHub Pages screener,
    intraday early movers (needs cron-job.org), dividend calendar, KSE-100 recomposition preview. Post education card?
    Check the first live swing runs (`swing.yml`), Sunday public cards and the admin chat output.
+
+## Phase 7 + live verification (2026-10-16)
+- GitHub Pages ENABLED (Source: GitHub Actions) by me in Umer's Chrome with his OK. Site live:
+  https://4umr.github.io/psx-news-pipeline/ (deployed by swing.yml `deploy` job; `if: always()` so a later
+  failing step can't block it).
+- First live swing runs exposed workflow bugs, fixed: backup `ls` of not-yet-existing files killed the step (bash -e);
+  Telegram curl steps failed with exit 3 (bot token secret likely has trailing whitespace): secrets are trimmed with
+  `tr -d '[:space:]'` and curl ends `|| true`; caches now use whole folders (`state`, `data`) because changing
+  the path list changes the cache version (silent fresh start). Backup tar = all of state/ except state.json/.bak.
+- TELEGRAM_ADMIN_CHAT_ID IS set (the notify step ran its `-n "$ADMIN"` branch). Ask Umer whether the Swing Radar
+  and notes arrive in his admin chat.
+- Company pages: `site._quick_check` (profit trend last 4 results, profitable years, dividend years, P/E vs sector
+  and own usual P/E from `state/stock_pe.csv` (Saturday re-test, 5-year weekly median), 200-day trend, 12-month high,
+  liquidity, PSX defaulter flag from "(Defaulter)" in the company name). No EPS growth line on purpose: bonus
+  issues make multi-year EPS not comparable.
+- Private radar `swing.plan_check`: slots in use vs `swing.plan_slots` (10), new ideas vs free slots, holding
+  periods ending within 5 sessions, results due for open ideas (board meetings).
