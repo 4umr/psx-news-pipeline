@@ -1,0 +1,103 @@
+name: Swing scanner
+
+# Private research scan after the PSX close (results by the admin chat only).
+# Several triggers because GitHub's schedule is often late; a session is scanned only once.
+on:
+  schedule:
+    - cron: "40 12 * * 1-5"   # 17:40 PKT
+    - cron: "40 14 * * 1-5"   # 19:40 PKT (catch-up)
+    - cron: "10 3 * * 2-6"    # 08:10 PKT next morning (catch-up)
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "What to do"
+        type: choice
+        default: swing
+        options:
+          - swing
+          - swing --force
+          - backtest --send
+
+concurrency:
+  group: psx-swing
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # only for the encrypted backup branch 'swing-data'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt || (sleep 20 && pip install -r requirements.txt)
+
+      # Price database, company facts and the private signal log
+      - name: Restore swing data
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            state/prices.csv.gz
+            state/meta.json
+            state/swing.json
+          key: psx-swing-v1-${{ github.run_id }}
+          restore-keys: psx-swing-v1-
+
+      # Fallback: the encrypted backup (the signal log is private, so it is never stored in plain text)
+      - name: Restore swing data from backup branch
+        if: steps.cache.outputs.cache-matched-key == ''
+        env:
+          KEY: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          mkdir -p state
+          if git fetch --depth=1 origin swing-data 2>/dev/null; then
+            git show FETCH_HEAD:swing.tgz.enc > /tmp/swing.tgz.enc \
+              && openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:KEY -in /tmp/swing.tgz.enc | tar xz -C state \
+              && echo "Restored from backup" || echo "Backup could not be read; starting fresh"
+          else
+            echo "No backup yet"
+          fi
+
+      - name: Run
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+          TZ: Asia/Karachi
+        run: python -m pipeline ${{ inputs.command || 'swing' }}
+
+      - name: Save swing data
+        if: always() && hashFiles('state/prices.csv.gz') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            state/prices.csv.gz
+            state/meta.json
+            state/swing.json
+          key: psx-swing-v1-${{ github.run_id }}
+
+      - name: Back up swing data (encrypted)
+        if: always() && hashFiles('state/prices.csv.gz') != ''
+        env:
+          KEY: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          tmp=$(mktemp -d)
+          files=$(cd state && ls prices.csv.gz meta.json swing.json 2>/dev/null)
+          tar cz -C state $files | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:KEY -out "$tmp/swing.tgz.enc"
+          cd "$tmp"
+          git init -q -b swing-data
+          git config user.name "pipeline-bot"
+          git config user.email "pipeline-bot@users.noreply.github.com"
+          git add swing.tgz.enc
+          git commit -qm "swing data backup $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" swing-data \
+            && echo "Backed up" || echo "Backup push failed (will retry next time)"

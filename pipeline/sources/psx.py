@@ -46,6 +46,12 @@ def company(symbol: str) -> dict | None:
         return None
     soup = BeautifulSoup(r.content, "lxml")
     out: dict = {"symbol": symbol, "filings": [], "annual_eps": {}, "quarterly_eps": {}}
+    # Equity profile: "Market Cap (000's) 31,173,170.66 Shares 923,649,501 Free Float 508,007,226 Free Float 55.00%"
+    prof = clean_ws(soup.get_text(" "))
+    if m := re.search(r"Shares\s+([\d,]+)\s+Free Float\s+([\d,]+)\s+Free Float\s+([\d.]+)%", prof):
+        out["shares"] = int(m.group(1).replace(",", ""))
+        out["free_float"] = int(m.group(2).replace(",", ""))
+        out["free_float_pct"] = float(m.group(3))
     ann_tables = []
     for t in soup.find_all("table"):
         head = [clean_ws(th.get_text(" ")) for th in t.find_all("tr")[0].find_all(["th", "td"])] if t.find("tr") else []

@@ -38,6 +38,14 @@ def results() -> list[dict]:
     return rows
 
 
+def results_history(symbol: str) -> list[dict]:
+    """Every results announcement of one company since ~2010 (date, time, period, EPS, dividend)."""
+    rows = _post("MarketStatistics/MS_Announcements.aspx/chartact", {"par": symbol})
+    for r in rows:
+        r["date"] = date_from_ms(r.get("bm_date", ""))
+    return [r for r in rows if r.get("date") and (r.get("company_code") or "").strip() == symbol]
+
+
 def board_meetings() -> list[dict]:
     rows = _post("MarketStatistics/MS_BoardMeetings.aspx/chartact", {"par": ""})
     for r in rows:
@@ -67,6 +75,19 @@ def daily_activity() -> list[dict]:
     return _post("MarketStatistics/MS_DailyActivity.aspx/chartact", {"rows": 3000})
 
 
+def price_history(symbol: str, start: datetime, end: datetime) -> list[dict]:
+    """Daily OHLC + volume for one stock (available back to 2018).
+
+    `trading_change` is measured against PSX's reference price, which PSX adjusts on ex-dates
+    (cash dividend, bonus, right, split). close - change != previous close marks such a date.
+    """
+    rows = _post("MarketStatistics/MS_HistoricalPrices.aspx/chart",
+                 {"par": symbol, "rows": 5000, "date1": start.strftime("%m/%d/%Y"), "date2": end.strftime("%m/%d/%Y")})
+    for r in rows:
+        r["date"] = date_from_ms(r.get("trading_Date", ""))
+    return [r for r in rows if r.get("date") and r.get("trading_close")]
+
+
 def index_history(days: int = 45, name: str = "KSE 100") -> list[dict]:
     """Daily OHLC + volume for an index over the last `days` calendar days (oldest first)."""
     from datetime import timedelta
@@ -74,7 +95,7 @@ def index_history(days: int = 45, name: str = "KSE 100") -> list[dict]:
     from ..common import now_pkt
     end = now_pkt()
     rows = _post("MarketStatistics/MS_HistoricalIndices.aspx/chart",
-                 {"par": name, "date1": (end - timedelta(days=days)).strftime("%m/%d/%Y"),
+                 {"par": name, "rows": 5000, "date1": (end - timedelta(days=days)).strftime("%m/%d/%Y"),
                   "date2": end.strftime("%m/%d/%Y")})
     for r in rows:
         r["date"] = date_from_ms(r.get("kse_index_date", ""))

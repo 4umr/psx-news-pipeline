@@ -6,3 +6,8 @@ out/
 .venv/
 samples/
 state/state.bak
+data/
+state/prices.csv.gz
+state/meta.json
+state/swing.json
+state/*.tmp

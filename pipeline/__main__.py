@@ -44,7 +44,35 @@ def main() -> None:
     sub.add_parser("chats")
     ab = sub.add_parser("about")
     ab.add_argument("--dry-run", action="store_true")
+    sw = sub.add_parser("swing", help="daily swing scanner after the close (admin chat only)")
+    sw.add_argument("--dry-run", action="store_true")
+    sw.add_argument("--force", action="store_true", help="scan again even if this session was already scanned")
+    bt = sub.add_parser("backtest", help="test the swing rules on PSX history since 2018")
+    bt.add_argument("--refresh", action="store_true", help="download the full history again")
+    bt.add_argument("--send", action="store_true", help="send the report cards to the admin chat")
     args = p.parse_args()
+
+    if args.cmd in ("swing", "backtest"):
+        cfg = load_config()
+        if args.cmd == "swing":
+            from .swing import scan
+            scan(cfg, args.dry_run, args.force)
+        else:
+            from . import backtest
+            from .cards import backtest_cards
+            from .common import ROOT
+            summary, _ = backtest.run(cfg, args.refresh)
+            pngs = backtest_cards(cfg, summary, backtest.load_stats())
+            out = ROOT / "out" / "backtest"
+            for i, png in enumerate(pngs, 1):
+                (out / f"report_{i}.png").write_bytes(png)
+            print(f"Report: {len(pngs)} cards in {out}")
+            if args.send:
+                from .telegram import Sender
+                s = Sender()
+                for i, png in enumerate(pngs, 1):
+                    s.send_admin_photo(png, "Swing rules backtest" if i == 1 else "", name=f"backtest_{i}")
+        return
 
     from .runner import run_once
     from .telegram import Sender, find_chats

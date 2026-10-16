@@ -72,7 +72,33 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   (scstrade.com JSON endpoints: results, board meetings, book closures, KSE-100 view, indices, daily activity, FIPI, index
   history, 52-wk), `psx.py` (dps.psx.com.pk/company/SYMBOL filings + EPS), `pbs.py`, `forex.py` (forex.pk open market), `markets.py` (yfinance).
 - `config.yaml` everything tunable: brand (name/author/title/channel_link/cards/alert_cards/whatsapp_copy), briefs times,
-  thresholds, feeds, Google queries, topics + topic_meta (sectors), watchlist (empty), commodities/regional.
+  thresholds, feeds, Google queries, topics + topic_meta (sectors), watchlist (empty), commodities/regional, `swing:`.
+
+## Swing research (Phase 1, built 2026-10-16) — PRIVATE, admin chat only
+- Workflow `.github/workflows/swing.yml` (Mon-Fri 17:40 PKT + catch-ups 19:40 and 08:10; manual: swing / swing --force /
+  backtest --send). Data in Actions cache `psx-swing-v1-*` + **encrypted** backup branch `swing-data` (openssl, key = bot
+  token) because the signal log is private and the repo is public. Separate from the news pipeline.
+- `prices.py` price database: scstrade `MS_HistoricalPrices` per stock (history back to 2018), daily append from daily
+  activity. Adjusted for dividends/bonus/splits via PSX reference price: ref = close - change; ratio ref/prev close
+  (consecutive sessions only, <0.997) = ex-date factor. PSX price limit: 5% until 2020-01-20, 7.5% until 2024-06-10, then
+  10% (or Rs 1). Live file `state/prices.csv.gz` (~460 days), full history `data/history.csv.gz` (local, gitignored).
+  `meta()` shares/free float from PSX company pages (monthly) -> size tiers by market-cap rank: Large 1-30, Mid 31-100,
+  Small 101-200, Micro 201+. Liquidity floor `swing.min_adtv` Rs 10m/day.
+- `earnings.py` results history per company (scstrade `MS_Announcements` with par=SYMBOL, back to ~2010): YoY on the same
+  label (1Q/HY/3Q/FY/CY + yy), classes big_up/up/flat/down/big_down/turnaround/to_loss. `EVENT_SIGNALS` rules.
+- `signals.py` price rules (point-in-time) + `backtest.py` (entry next open, skip if locked up all day, costs by tier for
+  ideas only, edge vs same-tier liquid stocks same day, t-stat on daily means, year by year). `python -m pipeline backtest`
+  -> `out/backtest/*.png|csv` and `pipeline/swing_stats.json` (track record shown on live cards; committed).
+- **Findings (Jan 2018-Oct 2026, 481 stocks, ~21k trades):** price patterns (breakouts, 52w highs, upper circuits,
+  dip buying, accumulation, RS, washout) = NO edge after costs vs similar stocks. Buying before the close looked good only
+  because of locked upper-circuit stocks (cannot be bought). WORKS: `results_momentum` (EPS +50% YoY or turnaround AND +3%
+  on results day, mid/small caps, hold 60 sessions: +6.2% vs similar, positive all 9 years, but only 50% beat; median
+  +0.5%) and `results_reaction` (+5% on results day, 60 sessions: +5.0%). Weak warnings: `lower_lock` (58% did worse
+  over 2 weeks) and `pre_results_risk` (board meeting within 7 days after a bad last result). `results_drop` not live.
+  Mid/small filter was chosen after seeing data: live tracking must confirm. Do not over-claim.
+- `swing.py` daily scan: live rules -> log in `state/swing.json`, `_track()` follows each signal to its horizon vs
+  same-tier peers; Radar card + Tracker card (`cards.swing_cards`) + text to admin. Sent only if new/closed signals or Friday.
+- No Gemini/AI text in this feature (user asked "no AI traces"): plain rule-based wording only.
 
 ## Data sources that DON'T work (don't retry)
 dps.psx.com.pk/announcements POST (403), SECP & IMF sites (403), APP feeds (403 from GitHub), Profit/Mettis RSS (404),
@@ -81,7 +107,8 @@ Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not sh
 ## Dev gotchas
 - Windows + Git Bash: long heredocs with Python often fail ("unexpected EOF") → write a script to the scratchpad and run it.
 - Test locally with `--dry-run`; delete `state/state.json` + `out/` before committing (gitignored anyway).
-- Before pushing: `git pull --rebase origin main` (keepalive may commit). Commit trailer: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Before pushing: `git pull --rebase origin main` (keepalive may commit). From 2026-10-16 Umer asked for "no AI traces":
+  no Co-Authored-By trailer in commits, nothing AI-sounding in outputs.
 - Verify on GitHub via public API: `https://api.github.com/repos/4umr/psx-news-pipeline/actions/runs` (+ `/jobs`); view step logs in Chrome.
 - Requirements pinned with `~=`; Actions use checkout@v4 / setup-python@v5 / cache@v4 (Node 20 warning is harmless).
 
@@ -107,3 +134,6 @@ Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not sh
 6. Ideas not built: QR/join link on cards, weekly poll before MPC, web archive page (GitHub Pages), Urdu summaries,
    Sunday "Learn" explainer card, dividend/book-closure tracker, cron-job.org.
 7. Rupee 1-month move tile on the macro dashboard appears after ~20 days of recorded SBP interbank rates (`hist.usdpkr`).
+8. Swing Phase 2+ (not built): public data-only "Small & Mid Cap Radar", pump-risk flags, filings for all liquid stocks,
+   director dealings (forward-tracked only: PSX pages keep ~5 recent filings), GitHub Pages screener, intraday early movers
+   (needs cron-job.org). Check the first live swing runs (`swing.yml`) and the admin chat output.

@@ -9,3 +9,4 @@ yfinance~=1.5.1
 python-dotenv~=1.2.2
 matplotlib~=3.11.0
 pypdf~=6.19.0
+pandas~=2.3.3

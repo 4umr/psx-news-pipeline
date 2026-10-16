@@ -167,7 +167,8 @@ def date_from_ms(s: str) -> datetime | None:
     m = re.search(r"Date\((-?\d+)", s or "")
     if not m:
         return None
-    return datetime.fromtimestamp(int(m.group(1)) / 1000, tz=timezone.utc).astimezone(PKT)
+    # epoch + offset also works for pre-1970 dates (fromtimestamp fails on those on Windows)
+    return (datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=int(m.group(1)))).astimezone(PKT)
 
 
 def week_range(t: datetime, days: int = 7) -> tuple[datetime, datetime]:

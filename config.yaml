@@ -93,6 +93,21 @@ unusual_volume_x: 3.0
 # PSX company filings: company pages checked per run (top-10 by index weight + watchlist every run)
 psx_filings_per_run: 20
 
+# ---------------------------------------------------------------------
+# Swing scanner (private research, admin chat only). Runs after the close
+# (workflow "Swing scanner"). Only rules that passed the 2018-2026 backtest
+# are used; run "python -m pipeline backtest" to re-test them.
+# ---------------------------------------------------------------------
+swing:
+  enabled: true
+  min_adtv: 10000000          # only stocks trading Rs 10m+ a day on average (20 sessions)
+  history_start: "2018-01-01" # backtest start
+  costs:                      # round trip: brokerage, taxes, fees and bid-ask spread
+    Large: 0.005
+    Mid: 0.006
+    Small: 0.009
+    Micro: 0.013
+
 # Sector-relevant commodities and regional cues (shown in the morning brief)
 commodities:
   "CT=F":  ["Cotton", "Textile"]

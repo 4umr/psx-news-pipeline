@@ -94,6 +94,16 @@ class Sender:
             ok &= sent
         return ok
 
+    def send_admin_photo(self, png: bytes, caption: str = "", name: str = "card") -> bool:
+        """Image card to the owner's admin chat only (private research, never the channel)."""
+        caption = tidy(caption)
+        if self.dry:
+            return self.send_photo(png, f"[ADMIN ONLY] {caption}", name=name)
+        if not self.admin:
+            log.warning("ADMIN image '%s' not sent: TELEGRAM_ADMIN_CHAT_ID is not set", name)
+            return False
+        return self._photo(self.admin, png, caption, name)
+
     @staticmethod
     def fits_caption(text: str) -> bool:
         return _vis(text) <= 1000

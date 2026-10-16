@@ -48,7 +48,7 @@ _LIGHT = {"bg": "#f3efe4", "bg2": "#fdfcf8", "accent": "#1d6b3c", "accent2": "#1
 # Same colours everywhere; the name only sets the footer label
 THEMES = {name: {**_LIGHT, "nav": nav} for name, nav in (
     ("psx", "MARKETS"), ("us", "GLOBAL MARKETS"), ("commodity", "COMMODITIES"), ("fixed", "FIXED INCOME"),
-    ("economy", "ECONOMY"), ("alert", "MARKETS"), ("gold", "MARKETS"))}
+    ("economy", "ECONOMY"), ("alert", "MARKETS"), ("gold", "MARKETS"), ("research", "RESEARCH"))}
 
 _EMOJI = re.compile("[\U00010000-\U0010FFFF☀-➿️‍⬀-⯿←-⇿⌚-⏿]")
 
@@ -428,6 +428,61 @@ class Card:
             if right:
                 self.text(self.R - 30, yy, clean(right), 14.5, _col(sign) if sign is not None else CREAM,
                           bold=True, ha="right")
+        return y + h + 16
+
+    def entries(self, y, title, items, right_title="", max_h=None) -> int:
+        """Two-level list: code + headline (bold) with a wrapped detail line, value on the right.
+        items: (code, headline, detail, right, sign|None)."""
+        if not items:
+            return y
+        blocks, total = [], 0
+        for code, head, detail, right, sign in items:
+            lines = _wrap(detail, 700, 12.5)[:2] if detail else []
+            hh = 40 + len(lines) * 26 + 14
+            if max_h and 76 + total + hh > max_h:
+                break
+            blocks.append((code, head, lines, right, sign, hh))
+            total += hh
+        if not blocks:
+            return y
+        h = 76 + total
+        self.panel(self.L, y, 1000, h)
+        self.label(self.L + 30, y + 38, title, 14)
+        if right_title:
+            self.text(self.R - 30, y + 38, sp(right_title), 10.5, self.t["muted"], bold=True, ha="right")
+        yy = y + 76
+        for i, (code, head, lines, right, sign, hh) in enumerate(blocks):
+            if i:
+                self.line(self.L + 30, yy - 6, self.R - 30, yy - 6, alpha=0.5)
+            self.text(self.L + 30, yy + 16, clean(code)[:10], 16, self.t["accent2"], bold=True)
+            self.text(self.L + 190, yy + 16, clean(head)[:60], 14, CREAM, bold=True)
+            for j, ln in enumerate(lines):
+                self.text(self.L + 190, yy + 48 + j * 26, ln, 12.5, self.t["muted"])
+            if right:
+                self.text(self.R - 30, yy + 16, clean(right), 15, _col(sign) if sign is not None else CREAM,
+                          bold=True, ha="right")
+            yy += hh
+        return y + h + 16
+
+    def grid(self, y, title, headers, rows, xs, aligns, right_title="", row_h=42, max_rows=16) -> int:
+        """Multi-column table. rows: list of cells; a cell is text or (text, colour)."""
+        rows = rows[:max_rows]
+        if not rows:
+            return y
+        h = 104 + len(rows) * row_h
+        self.panel(self.L, y, 1000, h)
+        self.label(self.L + 30, y + 38, title, 14)
+        if right_title:
+            self.text(self.R - 30, y + 38, sp(right_title), 10.5, self.t["muted"], bold=True, ha="right")
+        for x, hd, al in zip(xs, headers, aligns):
+            self.text(self.L + x, y + 80, hd.upper(), 10, self.t["muted"], bold=True, ha=al)
+        self.line(self.L + 30, y + 96, self.R - 30, y + 96, alpha=0.7)
+        for i, row in enumerate(rows):
+            yy = y + 96 + row_h * (i + 0.5) + 4
+            for j, (x, cell, al) in enumerate(zip(xs, row, aligns)):
+                txt, col = (cell if isinstance(cell, tuple) else (cell, None))
+                self.text(self.L + x, yy, clean(str(txt)), 13.5, col or (self.t["accent2"] if j == 0 else CREAM),
+                          bold=j == 0 or col is not None, ha=al)
         return y + h + 16
 
     def chip(self, x, y, s, color, size=12.5) -> float:
@@ -991,3 +1046,108 @@ def alert_card(cfg: dict, spec: dict, when: datetime, tiles: list | None = None)
         c.text(c.L, y + 20, "Source: " + clean(spec["source"])[:100], 12, t["muted"], italic=True)
     c.footer()
     return c.png()
+
+# ===================================================================== swing research (private)
+VERDICT_COL = {"Works": UP, "Promising": GOLD, "Reliable warning": DOWN, "Weak warning": GOLD,
+               "No edge": FLAT, "Not a warning": FLAT, "Too few cases": FLAT}
+
+
+def _p(x) -> str:
+    return "n/a" if x is None or x != x else f"{x * 100:+.1f}%"
+
+
+def swing_cards(cfg: dict, ctx: dict) -> list[bytes]:
+    """Daily Swing Radar (admin chat): new ideas, warnings, open ideas and the live scoreboard."""
+    out = []
+    d, longs, risks = ctx["date"], ctx["longs"], ctx["risks"]
+    opens, done = ctx["open"], ctx["done"]
+    c = Card(cfg, "research")
+    y = c.title_block("Swing", "Radar", f"{d:%a, %d %b %Y}  ·  private research")
+    y = c.strip(y, [("New ideas", str(len(longs)), None), ("Caution", str(len(risks)), None),
+                    ("Open ideas", str(len(opens)), None), ("Finished", str(len(done)), None)])
+    room = c.H - 172 - 16
+    if longs:
+        y = c.entries(y, "Ideas to research", [(e["sym"], " + ".join(e["names"]), e["detail"], f"Rs {e['close']:,.2f}", None)
+                                               for e in longs], f"{len(longs)} new",
+                      max_h=(room - y) * (0.6 if risks else 1))
+    if risks:
+        y = c.entries(y, "Caution", [(e["sym"], " + ".join(e["names"]), e["detail"], f"{e['chg'] * 100:+.1f}%", e["chg"])
+                                      for e in risks], f"{len(risks)} new", max_h=room - y)
+    if not longs and not risks:
+        y = c.highlights(y, ["No new signals today. Open ideas are tracked on the next card."], title="Today")
+    if room - y > 150 and ctx.get("notes"):
+        c.highlights(y, ctx["notes"], title="Track record since 2018", h=room - y)
+    c.footer()
+    out.append(c.png())
+    if opens or done:
+        c = Card(cfg, "research")
+        y = c.title_block("Swing", "Tracker", f"Every signal followed to the end  ·  {d:%d %b %Y}")
+        if done:
+            n = len(done)
+            worked = sum(1 for e in done if (e["edge"] > 0) == (e["kind"] == "long")) / n
+            longs_done = [e["edge"] for e in done if e["kind"] == "long"]
+            avg = sum(longs_done) / len(longs_done) if longs_done else None
+            y = c.strip(y, [("Finished", str(n), None), ("Worked as expected", f"{worked * 100:.0f}%", None),
+                            ("Ideas vs similar", _p(avg), _col(avg) if avg is not None else None)])
+        seen, rows = set(), []
+        for e in opens:  # one row per stock and day (two rules can fire on the same results)
+            if (e["sym"], e["date"]) in seen:
+                continue
+            seen.add((e["sym"], e["date"]))
+            rows.append((e["sym"], f"{ctx['names'].get(e['sig'], e['sig'])[:30]}, {e['date'][8:]}/{e['date'][5:7]}, day {e['held']} of {e['h']}",
+                         (_p(e["ret"]), _col(e["ret"])), (_p(e["edge"]), _col(e["edge"]))))
+        if rows:
+            y = c.grid(y, "Open ideas", ["Stock", "Rule, signal date, days held", "Return", "Vs similar"], rows,
+                       [30, 190, 790, 970], ["left", "left", "right", "right"], max_rows=14)
+        recent = sorted(done, key=lambda e: e.get("exit_date", ""), reverse=True)
+        fit = int((c.H - 172 - 16 - y - 104) / 42)
+        if recent and fit >= 1:
+            rows = [(e["sym"], ("Caution: " if e["kind"] == "risk" else "") + ctx["names"].get(e["sig"], e["sig"]),
+                     (_p(e["ret"]), _col(e["ret"])), (_p(e["edge"]), _col(e["edge"]))) for e in recent[:fit]]
+            c.grid(y, "Recently finished", ["Stock", "Rule", "Return", "Vs similar"], rows,
+                   [30, 190, 790, 970], ["left", "left", "right", "right"], max_rows=fit)
+        c.footer()
+        out.append(c.png())
+    return out
+
+
+def backtest_cards(cfg: dict, summary, stats: dict) -> list[bytes]:
+    """Research report: every rule tested on PSX since 2018, with the verdict."""
+    out = []
+    s = summary.sort_values(["live", "edge"], ascending=[False, False])
+    c = Card(cfg, "research")
+    y = c.title_block("Swing rules", "Backtest", f"PSX {stats.get('period', '')}  ·  {stats.get('stocks', 0)} stocks")
+    works = int(s["verdict"].isin(["Works", "Promising"]).sum())
+    warns = int(s["verdict"].isin(["Reliable warning", "Weak warning"]).sum())
+    y = c.strip(y, [("Rules tested", str(len(s)), None), ("Trades", f"{int(s['n'].sum()):,}", None),
+                    ("Work", str(works), UP), ("Warnings", str(warns), DOWN)])
+    rows = [(r["name"][:34], f"{int(r['n']):,}", f"{r['beat'] * 100:.0f}%", (_p(r["edge"]), _col(r["edge"])),
+             (r["verdict"], VERDICT_COL.get(r["verdict"], FLAT))) for _, r in s.iterrows()]
+    y = c.grid(y, "Every rule, after costs, vs similar stocks", ["Rule", "Cases", "Beat", "Avg edge", "Verdict"], rows,
+               [30, 500, 590, 710, 970], ["left", "right", "right", "right", "right"], row_h=36, max_rows=16)
+    c.highlights(y, ["Avg edge: return after costs minus same-size stocks bought the same day.",
+                     "Beat: share of cases that did better than those stocks. Entry at the next open."],
+                 title="How to read", h=c.H - 172 - 16 - y)
+    c.footer()
+    out.append(c.png())
+    for _, r in s[s["live"]].iterrows():
+        c = Card(cfg, "research")
+        y = c.title_block("Rule test", r["name"], f"Hold {int(r['h'])} sessions  ·  verdict: {r['verdict']}")
+        y = c.strip(y, [("Cases", f"{int(r['n']):,}", None), ("Avg vs similar", _p(r["edge"]), _col(r["edge"])),
+                        ("Beat similar", f"{r['beat'] * 100:.0f}%", None), ("Worst 10%", _p(r["p10"]), DOWN)])
+        yrs = [v for v in range(2018, 2027) if r.get(f"y{v}") == r.get(f"y{v}")]
+        if yrs:
+            y = c.bars(y, "Edge by year (vs similar stocks, after costs)", [str(v) for v in yrs],
+                       [r[f"y{v}"] * 100 for v in yrs], fmt="{:+.1f}%", h=80 + len(yrs) * 40, x0=200)
+        warn = r["kind"] == "risk"
+        notes = [r["rule"] + ".",
+                 f"Average return after costs {_p(r['avg'])}; similar stocks over the same days {_p(r['avg'] - r['edge'])}.",
+                 f"Median case {_p(r['med_edge'])} vs similar stocks; "
+                 + (f"{(1 - r['beat']) * 100:.0f}% of cases did worse than similar stocks."
+                    if warn else f"{r['beat'] * 100:.0f}% beat them, so the average comes from fewer, bigger winners.")]
+        if not warn:
+            notes.append("Spread money over several cases; never one big bet on a single signal.")
+        c.highlights(y, notes, title="The rule", h=c.H - 172 - 16 - y)
+        c.footer()
+        out.append(c.png())
+    return out
