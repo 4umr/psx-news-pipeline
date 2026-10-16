@@ -7,7 +7,8 @@ Not a developer — explain in plain language, give click-by-click steps, do the
 Free, fully automatic pipeline that posts PSX-moving news, official data and market briefs to a Telegram
 channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, branch `main`), not on the laptop.
 - Workflow `.github/workflows/pipeline.yml`: cron every 5 min (GitHub actually runs ~every 15–20 min) +
-  manual "Run workflow" with a **What to do** menu: run · test --admin-only · test · brief morning/midday/close/week_ahead · about · chats.
+  manual "Run workflow" with a **What to do** menu: run · test --admin-only · test · brief morning/opening/midday/close/results/macro/brokers/week_ahead · about · chats.
+  Secrets also include `GEMINI_API_KEY` (set by Umer; health check on 2026-10-16: ok, gemini-2.5-flash).
 - `.github/workflows/keepalive.yml`: monthly commit so GitHub never pauses the schedule.
 - State (what was sent, snapshots, history) = `state/state.json`, kept in the **Actions cache** (key `psx-state-v2-*`)
   with a backup copy force-pushed to the orphan branch **`state`** (after every run); auto-restored if cache is lost.
@@ -30,11 +31,13 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   from PSX), FIPI/LIPI (+by sector), KSE-100 moves (+intraday path recording), big stock moves & watchlist, PBS CPI/SPI
   (real numbers from the .docx/post), MPC calendar & reminders, PSX company filings (material info, insider dealing),
   unusual volume (needs ≥5 sessions of history), global moves.
-- `briefs.py` text + card albums: morning 08:45, **midday 12:30**, close 17:15 (holiday detection), week_ahead Sun 19:00.
+- `briefs.py` card albums (Mon-Fri PKT): morning 08:45, opening bell 10:00, midday 12:30, **broker views 13:00**,
+  close 17:15 (holiday detection), results tracker 18:30 (only on results days), week_ahead Sun 19:00; macro dashboard
+  auto-posts right after each CPI release. AI commentary in briefs via `_ai_points()` (falls back to rule-based highlights).
 - `cards.py` matplotlib infographics in the **PAKISTAN INVESTORS brand kit** (`Card` class, px coords, 1080×1560):
-  dark gradient bg + glow, "PI" logo (drawn; `assets/logo.png` overrides), serif STIX titles, rounded panels, sparklines,
-  footer nav icons + disclaimer. Themes = category colours: psx green · us blue · commodity gold · fixed purple ·
-  economy slate · alert red · gold (week ahead). Up green `#46d27f` ▲ / down red `#ff5f5f` ▼.
+  ONE light scheme (warm white bg, white panels, deep green text, gold titles; `THEMES` all share `_LIGHT`, the theme
+  name only sets the footer label), "PI" logo (drawn; `assets/logo.png` overrides), serif STIX titles, rounded panels,
+  sparklines, footer nav icons + disclaimer. Up green `#1a8a4a` ▲ / down red `#c8372f` ▼. No author tag anywhere.
   Albums: morning = PSX market open + US market close + commodity update + top stories; midday/close = PSX card +
   movers & sectors + top stories; week_ahead = week in review + the week ahead. `alert_card(cfg, spec, when, tiles)`.
   No emoji in images (font can't draw them); `text.parse_math=False`. Preview with `--dry-run` → `out/*.png`.
@@ -88,12 +91,19 @@ Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not sh
   visible links, disclaimer "info only, not investment advice", proactive ideas that give an informational edge.
 - Wants things to run unattended and robustly; prefers I do the work (incl. via his Chrome) over long instructions.
 
-## Open items (as of 2026-10-09)
-1. Umer to put his **personal** chat id into `TELEGRAM_ADMIN_CHAT_ID` (bot already DM'd it to him via `chats`), then run `test --admin-only`.
-2. Umer to set up **cron-job.org** 2-minute trigger (POST `https://api.github.com/repos/4umr/psx-news-pipeline/actions/workflows/pipeline.yml/dispatches`,
+## Open items (as of 2026-10-16)
+1. **Admin channel id**: Umer must create a private Telegram channel, add the bot as admin, run `chats`, and put the id
+   (starts -100) into the `TELEGRAM_ADMIN_CHAT_ID` secret, then run `test --admin-only`. Not confirmed done: until then the raw
+   headline feed, "Unconfirmed" items, health warnings and the 23:45 report have nowhere to go (check the Telegram channel/logs).
+2. **cron-job.org** 2-minute trigger (POST `https://api.github.com/repos/4umr/psx-news-pipeline/actions/workflows/pipeline.yml/dispatches`,
    headers Accept `application/vnd.github+json`, Authorization `Bearer <fine-grained PAT, Actions RW, this repo only>`,
-   X-GitHub-Api-Version `2022-11-28`, body `{"ref":"main"}`) → faster news + smoother intraday charts.
-3. Waiting on: channel invite link (`brand.channel_link`), watchlist stocks (`watchlist:`).
-4. Verify first real midday/closing albums arrived (logs show "album of N cards sent" / "image card ... sent").
-5. Ideas offered, not built: monthly macro card on CPI day, results-season tracker, weekly poll, web archive page, Urdu summaries.
-6. Brand kit applied 2026-10-09 (infographic mode). Waiting on Umer's real logo as transparent PNG → `assets/logo.png`.
+   X-GitHub-Api-Version `2022-11-28`, body `{"ref":"main"}`) -> faster news + smoother intraday charts. Not done.
+3. Waiting on Umer: channel invite link (`brand.channel_link`), **watchlist** stocks (5-10 symbols + alert % in `watchlist:`),
+   real logo as transparent PNG -> `assets/logo.png`.
+4. Gemini key was once pasted in chat (exposed); Umer said he added a key to GitHub: remind him to confirm it is a NEW key
+   (old one deleted at aistudio.google.com/apikey). Never use/enter keys myself (rule); never echo secrets.
+5. Watch the first days of live AI posts: read GitHub run logs (kept off main channel / "AI summary failed the number check"
+   / "Unconfirmed" lines) and Telegram output; tune `impact.py`, `analysis.py` prompts, `config.yaml` (topics, exclude_titles).
+6. Ideas not built: QR/join link on cards, weekly poll before MPC, web archive page (GitHub Pages), Urdu summaries,
+   Sunday "Learn" explainer card, dividend/book-closure tracker, cron-job.org.
+7. Rupee 1-month move tile on the macro dashboard appears after ~20 days of recorded SBP interbank rates (`hist.usdpkr`).
