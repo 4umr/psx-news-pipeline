@@ -74,6 +74,12 @@ def main() -> None:
             summary, _ = backtest.run(cfg, args.refresh)
             changes = backtest.verdict_changes(before, backtest.load_stats())
             pngs = backtest_cards(cfg, summary, backtest.load_stats())
+            try:  # portfolio test of the live idea rules (a failure here must not stop the re-test)
+                from . import portfolio
+                from .cards import portfolio_card
+                pngs.insert(1, portfolio_card(cfg, portfolio.run(cfg)))
+            except Exception:  # noqa: BLE001
+                log.exception("portfolio test failed")
             out = ROOT / "out" / "backtest"
             for i, png in enumerate(pngs, 1):
                 (out / f"report_{i}.png").write_bytes(png)

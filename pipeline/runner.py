@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import analysis, briefs, context, impact, street, watchers
+from . import analysis, briefs, context, expectations, impact, street, watchers
 from .common import Alert, NewsItem, esc, hours_ago, in_window, link, log, now_pkt, to_pkt
 from .links import short
 from .scoring import Scorer, is_duplicate, is_stale, title_tokens
@@ -484,6 +484,7 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
     })
 
     S("street capture", street.capture, sbp_items + news_items, state)
+    S("EPS expectations", expectations.capture, news_items, state)
 
     alerts: list[Alert] = []
     alerts += S("PBS releases", watchers.pbs_releases, state, default=[])  # before news: marks PBS posts handled

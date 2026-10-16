@@ -877,6 +877,11 @@ def results(cfg: dict, state: State, mk: dict, view=None):
     agree = [c for c, a in assessed.items() if a["cls"] in earnings.GOOD and (move(c) or 0) >= 3]
     if agree:
         hl.append("Profit up strongly and the stock rose 3%+ today: " + ", ".join(agree[:8]))
+    from . import expectations
+    vs = [f"{c} {expectations.compare(state, c, a['label'], a).split(' expected')[0]}" for c, a in assessed.items()
+          if expectations.compare(state, c, a["label"], a)]
+    if vs:
+        hl.append("Vs analysts' expected EPS: " + ", ".join(vs[:6]))
     pays = [b for b in items if b["pay"]]
     if pays:
         hl.append("Payouts announced: " + ", ".join(f"{b['code']} ({' '.join(b['pay'])})" for b in pays[:5]))

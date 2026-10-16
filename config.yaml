@@ -164,6 +164,7 @@ feeds:
   - {name: "Dawn", url: "https://www.dawn.com/feeds/home", pk: true}
   - {name: "Express Tribune", url: "https://tribune.com.pk/feed/pakistan", pk: true}
   - {name: "The Nation", url: "https://www.nation.com.pk/rss/business", pk: true}
+  - {name: "Trade Chronicle", url: "https://tradechronicle.com/feed/", pk: true}   # results previews (expected EPS)
 
 # Google News searches (Pakistan edition, last 24h). Catches Reuters,
 # Bloomberg, Mettis, Profit, Geo, Gulf News etc. that have no usable RSS.
@@ -184,6 +185,7 @@ google_news:
   - 'Federal Reserve OR OPEC OR "oil prices"'
   - 'Topline OR "Arif Habib" OR "JS Global" OR AKD expects OR forecast Pakistan'
   - 'analysts expect Pakistan inflation OR "policy rate" OR KSE-100'
+  - '"expected to post" EPS OR "earnings per share" Pakistan'
 
 # ---------------------------------------------------------------------
 # Topics: how news is recognised and scored.

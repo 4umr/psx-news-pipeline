@@ -239,7 +239,7 @@ def assess(sym: str, label: str = "") -> dict | None:
     now_, ly = (r["eps_cum"], r["eps_cum_ly"]) if annual else (r["eps_q"], r["eps_q_ly"])
     yoy = r["yoy_cum"] if annual else r["yoy_q"]
     both = pd.notna(now_) and pd.notna(ly)
-    return {"label": r["label"], "date": r["date"], "annual": annual, "eps": now_, "eps_ly": ly,
+    return {"label": r["label"], "date": r["date"], "annual": annual, "eps": now_, "eps_ly": ly, "eps_q": r["eps_q"],
             "yoy": None if pd.isna(yoy) else float(yoy), "cls": r["cls"], "div": r["div"],
             "turnaround": bool(both and now_ > 0 > ly), "to_loss": bool(both and now_ < 0 < ly)}
 

@@ -140,18 +140,26 @@ def adjust(df: pd.DataFrame) -> pd.DataFrame:
     sess = {d: i for i, d in enumerate(sorted(df["date"].unique()))}
     df["si"] = df["date"].map(sess)
     consecutive = df.groupby("sym")["si"].diff() == 1
-    f = ratio.where(consecutive & (ratio < 0.997) & (ratio > 0.02), 1.0)
+    # PSX daily price limit: a % band or Rs 1, whichever is higher. The band was 5% until
+    # Jan 2020, 7.5% until Jun 2024 and 10% since (found from the data itself).
+    band = np.select([df["date"] < "2020-01-20", df["date"] < "2024-06-10"], [0.05, 0.075], 0.10)
+    # A real reference price always keeps the day's close inside the price band. When it does not,
+    # the source's 'change' field is wrong (seen for weeks on STPL in 2018): ignore it, use the previous close.
+    raw_ref = df["ref"].where(df["ref"] > 0)
+    ok_ref = (df["c"] / raw_ref - 1).abs() <= np.maximum(band, 1.0 / raw_ref) + 0.02
+    # Across a gap, PSX usually suspended the stock for a split/bonus (e.g. SYS, June 2025): accept the
+    # factor for liquid stocks; for thinly traded ones a gap is more often missing data, so skip it there.
+    val_before = (df["c"] * df["v"]).groupby(df["sym"]).transform(lambda s: s.shift(1).rolling(20, min_periods=5).mean())
+    usable = consecutive | (val_before >= 5e6)
+    f = ratio.where(usable & ok_ref & (ratio < 0.997) & (ratio > 0.02), 1.0)
     df["exf"] = f
     # backward cumulative product: each day's prices are multiplied by all LATER factors
     later = f.groupby(df["sym"]).transform(lambda s: s[::-1].cumprod()[::-1].shift(-1).fillna(1.0))
     for raw, adj in (("o", "ao"), ("h", "ah"), ("l", "al"), ("c", "ac")):
         df[adj] = df[raw] * later
-    ref = df["ref"].where(df["ref"] > 0, prev)
+    ref = raw_ref.where(ok_ref, prev).fillna(prev)
     df["chg"] = df["c"] / ref - 1
     df["val"] = df["c"] * df["v"]
-    # PSX daily price limit: a % band or Rs 1, whichever is higher. The band was 5% until
-    # Jan 2020, 7.5% until Jun 2024 and 10% since (found from the data itself).
-    band = np.select([df["date"] < "2020-01-20", df["date"] < "2024-06-10"], [0.05, 0.075], 0.10)
     df["limit"] = np.maximum(band, 1.0 / ref)
     return df
 

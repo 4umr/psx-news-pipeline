@@ -144,6 +144,20 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   since 2023 (regime) -> rejected. Expensive+worsening failed after the split guard -> auto switched off, live=False.
 - Live DB now keeps 800 days (one-time backfill in `update_live`); the valuation rule refuses to run with < 2 years.
 
+## Phase 5 (built 2026-10-16): portfolio test, data fixes, analyst expectations
+- `portfolio.py` (run inside `python -m pipeline backtest`, card `portfolio_card`): N equal slots, buy next open,
+  full cost at entry, hold rule period, idle cash earns 0. Result 2018-2026: 10 slots +18.1%/yr, max fall -35.7%;
+  KSE-100 (price, no dividends) +17.4%, equal-weight liquid +12.5%. Stop-loss -15% HURT (14.8%). 2025 lagged badly
+  (+5.9% vs KSE +48.8%: large-cap rally). Honest framing: a way to pick mid/small caps, not a market replacement.
+- `prices.adjust` fixes: (1) the source 'change' field can be wrong for weeks (STPL 2018: ref ~9 vs close ~17):
+  a reference price is only trusted if the close is inside the price band around it; (2) splits happen across
+  trading suspensions (SYS Jun 2025): across a gap, factors are accepted for liquid stocks (avg value >= Rs 5m).
+  Portfolio entry also skips impossible overnight jumps. After fixes only 2 suspicious moves in liquid stocks.
+- `expectations.py`: parses results previews ("EFERT is expected to post EPS of PKR6.58 in 3QCY26") from all news
+  (+ Trade Chronicle feed + Google query), stores `state.data["expect"]` (180 days); 1Q/2Q/3Q -> 1Q27 style labels,
+  4Q -> FY/CY label compared with the quarter EPS. Shown as "beat/missed expected EPS x (source) by y%" in the
+  intraday results post and the Results Tracker highlights. Coverage is thin (about 1-2 previews a week).
+
 ## Data sources that DON'T work (don't retry)
 dps.psx.com.pk/announcements POST (403), SECP & IMF sites (403), APP feeds (403 from GitHub), Profit/Mettis RSS (404),
 Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not shown.

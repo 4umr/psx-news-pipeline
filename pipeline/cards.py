@@ -1227,3 +1227,43 @@ def education_card(cfg: dict, summary, stats: dict) -> bytes:
                  title="Lessons", h=c.H - 172 - 16 - y)
     c.footer()
     return c.png()
+
+
+def portfolio_card(cfg: dict, o: dict) -> bytes:
+    """Portfolio test of the live idea rules vs the market (research report, admin)."""
+    t = o["table"].set_index("plan")
+    main = o["variants"]["10 slots"]["curve"]["equity"]
+    c = Card(cfg, "research")
+    y = c.title_block("Portfolio test", "Following the ideas", f"{main.index[0]:%b %Y} to {main.index[-1]:%b %Y}  ·  10 equal slots")
+    k, e = t.loc["KSE-100 (no dividends)"], t.loc["All liquid stocks, equal weight"]
+    y = c.strip(y, [("Ideas plan / yr", _p(t.loc["10 slots", "cagr"]), _col(t.loc["10 slots", "cagr"])),
+                    ("KSE-100 / yr", _p(k["cagr"]), _col(k["cagr"])), ("All liquid / yr", _p(e["cagr"]), _col(e["cagr"])),
+                    ("Worst fall", _p(t.loc["10 slots", "maxdd"]), DOWN)])
+    c.panel(c.L, y, 1000, 330)
+    c.label(c.L + 30, y + 38, "Growth of Rs 100 (log scale)", 14)
+    ax = c.axes(c.L + 70, y + 64, 900, 230)
+    for series, col, lab in ((main, UP, "Ideas plan"), (o["kse"], GOLD, "KSE-100"), (o["ew"], FLAT, "All liquid")):
+        s = series.dropna() * 100
+        ax.plot(s.index, s.values, color=col, lw=2.2 if lab == "Ideas plan" else 1.6, label=lab)
+    ax.set_yscale("log")
+    ax.tick_params(labelsize=9, colors=CREAM)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    ax.legend(loc="upper left", fontsize=10, frameon=False)
+    c.text(c.L + 70, y + 310, f"{main.index[0]:%b %Y}", 10.5, c.t["muted"])
+    c.text(c.L + 970, y + 310, f"{main.index[-1]:%b %Y}", 10.5, c.t["muted"], ha="right")
+    c.text(c.L + 970, y + 38, f"Rs 100 became Rs {main.iloc[-1] * 100:,.0f}", 12, UP, bold=True, ha="right")
+    y += 346
+    rows = []
+    for plan in ("10 slots", "10 slots, stop -15%", "5 slots", "20 slots"):
+        r = t.loc[plan]
+        rows.append((plan, (_p(r["cagr"]), _col(r["cagr"])), (_p(r["maxdd"]), DOWN), f"{int(r['trades'])}",
+                     f"{r['avg_slots'] * 100:.0f}%"))
+    y = c.grid(y, "Plans compared", ["Plan", "Per year", "Worst fall", "Trades", "Slots used"], rows,
+               [30, 560, 720, 850, 970], ["left", "right", "right", "right", "right"], row_h=38)
+    c.highlights(y, ["Beats similar mid and small caps; near the KSE-100 plus dividends.",
+                     "Idle cash earned nothing here; in practice it earns T-bill interest.",
+                     "A -15% stop-loss made results worse, so none is used."],
+                 title="What it means", h=c.H - 172 - 16 - y)
+    c.footer()
+    return c.png()

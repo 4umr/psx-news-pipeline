@@ -205,7 +205,7 @@ def _assess_all(rows: list[dict]) -> dict[str, dict]:
 
 
 def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dict | None = None) -> list[Alert]:
-    from . import earnings
+    from . import earnings, expectations
     cutoff = now_pkt() - timedelta(days=4)
     fresh = []
     for r in rows:
@@ -250,6 +250,8 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dic
             bits.append(f"Bonus {esc(r['bm_bonus'].strip())}")
         if r.get("bm_right_per", "").strip():
             bits.append(f"Right {esc(r['bm_right_per'].strip())}")
+        if a and (vs := expectations.compare(state, code, r.get("bm_quarter_number") or "", a)):
+            bits.append(esc(vs))
         if (pm := move(code)) is not None:
             bits.append(f"stock {pm:+.1f}% today")
         period = esc(r.get("bm_quarter_number") or "")
