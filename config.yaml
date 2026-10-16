@@ -102,6 +102,7 @@ psx_filings_per_run: 25
 swing:
   enabled: true
   min_adtv: 10000000          # only stocks trading Rs 10m+ a day on average (20 sessions)
+  plan_slots: 10              # the tested plan: equal amounts, up to this many ideas at once
   history_start: "2018-01-01" # backtest start
   costs:                      # round trip: brokerage, taxes, fees and bid-ask spread
     Large: 0.005

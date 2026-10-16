@@ -150,3 +150,25 @@ def sector_table(now_pe: pd.DataFrame, hist: pd.DataFrame | None) -> pd.DataFram
                      "cheaper_share": float((h < r["median"]).mean()) if len(h) >= 52 else np.nan,
                      "since": f"{hist[hist['sector'] == r['sector']]['date'].min():%Y}" if len(h) >= 52 else ""})
     return pd.DataFrame(rows).sort_values("pe")
+
+
+def _stock_pe_path():
+    from .common import ROOT
+    return ROOT / "state" / "stock_pe.csv"
+
+
+def save_stock_history(v: pd.DataFrame, years: int = 5) -> None:
+    """Each company's usual (median) trailing P/E over the last `years` years, from weekly samples."""
+    d = v[v["pe"].notna() & (v["pe"] < 200)]
+    d = d[_weekly(d) & (d["date"] >= d["date"].max() - pd.Timedelta(days=365 * years))]
+    g = d.groupby("sym")["pe"].agg(["median", "count"]).reset_index()
+    g[g["count"] >= 52].rename(columns={"median": "usual_pe", "count": "weeks"}).to_csv(_stock_pe_path(), index=False)
+
+
+def load_stock_history() -> dict[str, float]:
+    p = _stock_pe_path()
+    try:
+        h = pd.read_csv(p)
+        return dict(zip(h["sym"], h["usual_pe"]))
+    except Exception:  # noqa: BLE001  missing or damaged: the website just leaves the comparison out
+        return {}

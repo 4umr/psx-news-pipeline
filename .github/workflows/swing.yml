@@ -62,6 +62,7 @@ jobs:
             state/swing.json
             state/swing_stats.json
             state/sector_pe.csv
+            state/stock_pe.csv
             data/results.csv.gz
             data/flows.csv.gz
           key: psx-swing-v1-${{ github.run_id }}
@@ -129,6 +130,7 @@ jobs:
             state/swing.json
             state/swing_stats.json
             state/sector_pe.csv
+            state/stock_pe.csv
             data/results.csv.gz
             data/flows.csv.gz
           key: psx-swing-v1-${{ github.run_id }}
@@ -139,7 +141,7 @@ jobs:
           KEY: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           tmp=$(mktemp -d)
-          files=$(cd state && ls prices.csv.gz meta.json swing.json swing_stats.json sector_pe.csv 2>/dev/null)
+          files=$(cd state && ls prices.csv.gz meta.json swing.json swing_stats.json sector_pe.csv stock_pe.csv 2>/dev/null)
           tar cz -C state $files | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:KEY -out "$tmp/swing.tgz.enc"
           cd "$tmp"
           git init -q -b swing-data

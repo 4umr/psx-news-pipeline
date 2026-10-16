@@ -14,3 +14,4 @@ state/*.tmp
 state/swing_stats.json
 .claude/
 state/sector_pe.csv
+state/stock_pe.csv

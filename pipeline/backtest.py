@@ -152,7 +152,9 @@ def run(cfg: dict, refresh: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
     ev = pd.concat([events(df, min_adtv), earnings.event_rows(res, df, min_adtv),
                     research.events(df, res, sectors, min_adtv, fl)])
     try:  # sector P/E history since 2018 for the public valuation card and the website
-        research.save_sector_history(research.valuation(df, res), sectors, min_adtv)
+        val = research.valuation(df, res)
+        research.save_sector_history(val, sectors, min_adtv)
+        research.save_stock_history(val)
     except Exception:  # noqa: BLE001
         log.exception("sector P/E history failed")
     cols = ["no_fill", "cost"] + [f"{p}{h}" for h in HORIZONS for p in ("ret", "bad", "kse", "base")]

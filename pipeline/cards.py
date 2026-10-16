@@ -1100,12 +1100,14 @@ def swing_cards(cfg: dict, ctx: dict) -> list[bytes]:
             y = c.grid(y, "Open ideas", ["Stock", "Rule, signal date, days held", "Return", "Vs similar"], rows,
                        [30, 190, 790, 970], ["left", "left", "right", "right"], max_rows=14)
         recent = sorted(done, key=lambda e: e.get("exit_date", ""), reverse=True)
-        fit = int((c.H - 172 - 16 - y - 104) / 42)
+        fit = int((c.H - 172 - 16 - y - 104 - (230 if ctx.get("plan") else 0)) / 42)
         if recent and fit >= 1:
             rows = [(e["sym"], ("Caution: " if e["kind"] == "risk" else "") + ctx["names"].get(e["sig"], e["sig"]),
                      (_p(e["ret"]), _col(e["ret"])), (_p(e["edge"]), _col(e["edge"]))) for e in recent[:fit]]
-            c.grid(y, "Recently finished", ["Stock", "Rule", "Return", "Vs similar"], rows,
-                   [30, 190, 790, 970], ["left", "left", "right", "right"], max_rows=fit)
+            y = c.grid(y, "Recently finished", ["Stock", "Rule", "Return", "Vs similar"], rows,
+                       [30, 190, 790, 970], ["left", "left", "right", "right"], max_rows=fit)
+        if ctx.get("plan") and c.H - 172 - 16 - y > 150:
+            c.highlights(y, ctx["plan"], title="Plan check", h=c.H - 172 - 16 - y)
         c.footer()
         out.append(c.png())
     return out

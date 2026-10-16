@@ -954,7 +954,9 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
     # events can be tested later (PSX pages only show a few recent filings, so history must be collected)
     ev = state.data.setdefault("events", [])
     for sym, f in fresh:
-        kind = "insider" if re.search(r"disclosure of interest|transaction in shares|director", f["title"], re.I)             else ("material" if "material" in f["title"].lower() else "")
+        kind = ("insider" if re.search(r"disclosure of interest|transactions? in (the )?shares|(purchase|sale|sell|buy)\w* of shares"
+                                       r"|director'?s? (dealing|trading)", f["title"], re.I)
+                else ("material" if "material" in f["title"].lower() else ""))
         r = px.get(sym, {})
         if kind:
             ev.append({"d": f["date"], "t": f"{now:%Y-%m-%d %H:%M}", "sym": sym, "kind": kind, "title": f["title"][:160],

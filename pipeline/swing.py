@@ -255,6 +255,36 @@ def _track_record(name: str, stats: dict) -> str:
             f"1 in 10 lost {abs(s['p10']) * 100:.0f}% or more")
 
 
+def plan_check(cfg: dict, open_: list[dict], new_longs: list[dict]) -> list[str]:
+    """Turn the signals into the tested plan: equal slots, fixed holding period, results dates to watch."""
+    slots = int(cfg.get("swing", {}).get("plan_slots", 10))
+    held = {e["sym"]: e for e in open_}
+    out = [f"Slots in use: {len(held)} of {slots} (the tested plan: equal amounts, up to {slots} ideas at once, "
+           "each held for its rule's period, no stop-loss)."]
+    free = slots - len(held)
+    fresh = [e["sym"] for e in new_longs if e["sym"] not in held]
+    if fresh:
+        out.append(f"New today: {', '.join(fresh)}. " + (f"{min(free, len(fresh))} fit in free slots; " if free > 0 else
+                   "no free slot: the test skipped ideas when all slots were full; ") + "the test bought at the next open.")
+    ending = sorted((e["h"] - e["held"], e["sym"]) for e in held.values() if e["h"] - e["held"] <= 5)
+    if ending:
+        out.append("Holding period ends within a week: " + ", ".join(f"{s} ({n} sessions left)" for n, s in ending) + ".")
+    try:
+        today = pd.Timestamp(now_pkt().strftime("%Y-%m-%d"))
+        soon = {}
+        for b in scs.board_meetings():
+            sym = (b.get("company_code") or "").strip()
+            if sym in held and b.get("date"):
+                d = pd.Timestamp(b["date"].strftime("%Y-%m-%d"))
+                if today <= d <= today + pd.Timedelta(days=7):
+                    soon[sym] = d
+        if soon:
+            out.append("Results due for open ideas: " + ", ".join(f"{s} on {d:%a %d %b}" for s, d in sorted(soon.items())) + ".")
+    except Exception:  # noqa: BLE001  the plan check works without the calendar
+        pass
+    return out
+
+
 def radar(cfg: dict, sess: pd.Timestamp, new: list[dict], st: dict, closed: list[dict]) -> tuple[list[bytes], str]:
     from .cards import swing_cards
     stats = backtest.load_stats().get("rules", {})
@@ -274,8 +304,9 @@ def radar(cfg: dict, sess: pd.Timestamp, new: list[dict], st: dict, closed: list
                    key=lambda e: e["date"], reverse=True)
     done = [e for e in st["log"] if e["status"] == "closed"]
     used = sorted({e["sig"] for e in new})
+    plan = plan_check(cfg, open_, longs)
     ctx = {"date": sess, "longs": longs, "risks": risks, "open": open_, "done": done, "closed_today": closed,
-           "names": {k: v["name"] for k, v in SPECS.items()},
+           "names": {k: v["name"] for k, v in SPECS.items()}, "plan": plan,
            "notes": [_track_record(n, stats) for n in used if _track_record(n, stats)]}
     cards = swing_cards(cfg, ctx)
     # plain text copy (caption of the first card is short; the full text follows as a message)
@@ -292,6 +323,10 @@ def radar(cfg: dict, sess: pd.Timestamp, new: list[dict], st: dict, closed: list
         lines.append("<b>Finished today</b>")
         lines += [f"{e['sym']}, {SPECS[e['sig']]['name']}: {_pct(e['ret'])} ({_pct(e['edge'])} vs similar stocks"
                   f"{' after costs' if e['kind'] == 'long' else ''})" for e in closed]
+        lines.append("")
+    if plan:
+        lines.append("<b>Plan check</b>")
+        lines += [esc(x) for x in plan]
         lines.append("")
     if ctx["notes"]:
         lines.append("<b>Track record</b>")
@@ -538,9 +573,9 @@ def weekly(cfg: dict, dry: bool = False, force: bool = False) -> None:
     extra, problems = weekly_extras(cfg, df, last, this_week, end, start, now, min_adtv, sectors, force)
     cards = (cards + extra)[:10]  # Telegram albums hold up to 10 images
     caption = (f"<b>The week for PSX investors</b> · week ending {end:%d %b}\n"
-               "Mid and small caps, market health, payouts coming up"
+               f"{len(cards)} cards: mid and small caps"
                + (f", results due next week ({len(cal)} liquid companies)" if cal else "")
-               + "\nData only, not investment advice.")
+               + (", market health, payouts and more" if extra else "") + "\nData only, not investment advice.")
     s = Sender(dry)
     if problems:
         s.send_admin("<b>Sunday cards check</b>\n" + "\n".join(esc(p) for p in problems))

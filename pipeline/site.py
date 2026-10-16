@@ -51,6 +51,7 @@ input[type=search]{flex:1 1 220px}label{display:flex;gap:6px;align-items:center;
 footer{color:var(--muted);font-size:13px;padding:24px 0 40px}svg{width:100%;height:auto;display:block}
 .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;background:#1d6b3c;color:#fff;
 border-radius:6px;padding:2px 7px;margin-left:6px;vertical-align:middle}
+.qc{list-style:none;padding:0;margin:0}.qc li{padding:6px 0;border-bottom:1px solid #eee9dc}
 @media (max-width:640px){.hm{display:none}h1{font-size:25px}.panel{padding:14px}}
 """
 
@@ -139,6 +140,9 @@ def build(cfg: dict) -> int:
     v = research.valuation(df, res)
     v_last = v[v["date"] == last_d].set_index("sym")
     by_sym = {s: g for s, g in res.groupby("sym")}
+    sector_now = {r["sector"]: r["median"] for _, r in research.sector_pe(
+        v[v["date"] == last_d], {s: (act.get(s, {}).get("sector_name") or "") for s in syms}, min_adtv, weekly=False).iterrows()}
+    usual = research.load_stock_history()
     meet: dict[str, pd.Timestamp] = {}
     meet_lab: dict[str, str] = {}
     for b in scs.board_meetings():
@@ -216,6 +220,8 @@ def build(cfg: dict) -> int:
         body = (f'<h1>{H(s)} <span>{H(name)}</span>{"<span class=tag>KSE-100</span>" if s in kse else ""}</h1>'
                 f'<p class="sub">{H(sector)} · Rs {row["p"]:,.2f} at the {asof}</p>'
                 f'<div class="panel"><div class="tiles">{tiles}</div></div>'
+                + _quick_check(h, hist, row["pe"], sector_now.get(sector), usual.get(s),
+                               float(last["adtv20"]) if pd.notna(last["adtv20"]) else None, min_adtv, name) +
                 f'<div class="panel"><h2>Price, last 12 months</h2>{_chart(list(hist["date"]), list(hist["ac"]))}'
                 f'<p class="muted">Adjusted for dividends and bonus shares, so returns are comparable over time.</p></div>'
                 f'<div class="panel"><h2>Key facts</h2><p>{" · ".join(facts)}</p>'
@@ -326,3 +332,54 @@ def _sectors(v_now: pd.DataFrame, sectors: dict[str, str], min_adtv: float, asof
             f'positive earnings. Companies with a split or bonus issue in the last two years are left out, because their '
             f'reported EPS mixes old and new share counts. A low P/E can mean cheap, or that profits are expected to fall.</p></div>')
     (OUT / "sectors.html").write_text(_page("Sector valuations", body, 0, asof), encoding="utf-8")
+
+
+def _quick_check(h, hist: pd.DataFrame, pe, sector_pe, usual_pe, adtv, min_adtv, name: str = "") -> str:
+    """Plain facts that answer the first questions about a company. Each line: green / amber / red dot."""
+    lines = []
+
+    def add(tone, text):
+        lines.append(f'<li><span class="{tone}">&#9679;</span> {text}</li>')
+    if "defaulter" in name.lower():
+        add("down", "<b>On PSX's defaulter segment</b>: the company has not met listing requirements (extra risk)")
+    if h is not None and not h.empty:
+        rec = h.sort_values("date").tail(4)
+        g = [(r["yoy_cum"] if r["kind"] in ("FY", "CY") else r["yoy_q"]) for _, r in rec.iterrows()]
+        g = [x for x in g if pd.notna(x)]
+        if len(g) >= 2:
+            up = sum(1 for x in g if x > 0)
+            add("up" if up >= 0.75 * len(g) else ("down" if up <= 0.25 * len(g) else "muted"),
+                f"Profit up vs a year earlier in <b>{up} of the last {len(g)}</b> results")
+        ann = h[h["kind"].isin(["FY", "CY"])].sort_values("date").drop_duplicates("yy", keep="last").tail(5)
+        ann = ann[ann["eps_cum"].notna()]
+        if len(ann) >= 3:
+            loss = int((ann["eps_cum"] < 0).sum())
+            add("up" if loss == 0 else ("down" if loss >= 2 else "muted"),
+                f"Made a profit in <b>{len(ann) - loss} of the last {len(ann)}</b> years")
+        yrs = sorted(h["yy"].dropna().unique())[-5:]
+        if len(yrs) >= 3:
+            paid = sum(1 for y in yrs if (h[(h["yy"] == y)]["div"].fillna(0) > 0).any())
+            add("up" if paid >= len(yrs) - 1 else ("down" if paid == 0 else "muted"),
+                f"Paid a dividend in <b>{paid} of the last {len(yrs)}</b> years")
+    if pe is not None:
+        bits = [f"P/E <b>{pe:.1f}</b>"]
+        tone = "muted"
+        if sector_pe:
+            bits.append(f"sector {sector_pe:.1f}")
+        if usual_pe:
+            bits.append(f"its own usual {usual_pe:.1f}")
+            tone = "up" if pe < 0.8 * usual_pe else ("down" if pe > 1.25 * usual_pe else "muted")
+        add(tone, ", ".join(bits) + " (low can also mean profits are expected to fall)")
+    if len(hist) >= 200 and pd.notna(hist["sma200"].iloc[-1]):
+        last, hi = hist["ac"].iloc[-1], hist["ah"].max()
+        above = last > hist["sma200"].iloc[-1]
+        add("up" if above else "down", f"Price {'above' if above else 'below'} its 200-day average; "
+            f"{(1 - last / hi) * 100:.0f}% below its 12-month high")
+    if adtv is not None:
+        add("up" if adtv >= min_adtv else "down",
+            f"Trades about Rs {adtv / 1e6:,.1f} m a day: " + ("easy to buy and sell" if adtv >= min_adtv
+                                                              else "thinly traded, harder to sell in size"))
+    if not lines:
+        return ""
+    return ('<div class="panel"><h2>Quick check</h2><ul class="qc">' + "".join(lines) + "</ul>"
+            '<p class="muted">Plain facts from results and prices, not a recommendation.</p></div>')
