@@ -566,49 +566,121 @@ def daily_rec(state: State, day: str) -> dict:
 
 
 # ---------------------------------------------------------------- stock moves
+def _core_name(name: str) -> str:
+    """'Lucky Cement Limited' -> 'Lucky Cement': the name as headlines usually write it ('' if too short)."""
+    n = re.sub(r"\(.*?\)|\b(limited|ltd|company|co|plc|pakistan|pak)\b\.?", " ", name or "", flags=re.I)
+    words = re.findall(r"[A-Za-z&-]+", n)[:2]
+    core = " ".join(words)
+    return core if len(words) == 2 and len(core) >= 9 else ""
+
+
+def move_reasons(codes: list[str], names: dict[str, str], state: State, now) -> dict[str, str]:
+    """For each stock, the public reason we can find for today's move (results, PSX filing, news), else ''."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from . import earnings
+    from .sources import psx
+    out = {c: "" for c in codes}
+    since = now - timedelta(days=1)
+    try:
+        res = {r["company_code"]: r for r in scs.results()
+               if r.get("company_code") in out and r.get("date") and r["date"] >= since.replace(hour=0, minute=0)}
+    except Exception:  # noqa: BLE001
+        res = {}
+    for c, r in res.items():
+        a = None
+        try:
+            a = earnings.assess(c, r.get("bm_quarter_number") or "")
+        except Exception:  # noqa: BLE001
+            pass
+        out[c] = f"Results out ({(r.get('bm_quarter_number') or '').strip()}): " + (
+            earnings.eps_line(a) if a else f"EPS {r.get('bm_eps_quarter') or 'see filing'}")
+    todo = [c for c in codes if not out[c]]
+    if todo:
+        cut = f"{since:%Y-%m-%d}"
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            pages = dict(zip(todo, ex.map(psx.company, todo)))
+        for c, p in pages.items():
+            fil = [f for f in (p or {}).get("filings", []) if f["date"] >= cut and not NOISE.search(f["title"])]
+            if fil:
+                out[c] = "PSX filing: " + fil[0]["title"][:110]
+    recent = [h for h in state.data.get("headlines", []) if h.get("ts", 0) >= now.timestamp() - 24 * 3600]
+    for c in [c for c in codes if not out[c]]:
+        # the ticker in capitals, or the company's two-word name: single words ('Punjab') match too much
+        core = _core_name(names.get(c, ""))
+        pats = [re.compile(rf"\b{re.escape(c)}\b")] if len(c) >= 3 else []
+        if core:
+            pats.append(re.compile(rf"\b{re.escape(core)}\b", re.I))
+        hit = next((h for h in recent if any(p.search(h.get("t", "")) for p in pats)), None)
+        if hit:
+            out[c] = f"In the news: {hit['t'][:110]}"
+    return out
+
+
 def stock_moves(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
-    """KSE-100 stocks with unusually large moves, plus the user's watchlist (one alert per run)."""
+    """Big single-stock moves (KSE-100, watchlist and every liquid mid/small cap), with the reason if one is public."""
     if not view:
         return []
     big = cfg.get("big_stock_move_pct", 7.5)
     wl = {s.upper(): float(p) for s, p in (cfg.get("watchlist") or {}).items()}
-    hits = []
+    kse = {r.get("company_code") for r in view}
+    quotes = {}  # code -> (price, previous close)
+    names: dict[str, str] = {}
+    try:
+        act = {r["company_code"]: r for r in scs.daily_activity() if r.get("company_code")}
+        min_val = float((cfg.get("swing") or {}).get("min_adtv", 10e6))
+        for c, v in avg_values(state, act).items():
+            r = act[c]
+            names[c] = r.get("company_name") or ""
+            if v >= min_val and r.get("trading_close") and r.get("trading_change") is not None:
+                quotes[c] = (r["trading_close"], r["trading_close"] - r["trading_change"])
+    except Exception as e:  # noqa: BLE001  KSE-100 moves still work without the wider list
+        log.warning("liquid stocks for big moves failed: %s", e)
     for r in view:
-        code, cur, ldcp = r.get("company_code"), r.get("CurrentPrice"), r.get("LDCP")
-        if not code or not cur or not ldcp:
+        if r.get("company_code") and r.get("CurrentPrice") and r.get("LDCP"):
+            quotes[r["company_code"]] = (r["CurrentPrice"], r["LDCP"])
+    hits = []
+    for code, (cur, ldcp) in quotes.items():
+        if not ldcp:
             continue
         pct = (cur / ldcp - 1) * 100
         th = min(big, wl.get(code, big))
         if abs(pct) < th:
             continue
-        # PSX circuit: ±10% or Rs1, whichever is higher — larger moves on Rs10+ stocks are bad data
+        # PSX circuit: 10% or Rs1, whichever is higher; larger moves on Rs10+ stocks are bad data
         if abs(pct) > 10.5 and abs(cur - ldcp) > 1.05:
             continue
         k = f"stk:{now:%Y-%m-%d}:{code}:{'up' if pct > 0 else 'dn'}"
         if state.flag(k):
             continue
         state.set_flag(k)
-        hits.append((code, pct, cur, code in wl))
+        hits.append((code, pct, cur, code in wl, code in kse))
     if not hits:
         return []
-    hits.sort(key=lambda h: -abs(h[1]))
+    hits.sort(key=lambda h: (not h[4], -abs(h[1])))
+    hits = hits[:12]
+    try:
+        why = move_reasons([h[0] for h in hits], names, state, now)
+    except Exception as e:  # noqa: BLE001
+        log.warning("move reasons failed: %s", e)
+        why = {}
     lines = []
-    for code, pct, cur, mine in hits:
-        note = " · near circuit" if abs(pct) >= 9.5 else ""
-        star = "👁️ " if mine else ""
-        lines.append(f"{arrow(pct)} {star}<b>{esc(code)}</b> {pct:+.2f}% → Rs {cur:,.2f}{note}")
-    text = (header("⚡", "Big stock moves", f"KSE-100 / watchlist · {now:%H:%M} PKT") + "\n"
-            + "\n".join(lines) +
-            "\n\n💡 Large single-stock moves often follow company news — check announcements before reacting."
-            + (f"\n👁️ = on your watchlist" if any(h[3] for h in hits) else ""))
+    for code, pct, cur, mine, in_kse in hits:
+        tags = ", ".join(t for t in ("KSE-100" if in_kse else "", "watchlist" if mine else "",
+                                     "near circuit" if abs(pct) >= 9.5 else "") if t)
+        reason = why.get(code) or "No company filing or news found so far."
+        lines.append(f"<b>{esc(code)}</b> {pct:+.2f}% to Rs {cur:,.2f}" + (f" ({tags})" if tags else "")
+                     + f"\n   {esc(reason)}")
+    text = (header("⚡", "Big stock moves, and why", f"{now:%H:%M} PKT") + "\n" + "\n".join(lines) +
+            "\n\nReasons come from PSX filings, today's results and news. When none is found, be careful with rumours.")
     card = {"theme": "psx", "kicker": f"Big stock moves · {now:%H:%M} PKT",
-            "title": f"{len(hits)} KSE-100 / watchlist stock(s) moving sharply",
-            "rows_title": "Stock · price · change", "rows": [
-                (code, f"Rs {cur:,.2f}" + (" · near circuit" if abs(pct) >= 9.5 else "") + (" · watchlist" if mine else ""),
-                 f"{pct:+.2f}%", pct) for code, pct, cur, mine in hits[:12]],
-            "why": "Large single-stock moves often follow company news — check announcements before reacting.",
-            "source": "PSX via SCS Trade"}
-    return [Alert(text, 8, "stocks", tags=["StockAlert", "KSE100"], extra={"card": card})]
+            "title": f"{len(hits)} stock(s) moving sharply",
+            "rows_title": "Stock · reason found · change", "rows": [
+                (code, (why.get(code) or "No filing or news found so far")[:150], f"{pct:+.2f}%", pct)
+                for code, pct, cur, mine, in_kse in hits],
+            "why": "Reasons come from PSX filings, today's results and news. When none is found, be careful with rumours.",
+            "source": "PSX via SCS Trade, PSX filings, news"}
+    return [Alert(text, 8, "stocks", tags=["StockAlert"], extra={"card": card})]
 
 
 # ---------------------------------------------------------------- PBS: CPI / SPI with numbers

@@ -120,6 +120,19 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   (attrs["stale"] -> admin note); backtest never uses an unfinished session; workflow failure -> admin message;
   fresh-start / missing data / all-rules-off -> admin note. Drill script idea: simulate scs._post=[] etc.
 
+## Phase 3 (built 2026-10-16): why is it moving + data hub website
+- `watchers.stock_moves` now covers KSE-100 + watchlist + every liquid stock (avg value >= swing.min_adtv), and
+  `move_reasons()` adds the public reason: results today (with YoY), a PSX filing since yesterday (NOISE filtered),
+  or a headline from the last 24h matching the ticker (case-sensitive) or the two-word company name (`_core_name`;
+  single words like 'Punjab' gave false matches). Else "No company filing or news found so far".
+- `site.py` + `python -m pipeline site` -> static site in out/site: index (screener: search, sector/size/liquidity
+  filters, sortable), s/SYMBOL.html (returns, 12-month adjusted SVG chart, key facts, board meeting, book closures,
+  results vs a year earlier), results.html (next 14 days + last 14 days), about.html. Public data only.
+  Built in swing.yml after each scan; deployed by the `deploy` job (actions/deploy-pages, continue-on-error) to
+  https://4umr.github.io/psx-news-pipeline/ once Pages is enabled (Settings > Pages > Source: GitHub Actions).
+  Build raises on bad data -> previous site stays; admin told. Local preview: .claude/launch.json "site" (port 8765).
+- Face value is not on PSX pages, so dividend YIELD is deliberately not computed (dividends shown as % of face value).
+
 ## Data sources that DON'T work (don't retry)
 dps.psx.com.pk/announcements POST (403), SECP & IMF sites (403), APP feeds (403 from GitHub), Profit/Mettis RSS (404),
 Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not shown.

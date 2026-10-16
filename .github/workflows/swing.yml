@@ -31,11 +31,15 @@ concurrency:
 
 permissions:
   contents: write   # only for the encrypted backup branch 'swing-data'
+  pages: write      # publish the data hub website (GitHub Pages)
+  id-token: write   # required by GitHub Pages
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      site: ${{ steps.site.outcome == 'success' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +61,7 @@ jobs:
             state/meta.json
             state/swing.json
             state/swing_stats.json
+            data/results.csv.gz
           key: psx-swing-v1-${{ github.run_id }}
           restore-keys: psx-swing-v1-
 
@@ -86,6 +91,32 @@ jobs:
           echo "Command: $CMD"
           python -m pipeline $CMD
 
+      # Data hub website: rebuilt after every scan. If the build fails, the previous site stays online.
+      - name: Build website
+        id: site
+        if: ${{ !startsWith(inputs.command || 'swing', 'backtest') && github.event.schedule != '0 5 * * 6' }}
+        continue-on-error: true
+        env:
+          TZ: Asia/Karachi
+        run: python -m pipeline site
+
+      - name: Tell owner the website was not updated
+        if: steps.site.outcome == 'failure'
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ADMIN: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+        run: |
+          if [ -n "$ADMIN" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" -d chat_id="${ADMIN}" \
+              --data-urlencode text="Data hub website: today's update failed (data problem); the previous version stays online. Details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > /dev/null
+          fi
+
+      - name: Upload website
+        if: steps.site.outcome == 'success'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: out/site
+
       - name: Save swing data
         if: always() && hashFiles('state/prices.csv.gz') != ''
         uses: actions/cache/save@v4
@@ -95,6 +126,7 @@ jobs:
             state/meta.json
             state/swing.json
             state/swing_stats.json
+            data/results.csv.gz
           key: psx-swing-v1-${{ github.run_id }}
 
       - name: Back up swing data (encrypted)
@@ -126,3 +158,18 @@ jobs:
               -d chat_id="${ADMIN}" \
               --data-urlencode text="Swing scanner: a run failed. It retries at the next scheduled time. Details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > /dev/null
           fi
+
+  # Publish the website. Needs GitHub Pages switched on once (Settings > Pages > Source: GitHub Actions);
+  # until then this job fails quietly without affecting the scanner.
+  deploy:
+    needs: scan
+    if: needs.scan.outputs.site == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -12,3 +12,4 @@ state/meta.json
 state/swing.json
 state/*.tmp
 state/swing_stats.json
+.claude/

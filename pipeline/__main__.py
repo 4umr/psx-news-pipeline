@@ -48,15 +48,19 @@ def main() -> None:
     sw.add_argument("--dry-run", action="store_true")
     sw.add_argument("--force", action="store_true", help="scan again even if this session was already scanned")
     sw.add_argument("--weekly", action="store_true", help="Sunday public cards: mid & small caps + results week ahead")
+    sub.add_parser("site", help="build the data hub website into out/site")
     bt = sub.add_parser("backtest", help="test the swing rules on PSX history since 2018")
     bt.add_argument("--refresh", action="store_true", help="download the full history again")
     bt.add_argument("--send", action="store_true", help="send the report cards to the admin chat")
     bt.add_argument("--notify-changes", action="store_true", help="send the report only if a live rule's verdict changed")
     args = p.parse_args()
 
-    if args.cmd in ("swing", "backtest"):
+    if args.cmd in ("swing", "backtest", "site"):
         cfg = load_config()
-        if args.cmd == "swing":
+        if args.cmd == "site":
+            from .site import build
+            build(cfg)  # raises on bad data: the workflow then keeps the previous site online
+        elif args.cmd == "swing":
             from .swing import scan, weekly
             if args.weekly:
                 weekly(cfg, args.dry_run, args.force)
