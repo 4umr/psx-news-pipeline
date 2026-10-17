@@ -1579,7 +1579,7 @@ def sotd_cards(cfg: dict, d: dict) -> list[bytes]:
         y += rows_h + 16
     ev = d.get("events") or ["No board meeting or payout date announced yet."]
     y = c.highlights(y, ev, title="Coming up")
-    src = ["Company profile and figures: PSX company page (dps.psx.com.pk)."]
+    src = ["Company profile and figures: the company's page on the Pakistan Stock Exchange."]
     if rp.get("report"):
         src.append(f"Annual report {rp['report']['period']}: pages {', '.join(str(p_) for p_ in rp['report']['read_pages'][:10])}"
                    f"{'...' if len(rp['report']['read_pages']) > 10 else ''} read; every number checked against them.")

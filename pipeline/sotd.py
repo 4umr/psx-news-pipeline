@@ -26,7 +26,7 @@ DIR = ROOT / "state" / "sotd"
 STATE = DIR / "state.json"
 PUBLISHED = DIR / "published"
 LOGOS = ROOT / "assets" / "logos"
-SITE = "https://4umr.github.io/psx-news-pipeline"
+
 
 
 # ---------------------------------------------------------------- state and picking
@@ -263,10 +263,10 @@ def caption(d: dict) -> str:
     lines = [f"<b>Stock of the Day: {esc(d['sym'])}</b> · {esc(d['name'])}",
              f"{esc(d['sector'])} · Rs {d['price']:,.2f}" + (f" · P/E {d['pe']:.1f}" if d.get("pe") else ""),
              "", esc(what), "",
-             f"Full report: {SITE}/r/{d['sym']}.html"]
-    if rp.get("report", {}).get("url"):
-        lines.append(f"Annual report ({rp['report']['period']}): {rp['report']['url']}")
-    lines.append("Research from official filings, not investment advice.")
+             # no links (owner's choice): everything is in the cards themselves
+             "Swipe through the cards: the business, four years of numbers, latest results, valuation, "
+             "plans and risks, and a quick check.",
+             "Research from official filings, not investment advice."]
     return "\n".join(lines)
 
 
