@@ -1327,3 +1327,269 @@ def sector_value_card(cfg: dict, ctx: dict) -> bytes:
     c.highlights(y, ctx["notes"], title="How to read", h=c.H - 172 - 16 - y)
     c.footer()
     return c.png()
+
+
+# ===================================================================== Stock of the Day
+def _place_image(c: "Card", path: str, x: float, y: float, w: float, h: float) -> bool:
+    """Draw a logo inside the box (kept in proportion, centred). False if it can't be drawn."""
+    try:
+        from PIL import Image
+        im = Image.open(path).convert("RGBA")
+    except Exception:  # noqa: BLE001
+        return False
+    iw, ih = im.size
+    scale = min(w / iw, h / ih)
+    dw, dh = iw * scale, ih * scale
+    ax = c.axes(x + (w - dw) / 2, y + (h - dh) / 2, dw, dh, z=8)
+    ax.imshow(np.asarray(im), interpolation="lanczos")
+    ax.set_xlim(0, iw)
+    ax.set_ylim(ih, 0)
+    return True
+
+
+def _initials(c: "Card", sym: str, x: float, y: float, s: float):
+    c.fig.patches.append(Circle((c._x(x + s / 2), c._y(y + s / 2)), s / 2 / c.W, transform=c.fig.transFigure,
+                                facecolor=WORDMARK, edgecolor="none", zorder=7))
+    c.text(x + s / 2, y + s / 2, sym[:4], s * 0.22 if len(sym) > 3 else s * 0.28, "white", bold=True, ha="center")
+
+
+def _bn_val(x) -> float | None:
+    return None if x is None or x != x else x * 1000 / 1e9   # PSX reports Rs thousands
+
+
+def _grouped_bars(c: "Card", y: int, title: str, labels: list[str], series: list[tuple[str, list, str]], h: int = 380,
+                  unit: str = "Rs bn") -> int:
+    if not labels or not series:
+        return y
+    c.panel(c.L, y, 1000, h)
+    c.label(c.L + 30, y + 38, title, 14)
+    lx = c.R - 30
+    for name, _, col in reversed(series):
+        c.text(lx, y + 38, name, 11.5, col, bold=True, ha="right")
+        lx -= len(name) * 9 + 30
+    ax = c.axes(c.L + 50, y + 70, 920, h - 130)
+    n, k = len(labels), len(series)
+    width = 0.8 / k
+    top = max([abs(v) for _, vals, _ in series for v in vals if v is not None] or [1])
+    for j, (name, vals, col) in enumerate(series):
+        xs = [i - 0.4 + width * (j + 0.5) for i in range(n)]
+        ax.bar(xs, [v or 0 for v in vals], width=width * 0.9, color=col, alpha=0.95)
+        for xx, v in zip(xs, vals):
+            if v is not None:
+                ax.text(xx, (v if v >= 0 else 0) + top * 0.03, f"{v:,.1f}", ha="center", va="bottom", fontsize=9.5,
+                        color=CREAM, fontweight="bold")
+    ax.axhline(0, color=FLAT, lw=1)
+    ax.set_xlim(-0.6, n - 0.4)
+    ax.set_ylim(min(0, min(v or 0 for _, vals, _ in series for v in vals) * 1.2), top * 1.22)
+    for i, lab in enumerate(labels):  # x axis runs from -0.6 to n-0.4: bar group i sits at (i + 0.6) / n of the width
+        c.text(c.L + 50 + 920 * (i + 0.6) / n, y + h - 40, lab, 12.5, CREAM, bold=True, ha="center")
+    c.text(c.L + 30, y + h - 14, unit, 10, c.t["muted"])
+    return y + h + 16
+
+
+def _range_bar(c: "Card", y: int, lo: float, hi: float, now: float, h: int = 120) -> int:
+    c.panel(c.L, y, 1000, h)
+    c.label(c.L + 30, y + 36, "12-month range (adjusted for payouts)", 13)
+    x0, x1, yy = c.L + 60, c.R - 60, y + 80
+    c.rect(x0, yy - 6, x1 - x0, 12, c.t["tile"], radius=6, edge=c.t["edge"], z=5)
+    pos = x0 + (x1 - x0) * ((now - lo) / (hi - lo) if hi > lo else 0.5)
+    c.fig.patches.append(Circle((c._x(pos), c._y(yy)), 11 / c.W, transform=c.fig.transFigure, facecolor=GOLD,
+                                edgecolor="white", lw=2, zorder=9))
+    c.text(x0, yy + 26, f"Low {lo:,.2f}", 11, c.t["muted"])
+    c.text(x1, yy + 26, f"High {hi:,.2f}", 11, c.t["muted"], ha="right")
+    return y + h + 16
+
+
+def sotd_cards(cfg: dict, d: dict) -> list[bytes]:
+    """Seven cards: cover, business, financials, latest results, valuation, past-present-future, quick check."""
+    out = []
+    rp = d.get("report") or {}
+    prof = d["profile"]
+    sym, name = d["sym"], d["name"]
+    sub = f"{d['sector']}  ·  {'KMI-30  ·  ' if d.get('kmi') else ''}Stock of the day  ·  {pd_date(d['date'])}"
+
+    def card():
+        return Card(cfg, "psx")
+
+    def foot(c):
+        c.footer()
+        out.append(c.png())
+
+    # 1. cover
+    c = card()
+    y = c.title_block(sym, name[:34], sub)
+    c.panel(c.L, y, 1000, 250)
+    if not (d.get("logo") and _place_image(c, d["logo"], c.L + 30, y + 30, 260, 190)):
+        _initials(c, sym, c.L + 85, y + 50, 150)
+    what = (rp.get("what_they_do") or {}).get("text") or (prof.get("description") or "")
+    lines = _wrap(what, 640, 14.5)[:6]
+    for i, ln in enumerate(lines):
+        c.text(c.L + 330, y + 46 + i * 32, ln, 14.5, CREAM)
+    y += 266
+    one_y = d["returns"].get("1 year")
+    y = c.strip(y, [("Price", f"Rs {d['price']:,.2f}", None),
+                    ("Market value", f"Rs {d['mcap'] / 1e9:,.0f} bn" if d.get("mcap") else "n/a", None),
+                    ("P/E", f"{d['pe']:.1f}" if d.get("pe") else "n/a", None),
+                    ("1 year", _p(one_y), _col(one_y))])
+    ser = [x for _, x in d["series"]]
+    kse = [x for _, x in d.get("kse_series") or []]
+    if len(ser) > 20:
+        c.panel(c.L, y, 1000, 330)
+        c.label(c.L + 30, y + 38, f"{sym} vs KSE-100, 12 months (start = 100)", 14)
+        ax = c.axes(c.L + 50, y + 70, 920, 230)
+        ax.plot(range(len(ser)), [x / ser[0] * 100 for x in ser], color=UP if ser[-1] >= ser[0] else DOWN, lw=2.4, label=sym)
+        if len(kse) > 20:
+            ax.plot([i * (len(ser) - 1) / (len(kse) - 1) for i in range(len(kse))], [x / kse[0] * 100 for x in kse],
+                    color=GOLD, lw=1.6, label="KSE-100")
+        ax.axhline(100, color=FLAT, lw=1, ls=(0, (3, 4)))
+        ax.legend(loc="upper left", fontsize=10, frameon=False)
+        c.text(c.L + 50, y + 314, pd_date(d["series"][0][0]), 10, c.t["muted"])
+        c.text(c.L + 970, y + 314, pd_date(d["series"][-1][0]), 10, c.t["muted"], ha="right")
+        y += 346
+    c.highlights(y, [f"{t}" for _, t in d["facts"][:4]], title="Quick look", h=c.H - 172 - 16 - y)
+    foot(c)
+
+    # 2. the business
+    c = card()
+    y = c.title_block("The business", name[:34], sub)
+    room = c.H - 172 - 16
+    segs = rp.get("segments") or []
+    if segs:
+        y = c.highlights(y, [f"{s_['name']}: {s_['detail']}" for s_ in segs], title="What they sell", max_lines=7)
+    places = [f"{p_['place']}: {p_['what']}" for p_ in (rp.get("locations") or [])]
+    places += [x["text"] for x in (rp.get("capacity") or [])]
+    if places and room - y > 160:
+        y = c.highlights(y, places, title="Where they operate and how big", max_lines=6)
+    grp = []
+    if (rp.get("parent") or {}).get("text"):
+        grp.append(rp["parent"]["text"])
+    grp += [f"{x['name']}{' (' + x['stake'] + ')' if x.get('stake') else ''}: {x['what']}" for x in (rp.get("subsidiaries") or [])][:4]
+    people = [f"{n_} ({r_})" for n_, r_ in prof.get("people", [])[:3]]
+    if prof.get("auditor"):
+        people.append(f"Auditor: {prof['auditor'].split(' Fiscal')[0][:60]}")
+    if prof.get("year_end"):
+        people.append(f"Financial year ends: {prof['year_end']}")
+    if not segs and not places and prof.get("description"):
+        grp = [prof["description"]] + grp
+    if room - y > 150:  # people first so they always fit; then the group
+        c.highlights(y, people + grp, title="People, auditor and group" if grp else "People and auditor", h=room - y,
+                     max_lines=12)
+    foot(c)
+
+    # 3. financials, 4 years
+    c = card()
+    y = c.title_block("Financials", "Four years", sub)
+    ann = prof.get("annual") or {}
+    years = sorted(ann)[-4:]
+    top_key = "Sales" if any("Sales" in ann[x] for x in years) else ("Total Income" if any("Total Income" in ann[x] for x in years) else None)
+    series = []
+    if top_key:
+        series.append((top_key if top_key != "Sales" else "Sales", [_bn_val(ann[x].get(top_key)) for x in years], c.t["accent"]))
+    series.append(("Profit after tax", [_bn_val(ann[x].get("Profit after Taxation")) for x in years], GOLD))
+    y = _grouped_bars(c, y, "Sales and profit by year" if top_key == "Sales" else "Income and profit by year", years, series)
+    rat = prof.get("ratios") or {}
+    tiles = []
+    for yr in sorted(rat)[-2:]:
+        for k_, lab in (("Gross Profit Margin (%)", "Gross margin"), ("Net Profit Margin (%)", "Net margin")):
+            if k_ in rat[yr]:
+                tiles.append((f"{lab} {yr}", f"{rat[yr][k_]:.1f}%", None))
+    if tiles:
+        y = c.tiles(y, tiles[:4], "Margins", cols=min(4, len(tiles[:4])), tile_h=90)
+    divs = d.get("divs") or []
+    if divs and any(v for _, v in divs) and c.H - 172 - 16 - y > 300:
+        y = c.bars(y, "Dividends declared (% of face value)", [str(a) for a, _ in divs], [v for _, v in divs],
+                   fmt="{:.0f}%", signed=False, h=min(300, 80 + len(divs) * 40), x0=200)
+    notes = ["Profit, not earnings per share, is shown over the years: a bonus issue or split changes EPS but not profit.",
+             "Figures as filed with PSX."]
+    c.highlights(y, notes, title="Note", h=c.H - 172 - 16 - y)
+    foot(c)
+
+    # 4. latest results and health
+    c = card()
+    y = c.title_block("Latest results", d.get("latest_label", ""), sub)
+    q = prof.get("quarterly") or {}
+    qs = list(q)[::-1]
+    if qs:
+        y = _grouped_bars(c, y, "Profit after tax, last four quarters", qs,
+                          [("Profit after tax", [_bn_val(q[x].get("Profit after Taxation")) for x in qs], GOLD)], h=330)
+    t_ = list(d.get("result_lines") or [])
+    bs = rp.get("balance_sheet") or {}
+    for k_, lab in (("borrowings", "Borrowings"), ("cash", "Cash and bank"), ("equity", "Equity")):
+        if bs.get(k_):
+            t_.append(f"{lab}: {bs[k_]}" + (f" ({bs['basis']})" if bs.get("basis") and k_ == "equity" else ""))
+    if t_:
+        y = c.highlights(y, t_, title="Results and balance sheet", max_lines=8)
+    yr = [x["text"] for x in (rp.get("this_year") or [])]
+    if yr and c.H - 172 - 16 - y > 150:
+        c.highlights(y, yr, title="The year in the annual report", h=c.H - 172 - 16 - y)
+    foot(c)
+
+    # 5. valuation and market
+    c = card()
+    y = c.title_block("Valuation", "and market", sub)
+    y = c.tiles(y, [("P/E now", f"{d['pe']:.1f}" if d.get("pe") else "n/a", None),
+                    ("Sector P/E", f"{d['sector_pe']:.1f}" if d.get("sector_pe") else "n/a", None),
+                    ("Its usual P/E", f"{d['usual_pe']:.1f}" if d.get("usual_pe") else "n/a", None)],
+                "Price to last 12 months earnings", cols=3, tile_h=92)
+    rt = [(k_, _p(v_), None) for k_, v_ in d["returns"].items()]
+    if d.get("kse_1y") is not None:
+        rt.append(("KSE-100, 1 year", _p(d["kse_1y"]), None))
+    if rt:
+        y = c.tiles(y, rt[:6], "Returns (payouts included)", cols=3, tile_h=92)
+    if d.get("hi") and d.get("lo"):
+        y = _range_bar(c, y, d["lo"], d["hi"], d["ac_last"])
+    y = c.strip(y, [("Size", f"{d['tier']} cap", None),
+                    ("Traded a day", f"Rs {d['adtv'] / 1e6:,.0f} m" if d.get("adtv") else "n/a", None),
+                    ("Free float", f"{prof.get('free_float_pct', 0):.0f}%" if prof.get("free_float_pct") else "n/a", None)])
+    c.highlights(y, ["P/E not shown for losses, or within two years of a split or bonus issue.",
+                     "A low P/E can mean cheap, or that profits are expected to fall."], title="How to read",
+                 h=c.H - 172 - 16 - y)
+    foot(c)
+
+    # 6. past, present, future
+    c = card()
+    y = c.title_block("Past, present", "and future", sub)
+    room = c.H - 172 - 16
+    mil = [f"{m_['year']}: {m_['event']}" for m_ in (rp.get("milestones") or [])]
+    fut = [x["text"] for x in (rp.get("future") or [])]
+    risks = [x["text"] for x in (rp.get("risks") or [])]
+    if not (mil or fut or risks):
+        mil = ["The annual report could not be read today; this section returns with the next report."]
+    for title_, items, cap in (("Milestones", mil, 0.32), ("Plans and projects, as stated by the company", fut, 0.45),
+                               ("Risks the company names", risks, 1.0)):
+        if items and room - y > 150:
+            y = c.highlights(y, items, title=title_, max_lines=8, h=None if cap == 1.0 else None)
+    foot(c)
+
+    # 7. quick check and what to watch
+    c = card()
+    y = c.title_block("Quick check", "What to watch", sub)
+    fac = d["facts"]
+    if fac:
+        rows_h = 76 + len(fac) * 44
+        c.panel(c.L, y, 1000, rows_h)
+        c.label(c.L + 30, y + 38, "Plain facts", 14)
+        for i, (tone, text) in enumerate(fac):
+            yy = y + 80 + i * 44
+            col = UP if tone == "up" else (DOWN if tone == "down" else GOLD)
+            c.fig.patches.append(Circle((c._x(c.L + 40), c._y(yy)), 7 / c.W, transform=c.fig.transFigure,
+                                        facecolor=col, edgecolor="none", zorder=8))
+            c.text(c.L + 60, yy, clean(text)[:88], 13.5, CREAM)
+        y += rows_h + 16
+    ev = d.get("events") or ["No board meeting or payout date announced yet."]
+    y = c.highlights(y, ev, title="Coming up")
+    src = ["Company profile and figures: PSX company page (dps.psx.com.pk)."]
+    if rp.get("report"):
+        src.append(f"Annual report {rp['report']['period']}: pages {', '.join(str(p_) for p_ in rp['report']['read_pages'][:10])}"
+                   f"{'...' if len(rp['report']['read_pages']) > 10 else ''} read; every number checked against them.")
+    src.append("Prices: PSX via SCS Trade. Research, not investment advice.")
+    c.highlights(y, src, title="Sources", h=c.H - 172 - 16 - y)
+    foot(c)
+    return out
+
+
+def pd_date(s: str) -> str:
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").strftime("%d %b %Y")
+    except (TypeError, ValueError):
+        return s

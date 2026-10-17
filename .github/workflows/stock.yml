@@ -1,0 +1,151 @@
+name: Stock of the Day
+
+# One company a day at 18:00 PKT (KMI-30 first, then the rest of the KSE-100): research cards to the
+# channel and a report page on the website. The 20:00 run only publishes if 18:00 did not.
+on:
+  schedule:
+    - cron: "0 13 * * *"   # 18:00 PKT every day
+    - cron: "0 15 * * *"   # 20:00 PKT catch-up
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "What to do"
+        type: choice
+        default: sotd
+        options:
+          - sotd
+          - sotd --preview
+      symbol:
+        description: "Company symbol (optional, e.g. LUCK); empty = next in the queue"
+        required: false
+        default: ""
+
+concurrency:
+  group: psx-sotd
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # backup branch 'sotd-data'
+  pages: write
+  id-token: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      site: ${{ steps.site.outcome == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt || (sleep 20 && pip install -r requirements.txt)
+
+      # Prices, company facts and valuation history kept by the swing workflow (read only here)
+      - name: Restore market data
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            state
+            data
+          key: psx-swing-v1-${{ github.run_id }}
+          restore-keys: psx-swing-v1-
+
+      # Covered companies, annual report summaries and published reports
+      - name: Restore Stock of the Day data
+        id: sotdcache
+        uses: actions/cache/restore@v4
+        with:
+          path: state/sotd
+          key: psx-sotd-v1-${{ github.run_id }}
+          restore-keys: psx-sotd-v1-
+
+      - name: Restore Stock of the Day data from backup branch
+        if: steps.sotdcache.outputs.cache-matched-key == ''
+        run: |
+          mkdir -p state/sotd
+          if git fetch --depth=1 origin sotd-data 2>/dev/null; then
+            git show FETCH_HEAD:sotd.tgz > /tmp/sotd.tgz && tar xzf /tmp/sotd.tgz -C state/sotd \
+              && echo "Restored from backup" || echo "Backup could not be read; starting fresh"
+          else
+            echo "No backup yet"
+          fi
+
+      - name: Run
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TZ: Asia/Karachi
+          CMD: ${{ inputs.command || 'sotd' }}
+          SYMBOL: ${{ inputs.symbol }}
+        run: |
+          SYMBOL=$(printf '%s' "$SYMBOL" | tr -cd 'A-Za-z0-9')
+          echo "Command: $CMD ${SYMBOL:+--symbol $SYMBOL}"
+          python -m pipeline $CMD ${SYMBOL:+--symbol $SYMBOL}
+
+      - name: Build website
+        id: site
+        continue-on-error: true
+        env:
+          TZ: Asia/Karachi
+        run: python -m pipeline site
+
+      - name: Upload website
+        if: steps.site.outcome == 'success'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: out/site
+
+      - name: Save Stock of the Day data
+        if: always() && hashFiles('state/sotd/**') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: state/sotd
+          key: psx-sotd-v1-${{ github.run_id }}
+
+      # Plain backup (nothing private: covered list, report summaries, published cards)
+      - name: Back up Stock of the Day data
+        if: always() && hashFiles('state/sotd/**') != ''
+        run: |
+          tmp=$(mktemp -d)
+          tar czf "$tmp/sotd.tgz" -C state/sotd .
+          cd "$tmp"
+          git init -q -b sotd-data
+          git config user.name "pipeline-bot"
+          git config user.email "pipeline-bot@users.noreply.github.com"
+          git add sotd.tgz
+          git commit -qm "stock of the day backup $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" sotd-data \
+            && echo "Backed up" || echo "Backup push failed (will retry next time)"
+
+      - name: Notify owner on failure
+        if: failure()
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ADMIN: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+        run: |
+          TOKEN=$(printf '%s' "$TOKEN" | tr -d '[:space:]'); ADMIN=$(printf '%s' "$ADMIN" | tr -d '[:space:]')
+          if [ -n "$ADMIN" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" -d chat_id="${ADMIN}" \
+              --data-urlencode text="Stock of the Day: a run failed. The 20:00 run retries. Details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > /dev/null || true
+          fi
+
+  deploy:
+    needs: report
+    if: always() && needs.report.outputs.site == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4

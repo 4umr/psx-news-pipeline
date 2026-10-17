@@ -62,7 +62,7 @@ def _page(title: str, body: str, depth: int = 0, asof: str = "") -> str:
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{H(title)} | PAKISTAN INVESTORS</title>
 <link rel="stylesheet" href="{up}style.css"></head><body>
 <header><div class="wrap top"><a class="brand" href="{up}index.html">PAKISTAN INVESTORS<small>DATA HUB</small></a>
-<nav><a href="{up}index.html">Screener</a><a href="{up}sectors.html">Sectors</a><a href="{up}results.html">Results</a><a href="{up}about.html">About</a></nav>
+<nav><a href="{up}index.html">Screener</a><a href="{up}stock-of-the-day.html">Stock of the Day</a><a href="{up}sectors.html">Sectors</a><a href="{up}results.html">Results</a><a href="{up}about.html">About</a></nav>
 </div></header><main class="wrap">{body}</main>
 <footer class="wrap">Data: PSX via SCS Trade and dps.psx.com.pk. {('Updated ' + H(asof) + '. ') if asof else ''}
 Information only, not investment advice. Check the official filing before acting.</footer></body></html>"""
@@ -233,6 +233,10 @@ def build(cfg: dict) -> int:
     if len(rows) < 0.6 * len(syms):
         raise RuntimeError(f"only {len(rows)} company pages built; keeping the previous site")
     _index(rows, asof)
+    try:
+        _reports(asof)
+    except Exception:  # noqa: BLE001  a report page problem must not take the site down
+        log.exception("Stock of the Day pages failed")
     _sectors(v[v["date"] == last_d], {s: (act.get(s, {}).get("sector_name") or "") for s in syms}, min_adtv, asof)
     _results_page(by_sym, meet, meet_lab, today, act, asof, now)
     _about(asof)
@@ -335,11 +339,20 @@ def _sectors(v_now: pd.DataFrame, sectors: dict[str, str], min_adtv: float, asof
 
 
 def _quick_check(h, hist: pd.DataFrame, pe, sector_pe, usual_pe, adtv, min_adtv, name: str = "") -> str:
-    """Plain facts that answer the first questions about a company. Each line: green / amber / red dot."""
+    facts = quick_facts(h, hist, pe, sector_pe, usual_pe, adtv, min_adtv, name)
+    if not facts:
+        return ""
+    return ('<div class="panel"><h2>Quick check</h2><ul class="qc">'
+            + "".join(f'<li><span class="{tone}">&#9679;</span> {text}</li>' for tone, text in facts) + "</ul>"
+            '<p class="muted">Plain facts from results and prices, not a recommendation.</p></div>')
+
+
+def quick_facts(h, hist: pd.DataFrame, pe, sector_pe, usual_pe, adtv, min_adtv, name: str = "") -> list[tuple[str, str]]:
+    """Plain facts that answer the first questions about a company: (tone up/muted/down, text with <b>)."""
     lines = []
 
     def add(tone, text):
-        lines.append(f'<li><span class="{tone}">&#9679;</span> {text}</li>')
+        lines.append((tone, text))
     if "defaulter" in name.lower():
         add("down", "<b>On PSX's defaulter segment</b>: the company has not met listing requirements (extra risk)")
     if h is not None and not h.empty:
@@ -379,7 +392,104 @@ def _quick_check(h, hist: pd.DataFrame, pe, sector_pe, usual_pe, adtv, min_adtv,
         add("up" if adtv >= min_adtv else "down",
             f"Trades about Rs {adtv / 1e6:,.1f} m a day: " + ("easy to buy and sell" if adtv >= min_adtv
                                                               else "thinly traded, harder to sell in size"))
-    if not lines:
-        return ""
-    return ('<div class="panel"><h2>Quick check</h2><ul class="qc">' + "".join(lines) + "</ul>"
-            '<p class="muted">Plain facts from results and prices, not a recommendation.</p></div>')
+    return lines
+
+
+# ---------------------------------------------------------------- Stock of the Day pages
+def _list(items, fmt) -> str:
+    return "<ul>" + "".join(f"<li>{fmt(x)}</li>" for x in items) + "</ul>" if items else ""
+
+
+def _pg(x) -> str:
+    return f' <span class="muted">(p. {x["p"]})</span>' if x.get("p") else ""
+
+
+def _reports(asof: str) -> int:
+    """r/SYMBOL.html for every published Stock of the Day report, plus the archive page."""
+    from .sotd import PUBLISHED, published
+    reps = sorted(published(), key=lambda d: d.get("published", ""), reverse=True)
+    (OUT / "r").mkdir(exist_ok=True)
+    for d in reps:
+        sym, rp, prof = d["sym"], d.get("report") or {}, d.get("profile") or {}
+        logo = ""
+        src = ROOT / "assets" / "logos" / f"{sym}.png"
+        if src.exists():
+            shutil.copy(src, OUT / "r" / f"{sym}-logo.png")
+            logo = f'<img src="{H(sym)}-logo.png" alt="{H(d["name"])} logo" style="max-height:80px;max-width:240px">'
+        what = (rp.get("what_they_do") or {}).get("text") or prof.get("description", "")
+        ann = prof.get("annual") or {}
+        years = sorted(ann)
+        fin = ""
+        if years:
+            keys = [k for k in ("Sales", "Total Income", "Mark-up Earned", "Profit after Taxation", "EPS")
+                    if any(k in ann[y] for y in years)]
+            head = "".join(f"<th>{y}</th>" for y in years)
+            body_rows = ""
+            for k in keys:
+                cells = "".join((f"<td>{ann[y].get(k, 0):,.2f}</td>" if k == "EPS" else f"<td>{ann[y].get(k, 0):,.0f}</td>")
+                                for y in years)
+                body_rows += f"<tr><td class=l>{H(k)}</td>{cells}</tr>"
+            fin = f'<div class="scroll"><table><tr><th class=l>Rs thousands (EPS in Rs)</th>{head}</tr>{body_rows}</table></div>'
+        valuation = [x for x in (
+            f"Price Rs {d['price']:,.2f} on {d['date']}",
+            f"P/E {d['pe']:.1f}" if d.get("pe") else "P/E not shown (loss, or a split or bonus issue in the last two years)",
+            f"Sector median P/E {d['sector_pe']:.1f}" if d.get("sector_pe") else "",
+            f"Its own usual P/E {d['usual_pe']:.1f}" if d.get("usual_pe") else "") if x]
+        valuation += [f"{k}: {v * 100:+.1f}%" for k, v in (d.get("returns") or {}).items()]
+        people = [f"{H(n)} ({H(r)})" for n, r in prof.get("people", [])]
+        if prof.get("auditor"):
+            people.append(f"Auditor: {H(prof['auditor'])}")
+        if prof.get("address"):
+            people.append(f"Head office: {H(prof['address'])}")
+        group = ""
+        if (rp.get("parent") or {}).get("text"):
+            group = f"<p>{H(rp['parent']['text'])}{_pg(rp['parent'])}</p>"
+        group += _list(rp.get("subsidiaries"),
+                       lambda x: f"<b>{H(x['name'])}</b>{' (' + H(x['stake']) + ')' if x.get('stake') else ''}: {H(x['what'])}{_pg(x)}")
+        sections = [
+            ("What they do", f"<p>{H(what)}</p>"),
+            ("Business lines", _list(rp.get("segments"), lambda x: f"<b>{H(x['name'])}</b>: {H(x['detail'])}{_pg(x)}")),
+            ("Where they operate", _list((rp.get("locations") or []) + (rp.get("capacity") or []),
+                                         lambda x: (f"<b>{H(x['place'])}</b>: {H(x['what'])}" if "place" in x
+                                                    else H(x["text"])) + _pg(x))),
+            ("Group", group),
+            ("People and auditor", _list(people, lambda x: x)),
+            ("Financials (as filed with PSX)", fin + _list(d.get("result_lines"), H)),
+            ("Valuation and market", _list(valuation, H)),
+            ("The year in the annual report", _list(rp.get("this_year"), lambda x: H(x["text"]) + _pg(x))),
+            ("Milestones", _list(rp.get("milestones"), lambda x: f"<b>{H(x['year'])}</b>: {H(x['event'])}{_pg(x)}")),
+            ("Plans and projects, as stated by the company", _list(rp.get("future"), lambda x: H(x["text"]) + _pg(x))),
+            ("Risks the company names", _list(rp.get("risks"), lambda x: H(x["text"]) + _pg(x))),
+            ("Quick check", _list(d.get("facts"), lambda x: f'<span class="{x[0]}">&#9679;</span> {x[1]}')),
+            ("Coming up", _list(d.get("events"), H)),
+        ]
+        imgs = ""
+        for i in range(1, 8):
+            p = PUBLISHED / f"{sym}-{i}.png"
+            if p.exists():
+                shutil.copy(p, OUT / "r" / f"{sym}-{i}.png")
+                imgs += (f'<a href="{sym}-{i}.png"><img src="{sym}-{i}.png" alt="card {i}" style="width:31%;min-width:180px;'
+                         'margin:0 1% 12px 0;border-radius:8px;border:1px solid #e1dccd"></a>')
+        source = ""
+        if rp.get("report"):
+            r = rp["report"]
+            source = (f'<p class="muted">Annual report {H(str(r["period"]))}: <a href="{H(r["url"])}">PDF filed with PSX</a>. '
+                      "Page numbers refer to it; every number in the text was checked against those pages.</p>")
+        head_html = (f'<div class="panel" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">{logo}<div>'
+                     f'<h1 style="margin-top:0">{H(sym)} <span>{H(d["name"])}</span></h1>'
+                     f'<p class="sub">{H(d["sector"])} · Stock of the Day, {H(d.get("published", ""))} · '
+                     f'<a href="../s/{H(sym)}.html">live company page</a></p></div></div>')
+        body = (head_html + "".join(f'<div class="panel"><h2>{t}</h2>{c}</div>' for t, c in sections if c)
+                + (f'<div class="panel"><h2>The cards</h2>{imgs}</div>' if imgs else "")
+                + f'<div class="panel">{source}<p class="muted">Information only, not investment advice. '
+                  "Figures as filed with PSX; check the official filing before acting.</p></div>")
+        (OUT / "r" / f"{sym}.html").write_text(_page(f"{sym} report", body, 1, asof), encoding="utf-8")
+    rows = "".join(f'<tr><td class=l>{H(d.get("published", ""))}</td><td class=l><a href="r/{H(d["sym"])}.html">{H(d["sym"])}</a></td>'
+                   f'<td class=l>{H(d["name"])}</td><td class=l>{H(d["sector"])}</td></tr>' for d in reps)
+    empty = '<tr><td class=l colspan=4>The first report is coming soon.</td></tr>'
+    body = ("<h1>Stock of <span>the Day</span></h1><p class=\"sub\">One company a day: KMI-30 first, then the rest of the "
+            "KSE-100. Built from PSX filings and each company's annual report.</p><div class=\"panel\"><div class=\"scroll\"><table>"
+            "<tr><th class=l>Date</th><th class=l>Symbol</th><th class=l>Company</th><th class=l>Sector</th></tr>"
+            + (rows or empty) + "</table></div></div>")
+    (OUT / "stock-of-the-day.html").write_text(_page("Stock of the Day", body, 0, asof), encoding="utf-8")
+    return len(reps)

@@ -88,6 +88,15 @@ jobs:
           echo "Command: $CMD"
           python -m pipeline $CMD
 
+      # The website also carries the Stock of the Day pages: take the latest copy of that data (read only)
+      - name: Restore Stock of the Day data
+        if: ${{ !startsWith(inputs.command || 'swing', 'backtest') && github.event.schedule != '0 5 * * 6' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: state/sotd
+          key: psx-sotd-v1-${{ github.run_id }}
+          restore-keys: psx-sotd-v1-
+
       # Data hub website: rebuilt after every scan. If the build fails, the previous site stays online.
       - name: Build website
         id: site
@@ -114,6 +123,10 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: out/site
+
+      - name: Keep Stock of the Day data out of the swing cache
+        if: always()
+        run: rm -rf state/sotd
 
       - name: Save swing data
         if: always() && hashFiles('state/prices.csv.gz') != ''

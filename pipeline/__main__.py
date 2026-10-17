@@ -49,15 +49,24 @@ def main() -> None:
     sw.add_argument("--force", action="store_true", help="scan again even if this session was already scanned")
     sw.add_argument("--weekly", action="store_true", help="Sunday public cards: mid & small caps + results week ahead")
     sub.add_parser("site", help="build the data hub website into out/site")
+    so = sub.add_parser("sotd", help="Stock of the Day: pick today's company, build the report, post it")
+    so.add_argument("--dry-run", action="store_true")
+    so.add_argument("--preview", action="store_true", help="send to the admin chat only (not the channel)")
+    so.add_argument("--symbol", default="", help="report on this company instead of the queue")
     bt = sub.add_parser("backtest", help="test the swing rules on PSX history since 2018")
     bt.add_argument("--refresh", action="store_true", help="download the full history again")
     bt.add_argument("--send", action="store_true", help="send the report cards to the admin chat")
     bt.add_argument("--notify-changes", action="store_true", help="send the report only if a live rule's verdict changed")
     args = p.parse_args()
 
-    if args.cmd in ("swing", "backtest", "site"):
+    if args.cmd in ("swing", "backtest", "site", "sotd"):
         cfg = load_config()
-        if args.cmd == "site":
+        if args.cmd == "sotd":
+            from . import analysis, sotd
+            from .state import State
+            analysis.init(State(), cfg)  # shares the news pipeline's daily AI budget counter when present
+            sotd.run(cfg, args.dry_run, args.symbol.strip().upper() or None, args.preview)
+        elif args.cmd == "site":
             from .site import build
             build(cfg)  # raises on bad data: the workflow then keeps the previous site online
         elif args.cmd == "swing":

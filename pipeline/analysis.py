@@ -158,14 +158,14 @@ def _pick_model(cfg: dict) -> str:
     return _model
 
 
-def _call(cfg: dict, prompt: str) -> dict | None:
+def _call(cfg: dict, prompt: str, timeout: int = 60) -> dict | None:
     global _disabled
     if not available(cfg) or not _budget_ok():
         return None
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
     try:
-        r = http().post(f"{API}/models/{_pick_model(cfg)}:generateContent", json=body, timeout=60,
+        r = http().post(f"{API}/models/{_pick_model(cfg)}:generateContent", json=body, timeout=timeout,
                         headers={"x-goog-api-key": _key(), "Content-Type": "application/json"})
         if r.status_code in (401, 403):
             _disabled = True  # bad key: stop trying this run
