@@ -227,3 +227,31 @@ Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not sh
   issues make multi-year EPS not comparable.
 - Private radar `swing.plan_check`: slots in use vs `swing.plan_slots` (10), new ideas vs free slots, holding
   periods ending within 5 sessions, results due for open ideas (board meetings).
+
+## Stock of the Day (built 2026-10-17) — PUBLIC, every day 18:00 PKT
+- Umer's decisions: read annual reports (Gemini), every day, 18:00, straight to the main channel.
+- Workflow `.github/workflows/stock.yml` (18:00 + 20:00 catch-up; manual: sotd / sotd --preview + symbol). Restores the
+  swing cache read-only (prices etc.) and its own cache `psx-sotd-v1-` (path state/sotd) + plain backup branch `sotd-data`.
+  Builds + deploys the website too; swing.yml also restores state/sotd before its site build and removes it before saving.
+- `sotd.py`: queue = KMI-30 first then KSE-100 (`psx.index_members`, XD/XB suffixes stripped), no repeats per round,
+  largest first, no same sector twice in a row, results in last 3 days first, results due within 2 days later.
+  18:00 run waits if the annual report could not be read (admin note); the 20:00 run publishes with PSX numbers only.
+  `_result_lines`: ALL financial figures from the PSX company page (scstrade EPS can be consolidated while PSX is
+  standalone: LUCK FY26 60.78 vs 31.83). Latest period chosen with the company's year-end month (June FY: "Q3 2026" is
+  older than "2026"). Multi-year charts use profit, not EPS (bonus/split). `_prune`: cards 2-7 deleted after 30 days.
+- `psx.profile()`: description, people, address, website, registrar, auditor, year end, annual/quarterly tables
+  (Sales or Mark-up/Total Income for banks, Profit after Taxation, EPS; Rs thousands), ratios, shares, free float.
+- `sources/reports.py`: financials.psx.com.pk `annQtrStmts.php` (name=get_comp_data, smbCode) lists every annual and
+  quarterly report since ~2013; PDF via lib/DownloadPDF.php?id=.
+- `reader.py`: picks ~30 relevant pages (profile, chairman/directors' report, plants, subsidiaries, segments, outlook,
+  balance sheet; scoring by keywords, number-heavy pages penalised), one Gemini call (timeout 240s), JSON with page
+  numbers; every sentence's numbers AND years must appear in the pages sent (`numbers_ok` + `_years_ok`), advice dropped.
+  Cached per report id in state/sotd/reports. No local Gemini key: test with `sotd --preview` on GitHub (the run log
+  prints "ANNUAL REPORT SUMMARY" JSON; preview goes to admin only and never to the website).
+- Logos: `assets/logos/SYM.png` = 58 logos reviewed by eye (2026-10-17); automatic picks were wrong for some
+  (product brands, award badges, group logos), so only reviewed files are used; others get drawn initials.
+  `logo.py` fetcher is a review helper (`_LOOSE` flag), not used at publish time.
+- Cards `cards.sotd_cards` (7): cover (logo, what they do, price/value/P/E/1y, 12-month vs KSE-100, quick look),
+  business, financials (4 years, margins, dividends % of face value), latest results + balance sheet + the year,
+  valuation & market, past/present/future (milestones, plans, risks), quick check + coming up + sources.
+  Website: r/SYM.html (all sections with page refs + PDF link + cards) and stock-of-the-day.html archive.
