@@ -177,8 +177,17 @@ def read(sym: str, name: str, cfg: dict, force: bool = False) -> dict | None:
     out = validate(raw, source)
     out["report"] = {**rep, "pages": len(pages), "read_pages": [i + 1 for i, _ in chosen],
                      "url": f"{reports.BASE}lib/DownloadPDF.php?id={rep['id']}"}
-    kept = sum(len(v) if isinstance(v, list) else (1 if v else 0) for k, v in out.items() if k != "report")
-    sent = sum(len(v) if isinstance(v, list) else (1 if v else 0) for k, v in raw.items())
+    def count(d):  # items in a reply: list entries, plus one per filled single field (group holds both kinds)
+        n = 0
+        for k, v in d.items():
+            if isinstance(v, list):
+                n += len(v)
+            elif isinstance(v, dict) and k == "group":
+                n += count(v)
+            elif v:
+                n += 1
+        return n
+    kept, sent = count({k: v for k, v in out.items() if k != "report"}), count(raw)
     out["checks"] = {"kept": kept, "returned": sent}
     path.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
     log.info("annual report %s read: %d of about %d items passed the checks", sym, kept, sent)

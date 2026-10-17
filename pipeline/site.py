@@ -445,7 +445,8 @@ def _reports(asof: str) -> int:
         if (rp.get("parent") or {}).get("text"):
             group = f"<p>{H(rp['parent']['text'])}{_pg(rp['parent'])}</p>"
         group += _list(rp.get("subsidiaries"),
-                       lambda x: f"<b>{H(x['name'])}</b>{' (' + H(x['stake']) + ')' if x.get('stake') else ''}: {H(x['what'])}{_pg(x)}")
+                       lambda x: f"<b>{H(x['name'])}</b>{' (' + H(x['stake']) + ')' if x.get('stake') else ''}"
+                                 f"{': ' + H(x['what']) if x.get('what') else ''}{_pg(x)}")
         sections = [
             ("What they do", f"<p>{H(what)}</p>"),
             ("Business lines", _list(rp.get("segments"), lambda x: f"<b>{H(x['name'])}</b>: {H(x['detail'])}{_pg(x)}")),

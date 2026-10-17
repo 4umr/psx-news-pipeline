@@ -1463,7 +1463,8 @@ def sotd_cards(cfg: dict, d: dict) -> list[bytes]:
     grp = []
     if (rp.get("parent") or {}).get("text"):
         grp.append(rp["parent"]["text"])
-    grp += [f"{x['name']}{' (' + x['stake'] + ')' if x.get('stake') else ''}: {x['what']}" for x in (rp.get("subsidiaries") or [])][:4]
+    grp += [f"{x['name']}{' (' + x['stake'] + ')' if x.get('stake') else ''}{': ' + x['what'] if x.get('what') else ''}"
+            for x in (rp.get("subsidiaries") or [])][:4]
     people = [f"{n_} ({r_})" for n_, r_ in prof.get("people", [])[:3]]
     if prof.get("auditor"):
         people.append(f"Auditor: {prof['auditor'].split(' Fiscal')[0][:60]}")
