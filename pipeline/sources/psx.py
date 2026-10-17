@@ -99,7 +99,8 @@ def profile(symbol: str) -> dict | None:
     soup = BeautifulSoup(r.content, "lxml")
     out: dict = {"symbol": symbol, "people": [], "annual": {}, "quarterly": {}, "ratios": {}}
     name = soup.select_one(".quote__name")
-    out["name"] = clean_ws(name.get_text(" ")) if name else ""
+    # PSX adds temporary entitlement tags to the name ("... Limited XD"): not part of the company's name
+    out["name"] = re.sub(r"\s+(XD|XB|XR|XBR|XDB|XDR|NC)$", "", clean_ws(name.get_text(" ")) if name else "")
     sector = soup.select_one(".quote__sector")
     out["sector"] = clean_ws(sector.get_text(" ")) if sector else ""
     for head in soup.select(".item__head"):
