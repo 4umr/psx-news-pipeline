@@ -469,8 +469,11 @@ def _reports(asof: str) -> int:
             p = PUBLISHED / f"{sym}-{i}.png"
             if p.exists():
                 shutil.copy(p, OUT / "r" / f"{sym}-{i}.png")
-                imgs += (f'<a href="{sym}-{i}.png"><img src="{sym}-{i}.png" alt="card {i}" style="width:31%;min-width:180px;'
+                imgs += (f'<a href="{sym}-{i}.png"><img src="{sym}-{i}.png" alt="page {i}" style="width:31%;min-width:180px;'
                          'margin:0 1% 12px 0;border-radius:8px;border:1px solid #e1dccd"></a>')
+        if (PUBLISHED / f"{sym}.pdf").exists():
+            shutil.copy(PUBLISHED / f"{sym}.pdf", OUT / "r" / f"{sym}.pdf")
+            imgs += f'<p><a href="{sym}.pdf">Download the research note (PDF)</a></p>'
         source = ""
         if rp.get("report"):
             r = rp["report"]

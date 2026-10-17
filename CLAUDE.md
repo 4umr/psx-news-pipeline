@@ -238,7 +238,7 @@ Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not sh
   18:00 run waits if the annual report could not be read (admin note); the 20:00 run publishes with PSX numbers only.
   `_result_lines`: ALL financial figures from the PSX company page (scstrade EPS can be consolidated while PSX is
   standalone: LUCK FY26 60.78 vs 31.83). Latest period chosen with the company's year-end month (June FY: "Q3 2026" is
-  older than "2026"). Multi-year charts use profit, not EPS (bonus/split). `_prune`: cards 2-7 deleted after 30 days.
+  older than "2026"). Multi-year charts use profit, not EPS (bonus/split). `_prune`: pages 2+ deleted after 30 days (PDF kept).
 - `psx.profile()`: description, people, address, website, registrar, auditor, year end, annual/quarterly tables
   (Sales or Mark-up/Total Income for banks, Profit after Taxation, EPS; Rs thousands), ratios, shares, free float.
 - `sources/reports.py`: financials.psx.com.pk `annQtrStmts.php` (name=get_comp_data, smbCode) lists every annual and
@@ -251,7 +251,15 @@ Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not sh
 - Logos: `assets/logos/SYM.png` = 58 logos reviewed by eye (2026-10-17); automatic picks were wrong for some
   (product brands, award badges, group logos), so only reviewed files are used; others get drawn initials.
   `logo.py` fetcher is a review helper (`_LOOSE` flag), not used at publish time.
-- Cards `cards.sotd_cards` (7): cover (logo, what they do, price/value/P/E/1y, 12-month vs KSE-100, quick look),
-  business, financials (4 years, margins, dividends % of face value), latest results + balance sheet + the year,
-  valuation & market, past/present/future (milestones, plans, risks), quick check + coming up + sources.
-  Website: r/SYM.html (all sections with page refs + PDF link + cards) and stock-of-the-day.html archive.
+- Format (Umer, 2026-10-17: "brokerage house type, human made, professional", then "3 pages, clear, not merged"):
+  `note.py` = sell-side style research note, A4 pages at 150 dpi (1240x1754), DejaVu Sans (ships with matplotlib;
+  runners have no Arial). Posted as an album of page images + the same note as a PDF (`Sender.send_document`),
+  NO links in the post, NO rating/target. Page 1: header band, title + factual headline (FY profit change, from PSX)
+  + subhead, sidebar (key data, price performance vs KSE-100, 12-month chart, management), main (overview ending on
+  a whole sentence, business mix, latest results, outlook). Page 2: financial summary, recent quarters, sales and
+  profit bar charts, track record, balance sheet (only clean figures: `_figure`), coming up. Page 3: operations
+  (generic "Pakistan" row dropped), capacity, group companies, milestones, outlook continued, risks, disclosures.
+  No annual report read -> 2 pages, disclosures on page 2. Files: published/SYM-1..3.png + SYM.pdf + SYM.json.
+  Old 7-card `cards.sotd_cards` is no longer used. Reader prompt VERSION 2 (short items, history milestones,
+  standalone balance sheet figures); cache file name includes the version.
+  Website: r/SYM.html (all sections with page refs + page images + PDF download) and stock-of-the-day.html archive.

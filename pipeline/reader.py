@@ -65,11 +65,19 @@ def select(pages: list[str]) -> list[tuple[int, str]]:
     return [(i, pages[i]) for i in sorted(keep)]
 
 
+VERSION = 2  # bump when the prompt changes: cached summaries are then read again
+
 PROMPT = """You are preparing the facts for a plain, neutral company profile for Pakistani retail investors.
 Use ONLY the annual report pages below. Do not use outside knowledge. Do not give opinions or advice.
-Write short, plain sentences (no marketing words, no adjectives like robust or remarkable).
+Write short, plain sentences (no marketing words, no adjectives like robust, remarkable or largest).
+Keep every item SHORT: segment detail at most 14 words, location "what" at most 10 words, other items at most 25 words.
 Every item must give the page number it came from ("p"). If something is not in the pages, leave it out.
 Copy numbers exactly as written in the pages (with their units).
+Locations: name specific cities, districts or countries with what is there (plant, mine, branches); do not add a
+general "Pakistan" entry when specific places are given.
+Milestones: the company's history from founding and listing to today, oldest first, one per important year.
+Balance sheet: use the UNCONSOLIDATED (standalone) statement of financial position if both are given; each value is a
+number with its unit only, for example "Rs 25,315 million" (no sentences).
 
 Company: {name} ({sym}). Report: annual report for {period}.
 
@@ -145,7 +153,15 @@ def validate(raw: dict, source: str) -> dict:
     out["future"] = _clean_list(raw.get("future"), ["text"], source, 6)
     out["risks"] = _clean_list(raw.get("risks"), ["text"], source, 5)
     b = raw.get("balance_sheet") or {}
-    out["balance_sheet"] = _clean_item(b, ["borrowings", "cash", "equity", "basis"], source) if isinstance(b, dict) else None
+    bs = _clean_item(b, ["borrowings", "cash", "equity", "basis"], source) if isinstance(b, dict) else None
+    if bs:  # a balance sheet value must be a short figure, not a sentence
+        for k in ("borrowings", "cash", "equity"):
+            v = bs.get(k, "")
+            if v and (len(v) > 45 or not re.search(r"\d", v)):
+                bs[k] = ""
+        if not any(bs.get(k) for k in ("borrowings", "cash", "equity")):
+            bs = None
+    out["balance_sheet"] = bs
     return out
 
 
@@ -156,7 +172,7 @@ def read(sym: str, name: str, cfg: dict, force: bool = False) -> dict | None:
         log.warning("no annual report listed for %s", sym)
         return None
     CACHE.mkdir(parents=True, exist_ok=True)
-    path: Path = CACHE / f"{sym}-{rep['id']}.json"
+    path: Path = CACHE / f"{sym}-{rep['id']}-v{VERSION}.json"
     if path.exists() and not force:
         try:
             return json.loads(path.read_text(encoding="utf-8"))

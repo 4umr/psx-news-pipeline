@@ -17,7 +17,7 @@ from datetime import timedelta
 
 import pandas as pd
 
-from . import earnings, prices, reader, research
+from . import earnings, prices, reader, research  # noqa: F401
 from .common import ROOT, esc, log, now_pkt
 from .signals import features
 from .sources import psx, scs
@@ -130,24 +130,34 @@ def collect(sym: str, cfg: dict, df: pd.DataFrame, v: pd.DataFrame, res: pd.Data
             rets[lab] = float(piv[sym].iloc[-1] / piv[sym].iloc[-1 - n] - 1)
     k = kse.reindex(hist["date"]).ffill()
     kse_1y = float(k.iloc[-1] / k.iloc[0] - 1) if len(k.dropna()) > 2 else None
-    vl = v[(v["sym"] == sym) & (v["date"] == end)]
-    pe = float(vl["pe"].iloc[0]) if len(vl) and pd.notna(vl["pe"].iloc[0]) else None
-    ttm = float(vl["ttm"].iloc[0]) if len(vl) and pd.notna(vl["ttm"].iloc[0]) else None
     sector_name = (sectors.get(sym) or prof.get("sector") or "").strip().title()
-    sec_now = research.sector_pe(v[v["date"] == end], sectors, min_adtv, weekly=False)
-    sec_pe = sec_now.set_index("sector")["median"].get(sector_name)
-    usual = research.load_stock_history().get(sym)
     h = res[res["sym"] == sym] if res is not None else None
-    facts = quick_facts(h, hist, pe, sec_pe, usual, float(last["adtv20"]) if pd.notna(last["adtv20"]) else None,
-                        min_adtv, prof["name"])
-    latest = earnings.assess(sym) if h is not None and len(h) else None
-    result_lines, latest_label = _result_lines(prof)
+    # P/E on the company's own last full-year EPS as filed with PSX (same basis as the financials card).
+    # Not shown if a bonus or split happened after that year ended (EPS and price would be on different share counts).
+    pe, eps_year, eps = None, "", None
+    ann = prof.get("annual") or {}
+    if ann:
+        eps_year = sorted(ann)[-1]
+        eps = ann[eps_year].get("EPS")
+        yem = next((m for k_, m in _MONTHS.items() if k_ in (prof.get("year_end") or "").lower()), 12)
+        fy_end = pd.Timestamp(year=int(eps_year), month=yem, day=1) + pd.offsets.MonthEnd(0) if eps_year.isdigit() else end
+        action_since = (df[(df["sym"] == sym) & (df["date"] > fy_end)]["exf"] < 0.92).any()
+        if eps and eps > 0 and not action_since:
+            pe = float(last["c"]) / eps
+    # 12-month range in plain prices (what members see on their screens); dividend-adjusted only across a split/bonus
+    big_action = (hist["exf"] < 0.92).any()
+    hi = float(hist["ah"].max() if big_action else hist["h"].max())
+    lo = float(hist["al"].min() if big_action else hist["l"].min())
+    now_px = float(last["ac"] if big_action else last["c"])
     divs = []
     if h is not None and len(h):
         for yy, g in h.groupby("yy"):
             d = g["div"].fillna(0).sum()
             divs.append((int(2000 + yy) if yy == yy else 0, float(d)))
         divs = [(y, d) for y, d in divs if y][-5:]
+    facts = _facts(prof, divs, hist, float(last["adtv20"]) if pd.notna(last["adtv20"]) else None, min_adtv, quick_facts)
+    latest = earnings.assess(sym) if h is not None and len(h) else None
+    result_lines, latest_label = _result_lines(prof)
     events = []
     today = pd.Timestamp(now_pkt().strftime("%Y-%m-%d"))
     try:
@@ -176,15 +186,39 @@ def collect(sym: str, cfg: dict, df: pd.DataFrame, v: pd.DataFrame, res: pd.Data
         "price": float(last["c"]), "chg": float(last["chg"]) if pd.notna(last["chg"]) else 0.0,
         "mcap": float(last["mcap"]) if pd.notna(last.get("mcap")) else None, "tier": last["tier"],
         "adtv": float(last["adtv20"]) if pd.notna(last["adtv20"]) else None,
-        "hi": float(hist["ah"].max()), "lo": float(hist["al"].min()), "ac_last": float(last["ac"]),
+        "hi": hi, "lo": lo, "ac_last": now_px, "range_adjusted": bool(big_action),
+        "eps": eps, "eps_year": eps_year, "published": f"{now_pkt():%Y-%m-%d}",
         "series": [(f"{d:%Y-%m-%d}", float(x)) for d, x in zip(hist["date"], hist["ac"])],
         "kse_series": [(f"{d:%Y-%m-%d}", float(x)) for d, x in k.dropna().items()],
-        "returns": rets, "kse_1y": kse_1y, "pe": pe, "ttm": ttm, "sector_pe": float(sec_pe) if sec_pe else None,
-        "usual_pe": float(usual) if usual else None, "facts": facts, "latest": latest, "divs": divs,
+        "returns": rets, "kse_1y": kse_1y, "pe": pe, "facts": facts, "latest": latest, "divs": divs,
         "result_lines": result_lines, "latest_label": latest_label,
         "events": events, "report": report, "logo": str(logo) if logo.exists() else "",
         "kmi": sym in (kmi or set()),
     }
+
+
+def _facts(prof: dict, divs: list, hist: pd.DataFrame, adtv, min_adtv: float, quick_facts) -> list[tuple[str, str]]:
+    """Plain facts from the PSX figures (one basis), plus price trend and liquidity."""
+    out = []
+    if "defaulter" in prof.get("name", "").lower():
+        out.append(("down", "<b>On PSX's defaulter segment</b>: the company has not met listing requirements (extra risk)"))
+    ann = prof.get("annual") or {}
+    ys = sorted(ann)
+    pat = [ann[y].get("Profit after Taxation") for y in ys]
+    pat = [x for x in pat if x is not None]
+    if len(pat) >= 3:
+        ups = sum(1 for a, b in zip(pat[1:], pat[:-1]) if a > b)
+        out.append(("up" if ups == len(pat) - 1 else ("down" if ups == 0 else "muted"),
+                    f"Profit grew in <b>{ups} of the last {len(pat) - 1}</b> years"))
+        loss = sum(1 for x in pat if x < 0)
+        out.append(("up" if loss == 0 else "down", f"Made a profit in <b>{len(pat) - loss} of the last {len(pat)}</b> years"))
+    if len(divs) >= 3:
+        paid = sum(1 for _, d in divs if d > 0)
+        out.append(("up" if paid >= len(divs) - 1 else ("down" if paid == 0 else "muted"),
+                    f"Paid a dividend in <b>{paid} of the last {len(divs)}</b> years"))
+    # price trend and liquidity lines from the shared quick check (no results or P/E lines from it)
+    out += [f for f in quick_facts(None, hist, None, None, None, adtv, min_adtv, "") if "200-day" in f[1] or "Trades" in f[1]]
+    return out
 
 
 def _chg(a, b) -> str:
@@ -263,9 +297,9 @@ def caption(d: dict) -> str:
     lines = [f"<b>Stock of the Day: {esc(d['sym'])}</b> · {esc(d['name'])}",
              f"{esc(d['sector'])} · Rs {d['price']:,.2f}" + (f" · P/E {d['pe']:.1f}" if d.get("pe") else ""),
              "", esc(what), "",
-             # no links (owner's choice): everything is in the cards themselves
-             "Swipe through the cards: the business, four years of numbers, latest results, valuation, "
-             "plans and risks, and a quick check.",
+             # no links (owner's choice): everything is in the note itself
+             "Full research note in the pages above (PDF below): key data, the business, latest results, "
+             "four years of financials, outlook and risks.",
              "Research from official filings, not investment advice."]
     return "\n".join(lines)
 
@@ -273,7 +307,7 @@ def caption(d: dict) -> str:
 # ---------------------------------------------------------------- daily run
 def run(cfg: dict, dry: bool = False, force: str | None = None, preview: bool = False) -> None:
     """Pick today's company, build the report, post it (channel; admin only with preview), record it."""
-    from .cards import sotd_cards
+    from .note import build
     from .telegram import Sender
     now = now_pkt()
     st = _load()
@@ -313,17 +347,26 @@ def run(cfg: dict, dry: bool = False, force: str | None = None, preview: bool = 
                          "(Gemini or PSX). Trying again at 20:00; then it is published with the official numbers only.")
             _save(st)
             return
-        cards = sotd_cards(cfg, d)
+        d["published"] = today
+        pages, pdf = build(d)  # brokerage-style research note: page images + the same note as a PDF
         dest = (DIR / "preview") if preview else PUBLISHED  # a preview never reaches the public website
         dest.mkdir(parents=True, exist_ok=True)
-        (dest / f"{sym}.json").write_text(json.dumps({**d, "published": today}, ensure_ascii=False, default=str),
-                                          encoding="utf-8")
-        for i, png in enumerate(cards, 1):
+        (dest / f"{sym}.json").write_text(json.dumps(d, ensure_ascii=False, default=str), encoding="utf-8")
+        for old in dest.glob(f"{sym}-*.png"):  # an earlier version may have had more pages
+            old.unlink()
+        for i, png in enumerate(pages, 1):
             (dest / f"{sym}-{i}.png").write_bytes(png)
+        (dest / f"{sym}.pdf").write_bytes(pdf)
+        pdf_name = f"{sym} research note {today}.pdf"
         if preview:  # print the annual report summary in the run log so it can be checked before going public
             print("ANNUAL REPORT SUMMARY", json.dumps(d.get("report"), ensure_ascii=False, indent=1))
-        ok = (s.send_admin_photo(cards[0], caption(d), name=f"sotd_{sym}") if preview else
-              s.send_album(cards, caption(d), name=f"sotd_{sym}"))
+        if preview:
+            ok = s.send_admin_photo(pages[0], caption(d), name=f"sotd_{sym}")
+            s.send_document(pdf, pdf_name, f"{esc(d['name'])} ({esc(sym)}): research note preview", admin_only=True)
+        else:
+            ok = s.send_album(pages, caption(d), name=f"sotd_{sym}")
+            if ok:
+                s.send_document(pdf, pdf_name, f"<b>{esc(d['name'])} ({esc(sym)})</b>: research note (PDF)")
         if ok and not preview:
             st["covered"].append({"sym": sym, "date": today, "round": st["round"], "name": d["name"]})
         if not d.get("report"):

@@ -198,6 +198,41 @@ class Sender:
                     ok &= self._photo(chat, p, caption if i == 0 else "", f"{name}_{i}")
         return ok
 
+    def send_document(self, data: bytes, filename: str, caption: str = "", admin_only: bool = False) -> bool:
+        """A file (the research note PDF) to the channel, or to the admin chat only."""
+        caption = tidy(caption)
+        if self.dry:
+            out = ROOT / "out"
+            out.mkdir(exist_ok=True)
+            (out / filename).write_bytes(data)
+            log.info("[dry run] document %s saved to out/", filename)
+            return True
+        chats = ([self.admin] if self.admin else []) if admin_only else self.chats
+        ok = bool(chats)
+        for chat in chats:
+            ok &= self._doc(chat, data, filename, caption)
+        return ok
+
+    def _doc(self, chat: str, data: bytes, filename: str, caption: str) -> bool:
+        url = f"https://api.telegram.org/bot{self.token}/sendDocument"
+        for attempt in range(3):
+            try:
+                r = http().post(url, data={"chat_id": chat, "caption": caption[:1024], "parse_mode": "HTML"},
+                                files={"document": (filename, data, "application/pdf")}, timeout=60)
+                if r.status_code == 429:
+                    time.sleep(min(r.json().get("parameters", {}).get("retry_after", 5), 60))
+                    continue
+                if not r.ok:
+                    log.error("Telegram document error %s: %s", r.status_code, r.text[:200])
+                    return False
+                self.sent += 1
+                time.sleep(1.1)
+                return True
+            except Exception as e:  # noqa: BLE001
+                log.warning("Telegram document failed (%s), retrying", e)
+                time.sleep(2 * (attempt + 1))
+        return False
+
     def _photo(self, chat: str, png: bytes, caption: str, name: str) -> bool:
         url = f"https://api.telegram.org/bot{self.token}/sendPhoto"
         for attempt in range(3):

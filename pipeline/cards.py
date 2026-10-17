@@ -345,10 +345,13 @@ class Card:
         lines = [clean(x) for x in lines if clean(x)]
         if not lines:
             return y
+        # never run into the footer, whatever the caller asked for
+        room = self.H - 172 - 16 - y
+        limit = min(h, room) if h else room
         wrapped, used = [], 0
         for ln in lines:
             w = _wrap(ln, 860, 15)
-            if used + len(w) > max_lines or (h and 92 + (used + len(w)) * 34 + (len(wrapped) + 1) * 8 > h):
+            if used + len(w) > max_lines or 92 + (used + len(w)) * 34 + (len(wrapped) + 1) * 8 > limit:
                 continue  # skip what doesn't fit; a shorter bullet further down may still fit
             wrapped.append(w)
             used += len(w)
@@ -356,7 +359,7 @@ class Card:
             return y
         n = sum(len(w) for w in wrapped)
         natural = 78 + n * 34 + len(wrapped) * 8
-        h = h if h and h - natural < 260 else natural  # fill the space, but don't leave a huge empty box
+        h = min(h, room) if h and h - natural < 260 else natural  # fill the space, but don't leave a huge empty box
         self.panel(self.L, y, 1000, h)
         self._icon("doc", self.L + 50, y + 44, 40)
         self.label(self.L + 92, y + 44, title, 15)
@@ -1389,7 +1392,7 @@ def _grouped_bars(c: "Card", y: int, title: str, labels: list[str], series: list
 
 def _range_bar(c: "Card", y: int, lo: float, hi: float, now: float, h: int = 120) -> int:
     c.panel(c.L, y, 1000, h)
-    c.label(c.L + 30, y + 36, "12-month range (adjusted for payouts)", 13)
+    c.label(c.L + 30, y + 36, "12-month price range", 13)
     x0, x1, yy = c.L + 60, c.R - 60, y + 80
     c.rect(x0, yy - 6, x1 - x0, 12, c.t["tile"], radius=6, edge=c.t["edge"], z=5)
     pos = x0 + (x1 - x0) * ((now - lo) / (hi - lo) if hi > lo else 0.5)
@@ -1406,7 +1409,8 @@ def sotd_cards(cfg: dict, d: dict) -> list[bytes]:
     rp = d.get("report") or {}
     prof = d["profile"]
     sym, name = d["sym"], d["name"]
-    sub = f"{d['sector']}  ·  {'KMI-30  ·  ' if d.get('kmi') else ''}Stock of the day  ·  {pd_date(d['date'])}"
+    sub = f"{d['sector']}  ·  {'KMI-30  ·  ' if d.get('kmi') else ''}Stock of the day  ·  {pd_date(d.get('published') or d['date'])}"
+    pe_lab = f"P/E (FY{str(d.get('eps_year', ''))[-2:]})" if d.get("eps_year") else "P/E"
 
     def card():
         return Card(cfg, "psx")
@@ -1427,9 +1431,9 @@ def sotd_cards(cfg: dict, d: dict) -> list[bytes]:
         c.text(c.L + 330, y + 46 + i * 32, ln, 14.5, CREAM)
     y += 266
     one_y = d["returns"].get("1 year")
-    y = c.strip(y, [("Price", f"Rs {d['price']:,.2f}", None),
+    y = c.strip(y, [(f"Price, {pd_date(d['date'])[:6]}", f"Rs {d['price']:,.2f}", None),
                     ("Market value", f"Rs {d['mcap'] / 1e9:,.0f} bn" if d.get("mcap") else "n/a", None),
-                    ("P/E", f"{d['pe']:.1f}" if d.get("pe") else "n/a", None),
+                    (pe_lab, f"{d['pe']:.1f}" if d.get("pe") else "not shown", None),
                     ("1 year", _p(one_y), _col(one_y))])
     ser = [x for _, x in d["series"]]
     kse = [x for _, x in d.get("kse_series") or []]
@@ -1455,11 +1459,12 @@ def sotd_cards(cfg: dict, d: dict) -> list[bytes]:
     room = c.H - 172 - 16
     segs = rp.get("segments") or []
     if segs:
-        y = c.highlights(y, [f"{s_['name']}: {s_['detail']}" for s_ in segs], title="What they sell", max_lines=7)
+        y = c.highlights(y, [f"{s_['name']}: {s_['detail']}" for s_ in segs], title="What they sell", max_lines=9,
+                         h=int((room - y) * 0.42))
     places = [f"{p_['place']}: {p_['what']}" for p_ in (rp.get("locations") or [])]
     places += [x["text"] for x in (rp.get("capacity") or [])]
     if places and room - y > 160:
-        y = c.highlights(y, places, title="Where they operate and how big", max_lines=6)
+        y = c.highlights(y, places, title="Where they operate and how big", max_lines=9, h=int((room - y) * 0.55))
     grp = []
     if (rp.get("parent") or {}).get("text"):
         grp.append(rp["parent"]["text"])
@@ -1528,10 +1533,10 @@ def sotd_cards(cfg: dict, d: dict) -> list[bytes]:
     # 5. valuation and market
     c = card()
     y = c.title_block("Valuation", "and market", sub)
-    y = c.tiles(y, [("P/E now", f"{d['pe']:.1f}" if d.get("pe") else "n/a", None),
-                    ("Sector P/E", f"{d['sector_pe']:.1f}" if d.get("sector_pe") else "n/a", None),
-                    ("Its usual P/E", f"{d['usual_pe']:.1f}" if d.get("usual_pe") else "n/a", None)],
-                "Price to last 12 months earnings", cols=3, tile_h=92)
+    y = c.tiles(y, [(pe_lab, f"{d['pe']:.1f}" if d.get("pe") else "not shown", None),
+                    (f"EPS FY{str(d.get('eps_year', ''))[-2:]}", f"Rs {d['eps']:,.2f}" if d.get("eps") is not None else "n/a", None),
+                    ("Market value", f"Rs {d['mcap'] / 1e9:,.0f} bn" if d.get("mcap") else "n/a", None)],
+                "Price and earnings (last full year, as filed)", cols=3, tile_h=92)
     rt = [(k_, _p(v_), None) for k_, v_ in d["returns"].items()]
     if d.get("kse_1y") is not None:
         rt.append(("KSE-100, 1 year", _p(d["kse_1y"]), None))
@@ -1542,7 +1547,8 @@ def sotd_cards(cfg: dict, d: dict) -> list[bytes]:
     y = c.strip(y, [("Size", f"{d['tier']} cap", None),
                     ("Traded a day", f"Rs {d['adtv'] / 1e6:,.0f} m" if d.get("adtv") else "n/a", None),
                     ("Free float", f"{prof.get('free_float_pct', 0):.0f}%" if prof.get("free_float_pct") else "n/a", None)])
-    c.highlights(y, ["P/E not shown for losses, or within two years of a split or bonus issue.",
+    c.highlights(y, ["P/E = price / earnings per share of the last full year, as filed with PSX. Not shown after a loss "
+                     "or when a bonus or split came after that year.",
                      "A low P/E can mean cheap, or that profits are expected to fall."], title="How to read",
                  h=c.H - 172 - 16 - y)
     foot(c)
@@ -1556,10 +1562,10 @@ def sotd_cards(cfg: dict, d: dict) -> list[bytes]:
     risks = [x["text"] for x in (rp.get("risks") or [])]
     if not (mil or fut or risks):
         mil = ["The annual report could not be read today; this section returns with the next report."]
-    for title_, items, cap in (("Milestones", mil, 0.32), ("Plans and projects, as stated by the company", fut, 0.45),
-                               ("Risks the company names", risks, 1.0)):
+    for title_, items, share in (("Milestones", mil, 0.34), ("Plans and projects, as stated by the company", fut, 0.55),
+                                 ("Risks the company names", risks, 1.0)):
         if items and room - y > 150:
-            y = c.highlights(y, items, title=title_, max_lines=8, h=None if cap == 1.0 else None)
+            y = c.highlights(y, items, title=title_, max_lines=8, h=int((room - y) * share))
     foot(c)
 
     # 7. quick check and what to watch
@@ -1579,11 +1585,11 @@ def sotd_cards(cfg: dict, d: dict) -> list[bytes]:
         y += rows_h + 16
     ev = d.get("events") or ["No board meeting or payout date announced yet."]
     y = c.highlights(y, ev, title="Coming up")
-    src = ["Company profile and figures: the company's page on the Pakistan Stock Exchange."]
+    src = ["Figures: the company's filings with the Pakistan Stock Exchange."]
     if rp.get("report"):
-        src.append(f"Annual report {rp['report']['period']}: pages {', '.join(str(p_) for p_ in rp['report']['read_pages'][:10])}"
-                   f"{'...' if len(rp['report']['read_pages']) > 10 else ''} read; every number checked against them.")
-    src.append("Prices: PSX via SCS Trade. Research, not investment advice.")
+        src.append(f"Business, plans and risks: the company's annual report {rp['report']['period']}, "
+                   "every number checked against it.")
+    src.append("Prices: Pakistan Stock Exchange. Research, not investment advice.")
     c.highlights(y, src, title="Sources", h=c.H - 172 - 16 - y)
     foot(c)
     return out
