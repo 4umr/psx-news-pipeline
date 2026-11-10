@@ -1,0 +1,31 @@
+name: Source probe
+
+# Checks from GitHub's servers whether candidate data sources answer (some Pakistani sites block
+# foreign addresses). Runs when this file changes or by hand; results appear as notices on the run.
+on:
+  push:
+    paths: [".github/workflows/probe.yml"]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe
+        run: |
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+          for u in \
+            "https://psopk.com/en/fuels/fuel-prices" \
+            "https://pama.org.pk/monthly-production-sales-of-vehicles/" \
+            "https://www.sbp.org.pk/ecodata/index2.asp" \
+            "https://www.sbp.org.pk/assets/document/Balancepayment_BPM6.xls" \
+            "https://www.sbp.org.pk/assets/document/Homeremit_Arch.xlsx" \
+            "https://www.ogra.org.pk/notified-petroleum-prices" \
+            "https://nepra.org.pk/" \
+            "https://www.finance.gov.pk/press_releases.html" \
+            "https://ocac.org.pk/" \
+            "https://www.apcma.com/"; do
+            r=$(curl -sL -m 30 -o /dev/null -w '%{http_code} %{size_download}b %{time_total}s' -A "$UA" "$u" || true)
+            echo "::notice::$u -> ${r:-failed}"
+          done
