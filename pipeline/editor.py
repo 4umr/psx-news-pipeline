@@ -165,13 +165,21 @@ def admin_note(reason: str) -> str:
     return f"<i>Kept off the main channel: {esc(reason)}</i>\n"
 
 
+BUCKETS = (("source not on", "weak source"), ("index level", "wrong index level"), ("already", "topic cap"),
+           ("materiality", "minor"), ("not confirmed", "unconfirmed"), ("same event", "duplicate"),
+           ("not relevant", "not relevant"), ("old event", "old or wrong"), ("not news", "not news"),
+           ("AI unavailable", "AI unavailable"), ("verify", "AI could not verify"), ("policy-rate", "rate rumour"))
+
+
+def _bucket(reason: str) -> str:
+    return next((b for k, b in BUCKETS if k in reason), reason.split("(")[0][:30].strip())
+
+
 def day_summary(state, day_start: float) -> str:
     rows = [r for r in state.data.get("news_log", []) if r["ts"] >= day_start]
     if not rows:
         return ""
     posted = sum(1 for r in rows if r["d"] == "posted")
-    why = Counter(re.sub(r"\(.*?\)|\d+ of 5.*|already \d+ posts.*", lambda m: "topic cap" if "already" in m.group(0)
-                         else ("low materiality" if "of 5" in m.group(0) else ""), r["why"]).strip(" :")
-                  for r in rows if r["d"] != "posted")
-    top = ", ".join(f"{k} {v}" for k, v in why.most_common(5))
+    why = Counter(_bucket(r["why"]) for r in rows if r["d"] != "posted")
+    top = ", ".join(f"{k} {v}" for k, v in why.most_common(6))
     return f"Main channel news: {posted} posted, {len(rows) - posted} kept for you" + (f" ({esc(top)})" if top else "")

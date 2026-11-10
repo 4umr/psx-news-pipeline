@@ -100,6 +100,31 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 - Known risk: a job that is always open is a grey area of GitHub's Actions terms (free for public repos); if GitHub
   ever objects, set `fast_loop.enabled: false` and the old behaviour returns. Local test: `loop --minutes 3 --dry-run`.
 
+## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
+- Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
+  Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,
+  Pkrevenue daily price page, ABP Live, Pakistan Observer, Bloom Pakistan, UrduPoint), speculation ("petrol to
+  drop to Rs338 tonight"), ceremonial ("envoy outlines priorities"), Bol News "PSX nears 97,000" with the index at
+  179,000, 4 fuel posts in one run, and AI number-check failures still posted with rule text.
+- `editor.py` gates every instant item: `before_ai` (trusted source regex `editor.trusted_sources` or official;
+  `index_conflict`: a 5-6 digit level near KSE/PSX/index words, no forecast words, must be within 10% of the
+  current/previous/last-5 closes; `max_per_topic_day` 3, score-10 exempt), then `analysis.analyse(..., posted=
+  editor.posted_list(state))`, then `after_ai`: not relevant / stale / kind != news / `same_event` / materiality
+  < `min_materiality` (4) / not confirmed unless materiality 5. No AI (`analysis.last_status` unavailable or
+  error): only official or score >= 10 and no post on the topic within `topic_gap_hours`. check_failed -> admin.
+- AI prompt adds `confirmed`, `materiality` 1-5 (rubric in ANALYSE) and `same_event` (must quote an ALREADY
+  POSTED line; validated against the list). Data alerts are recorded too (`editor.record_alert`, ALERT_TOPIC map)
+  so news about an event already shown as a card counts as the same event.
+- State: `posted` (3 days) and `news_log` (400 rows: ts, t, s, sc, topic, d=posted|admin, why, mat, conf, kind,
+  lvl) in the PUBLIC state branch: review decisions any time from
+  raw.githubusercontent.com/4umr/psx-news-pipeline/state/state.json. Admin chat items carry "Kept off the main
+  channel: <reason>". 23:45 report adds "Main channel news: N posted, M kept for you (reasons)".
+- Replay test: `python -m pipeline review --hours 36` (workflow `review.yml`, manual, uses the Gemini key, reads
+  the state branch, sends/saves nothing): runs the last hours' candidates in time order through the same gates
+  with a simulated posted list (`editor._clock` set to each item's time) and prints a table + RESULT.
+- Raw run logs readable in the in-app browser (signed in): github.com/4umr/psx-news-pipeline/commit/<full sha>/
+  checks/<job id>/logs redirects to the blob; job id + sha from the public API /actions/runs/<id>/jobs.
+
 ## Official data cards (built 2026-11-11) — new sources, one infographic per release
 - `sources/official.py` readers (each returns None on fetch/layout problems and has its own sanity checks):
   `fuel_prices()` PSO price page (psopk.com/en/fuels/fuel-prices: "Effective From" + PREMIER EURO 5 = petrol,

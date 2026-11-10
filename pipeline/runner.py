@@ -672,12 +672,27 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
     if instant and analysis.available(cfg):
         S("broker notes", _refresh_broker_notes, state, now)
         ctx_text = S("market context", context.build, state, view_now, mk, default="") or ""
+
     def hold(it: NewsItem, reason: str, ai: dict | None = None) -> None:
         """Not for the main channel: the owner still sees it in the admin chat, with the reason."""
         editor.log_decision(state, it, "admin", reason, ai)
         sender.send_admin(editor.admin_note(reason) + _fmt_compact(
             {"t": it.title, "u": it.url, "s": it.source, "sc": it.score, "l": it.label, "topic": it.topic,
              "ts": int(time.time())}, cfg))
+
+    # Items whose AI reading failed on a busy Gemini (errors 429/503) come back first, for up to 3 tries in 30 min
+    tries: dict[str, int] = {}
+    firsts: dict[str, int] = {}
+    for r in state.data.pop("ai_retry", []):
+        if time.time() - r["first"] < 1800:
+            back = NewsItem(title=r["t"], url=r["u"], source=r["s"], summary=r.get("sm", ""), pk=True,
+                            official=r.get("off", False),
+                            published=datetime.fromtimestamp(r["pub"], tz=now.tzinfo) if r.get("pub") else None)
+            back.score, back.topic, back.label = r["sc"], r["topic"], r["l"]
+            tries[back.title], firsts[back.title] = r["n"], r["first"]
+            instant.insert(0, back)
+    if instant and not ctx_text and analysis.available(cfg):
+        ctx_text = S("market context", context.build, state, view_now, mk, default="") or ""
 
     for it in instant:
         imp = impact.assess(it.title, it.topic, it.score, cfg, it.summary)
@@ -693,6 +708,14 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
             ai = S("article analysis", analysis.analyse, it.title, it.url, it.source, cfg, it.summary,
                    ctx_text, tickers, editor.posted_list(state))
             status = analysis.last_status
+        if status == "error" and tries.get(it.title, 0) < 2:
+            first = firsts.get(it.title, int(time.time()))
+            state.data.setdefault("ai_retry", []).append(
+                {"t": it.title, "u": it.url, "s": it.source, "sm": (it.summary or "")[:300], "off": it.official,
+                 "pub": int(it.published.timestamp()) if it.published else None, "sc": it.score, "topic": it.topic,
+                 "l": it.label, "n": tries.get(it.title, 0) + 1, "first": first})
+            log.info("AI busy, will try again next pass: %s", it.title[:80])
+            continue
         if reason := editor.after_ai(it, ai, status, state, cfg):
             hold(it, reason, ai)
             continue
