@@ -120,11 +120,12 @@ def main() -> None:
         from .runner import run_loop
         run_loop(cfg, args.dry_run, args.minutes or None)
     elif args.cmd == "auto":
-        from .runner import fast_window, run_loop
-        if fast_window(cfg):
+        from .runner import loop_wanted, run_loop, set_continue
+        if loop_wanted(cfg):
             run_loop(cfg, args.dry_run)
-        else:
+        else:  # loop switched off (or outside market hours with always_on: false): one pass, no next job
             run_once(cfg, args.dry_run)
+            set_continue(False)
     elif args.cmd == "test":
         s = Sender()
         if s.dry:

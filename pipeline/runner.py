@@ -425,7 +425,7 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None, l
 
 
 def fast_window(cfg: dict, now: datetime | None = None) -> bool:
-    """True while the market-hours fast loop should be running (config `fast_loop`)."""
+    """True in market hours (config `fast_loop`): the loop then runs at its fast rhythm."""
     fl = cfg.get("fast_loop") or {}
     now = now or now_pkt()
     if not fl.get("enabled", True) or now.weekday() not in fl.get("days", [0, 1, 2, 3, 4]):
@@ -433,35 +433,94 @@ def fast_window(cfg: dict, now: datetime | None = None) -> bool:
     return in_window(now, fl.get("start", "08:30"), fl.get("end", "18:45"))
 
 
-def run_loop(cfg: dict, dry_run: bool = False, minutes: int | None = None) -> bool:
-    """Market-hours fast loop: a light pass every `every_seconds`, a full pass every `full_every` passes.
-
-    Stops after `minutes` (the job hands over to the next one) or when the fast window ends.
-    Returns True when it stopped while the window was still open (the caller starts the next job)."""
+def set_continue(more: bool) -> None:
+    """Tells the workflow whether to start the next job right away (GitHub step output `continue`)."""
     import os
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"continue={'true' if more else 'false'}\n")
+
+
+def loop_wanted(cfg: dict) -> bool:
+    """Should a job keep looping now? Always, when `fast_loop.always_on`; else only inside the fast window."""
+    fl = cfg.get("fast_loop") or {}
+    return bool(fl.get("enabled", True)) and (bool(fl.get("always_on", True)) or fast_window(cfg))
+
+
+def run_loop(cfg: dict, dry_run: bool = False, minutes: int | None = None) -> bool:
+    """The job that stays open, so nothing depends on GitHub's schedule (which runs hours late).
+
+    Inside the fast window (market hours): a light pass every `every_seconds`, a full pass every
+    `full_every` passes. Outside it (evenings, nights, weekends): a full pass every `idle_seconds`.
+    Stops after `minutes`; the workflow then starts the next job. Returns True if another job is wanted."""
     fl = cfg.get("fast_loop") or {}
     every = int(fl.get("every_seconds", 60))
+    idle = int(fl.get("idle_seconds", 600))
     full_every = max(1, int(fl.get("full_every", 5)))
     minutes = minutes or int(fl.get("chunk_minutes", 100))
     stop_at = time.time() + minutes * 60
     n = 0
-    log.info("fast loop: every %ds, full pass every %d passes, for up to %d minutes", every, full_every, minutes)
+    log.info("loop: every %ds in market hours (full pass every %d), every %ds otherwise, for up to %d minutes",
+             every, full_every, idle, minutes)
     try:
-        while fast_window(cfg) and time.time() < stop_at:
+        while loop_wanted(cfg) and time.time() < stop_at:
             t0 = time.time()
-            run_once(cfg, dry_run, light=n % full_every != 0)
+            fast = fast_window(cfg)
+            run_once(cfg, dry_run, light=fast and n % full_every != 0)
             n += 1
-            if time.time() >= stop_at:
-                break
-            time.sleep(max(5.0, every - (time.time() - t0)))
+            # next pass one interval after this one STARTED, but always at least 5 seconds of rest
+            wake = min(max(t0 + (every if fast_window(cfg) else idle), time.time() + 5), stop_at)
+            while time.time() < wake:
+                time.sleep(min(20.0, max(0.5, wake - time.time())))
+                if not fast and fast_window(cfg):
+                    break  # market hours just started: switch to the fast rhythm now
     except KeyboardInterrupt:
-        log.info("fast loop interrupted")
-    more = fast_window(cfg)
-    log.info("fast loop done: %d passes, window still open: %s", n, more)
-    if more and os.environ.get("GITHUB_OUTPUT"):  # tells the workflow to start the next job right away
-        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-            f.write("continue=true\n")
+        log.info("loop interrupted")
+    more = loop_wanted(cfg)
+    log.info("loop done: %d passes, next job wanted: %s", n, more)
+    set_continue(more)
     return more
+
+
+def _start_workflows(cfg: dict, state: State, now: datetime) -> None:
+    """Start the other workflows (swing scan, Stock of the Day, weekly cards, re-test) at their proper
+    time. GitHub's own schedule starts them hours late; their schedules stay as a backstop and each of
+    them refuses to do the same work twice. Needs GITHUB_TOKEN (set by the workflow); skipped locally."""
+    import os
+    from datetime import timedelta
+    from .common import http, parse_hhmm
+    token, repo = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY")
+    if not token or not repo:
+        return
+    for d in cfg.get("start_workflows") or []:
+        if now.weekday() not in d.get("days", [0, 1, 2, 3, 4, 5, 6]):
+            continue
+        h, m = parse_hhmm(d["time"])
+        sched = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        key = f"wf:{d['workflow']}:{d['command']}:{d['time']}:{now:%Y-%m-%d}"
+        if not sched <= now <= sched + timedelta(minutes=d.get("grace", 90)) or state.flag(key):
+            continue
+        tries = state.data.setdefault("wf_tries", {})
+        try:
+            r = http().post(f"https://api.github.com/repos/{repo}/actions/workflows/{d['workflow']}/dispatches",
+                            json={"ref": "main", "inputs": {"command": d["command"]}}, timeout=20,
+                            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                                     "X-GitHub-Api-Version": "2022-11-28"})
+            ok, why = r.status_code == 204, f"HTTP {r.status_code}"
+        except Exception as e:  # noqa: BLE001
+            ok, why = False, type(e).__name__
+        if ok:
+            state.set_flag(key)
+            tries.pop(key, None)
+            log.info("started %s (%s) on time", d["workflow"], d["command"])
+            continue
+        tries[key] = tries.get(key, 0) + 1
+        log.warning("could not start %s (%s): %s, attempt %d", d["workflow"], d["command"], why, tries[key])
+        if tries[key] >= 3:  # give up for today: the workflow's own (late) schedule still runs it
+            state.set_flag(key)
+            tries.pop(key, None)
+    for k in [k for k in state.data.get("wf_tries", {}) if not k.endswith(f"{now:%Y-%m-%d}")]:
+        del state.data["wf_tries"][k]
 
 
 def _contradicts_official(it: NewsItem, state: State, now: datetime) -> bool:
@@ -578,6 +637,8 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
 
     S("outbox retry", sender.retry_outbox, state.data.pop("outbox", []))
     S("MPC poll", watchers.mpc_poll, now, state, sender)
+    if not sender.dry:
+        S("workflow starter", _start_workflows, cfg, state, now)
 
     wa_mode = cfg.get("brand", {}).get("whatsapp_copy", "important")
 

@@ -85,7 +85,19 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   scheduled run is already queued in the concurrency group. Outside the window: one pass per scheduled run.
 - Workflow: `timeout-minutes: 125`; python runs in the background and `.github/backup_state.sh` pushes the state
   to the `state` branch every 10 min; restore keeps the NEWER of cache vs branch (`_saved` stamp in state.json).
-- Known risk: a 10-hour job on weekdays is a grey area of GitHub's Actions terms (free for public repos); if GitHub
+- **Always on since 2026-11-11** (GitHub's scheduler had degraded to 5-10 HOURS late for every workflow of this
+  repo: Stock of the Day arrived at 04:00, the swing scan the next morning). `fast_loop.always_on: true`: the
+  chain never stops; outside the window a full pass every `idle_seconds` (600). `runner.loop_wanted`,
+  `set_continue(True/False)`. Hand-over step: `always() && !cancelled() && continue != 'false'`, waits 5 min
+  after a failed job, skips if a run is already queued. So: cancel the running job by hand = chain stops (cron
+  restarts it hours later); `fast_loop.enabled: false` = stops for good. Manual menu commands (brief x, test...)
+  queue behind the current chunk and then hand back to `auto`. Menu option `loop --minutes 3` = quick
+  hand-over test / chain starter.
+- `runner._start_workflows` (config `start_workflows`): the loop dispatches swing.yml (17:40 Mon-Fri, Sunday 18:00
+  weekly cards, Saturday 10:00 re-test) and stock.yml (18:00 + 20:00) on time through the GitHub API with the
+  job's own GITHUB_TOKEN (env on the Run step; never logged), 90-minute grace, 3 attempts, flag `wf:...` per
+  day. Their own crons stay as a backstop; each workflow is idempotent (last_scan / tries).
+- Known risk: a job that is always open is a grey area of GitHub's Actions terms (free for public repos); if GitHub
   ever objects, set `fast_loop.enabled: false` and the old behaviour returns. Local test: `loop --minutes 3 --dry-run`.
 
 ## Intraday snapshots (built 2026-11-10, first data 2026-11-11) — the dataset nobody else has

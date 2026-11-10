@@ -1,12 +1,14 @@
 name: PSX News Pipeline
 
-# Market hours (Mon-Fri 08:30-18:45 PKT): one job stays open and checks every minute (the "fast loop"),
-# handing over to the next job every 100 minutes. Outside market hours: one pass per scheduled run.
-# GitHub's free schedule is slow (it starts runs only every 35-80 minutes), so the loop is what makes
-# news, results and filings arrive within a minute or two.
+# One job is always open ("the loop") and hands over to the next job every 100 minutes:
+#   market hours (Mon-Fri 08:30-18:45 PKT)  a pass every minute -> news, results, filings within 1-2 minutes
+#   evenings, nights, weekends              a pass every 10 minutes
+# The loop also starts the swing scan and Stock of the Day workflows at their proper times.
+# GitHub's own schedule starts jobs hours late, so it is only the backstop that restarts a broken chain.
+# To stop everything: set fast_loop.enabled to false in config.yaml (or cancel the running job by hand).
 on:
   schedule:
-    - cron: "*/5 * * * *"   # every 5 minutes nominally; GitHub delays it (fast loop fills the gaps)
+    - cron: "*/5 * * * *"   # backstop only: restarts the chain if a job ever fails to hand over
   workflow_dispatch:         # "Run workflow" button
     inputs:
       command:
@@ -15,6 +17,7 @@ on:
         default: auto
         options:
           - auto
+          - loop --minutes 3
           - run
           - test --admin-only
           - test
@@ -102,6 +105,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}   # lets the loop start the swing / Stock of the Day workflows on time
           TZ: Asia/Karachi
         run: |
           python -m pipeline ${{ inputs.command || 'auto' }} &
@@ -149,13 +153,19 @@ jobs:
         if: always() && hashFiles('state/state.json') != ''
         run: bash .github/backup_state.sh "${{ github.repository }}" "${{ github.token }}"
 
-      # A loop job that stopped while the market window is still open asks for the next job at once,
-      # unless a scheduled run is already waiting its turn (the concurrency group keeps one in line).
+      # Every job ends by asking for the next one, so the chain never depends on GitHub's schedule
+      # (which starts jobs hours late). No next job when: the pipeline said so (loop switched off in
+      # config.yaml), the run was cancelled by hand (that is how to stop the chain), or another run is
+      # already waiting its turn. After a failed job it waits 5 minutes first (no rapid retry storm).
       - name: Hand over to the next loop job
-        if: steps.run.outputs.continue == 'true'
+        if: always() && !cancelled() && steps.run.outputs.continue != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "${{ job.status }}" != "success" ]; then
+            echo "This job did not finish cleanly; waiting 5 minutes before asking for the next one"
+            sleep 300
+          fi
           waiting=0
           for s in queued pending waiting; do
             n=$(gh run list --workflow=pipeline.yml --status=$s --json databaseId --jq length 2>/dev/null || echo 0)
