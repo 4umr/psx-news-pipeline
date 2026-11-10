@@ -39,7 +39,7 @@ EDGE_SIGNALS: dict[str, dict] = {
                                   "(the dividend is included in the return)"},
     "runup_momentum":    {"name": "Big run-up into results", "kind": "long", "h": 60, "offset": 1,
                           "rule": "Up 15%+ in the 20 sessions before results day, bought at the open of results day"},
-    "peer_spillover":    {"name": "Peers reported strong, own results due", "kind": "risk", "h": 10, "live": True,
+    "peer_spillover":    {"name": "Peers strong, own results due", "kind": "risk", "h": 10, "live": True,
                           "rule": "The day a sector's reported results this season reach 2+ with 2 in 3 strong: the sector's "
                                   "liquid stocks whose own results are due within 14 days (the sympathy rally tends to fade)"},
 }
