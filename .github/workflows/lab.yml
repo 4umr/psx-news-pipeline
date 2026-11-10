@@ -1,0 +1,105 @@
+name: Research Lab
+
+# EXPERIMENT. After the close (started on time by the news loop at 18:20 PKT; this schedule is a backstop):
+# a dossier of everything scstrade, PSX and the news show about each top blue chip, one AI view versus the
+# KSE-100 over 20 sessions, a one-page card each, and automatic scoring of the earlier calls.
+# Goes ONLY to the test chat (secret TELEGRAM_RESEARCH_CHAT_ID; until it is set, the admin chat).
+on:
+  schedule:
+    - cron: "30 13 * * 1-5"   # 18:30 PKT backstop (the run refuses to do the same session twice)
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "What to do"
+        type: choice
+        default: lab
+        options:
+          - lab
+          - lab --force
+          - lab --dry-run --force
+
+concurrency:
+  group: psx-lab
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # encrypted backup branch 'lab-data' (the call log is private; the repo is public)
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt || (sleep 20 && pip install -r requirements.txt)
+
+      - name: Restore the call log
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: state/lab
+          key: psx-lab-v1-${{ github.run_id }}
+          restore-keys: psx-lab-v1-
+
+      - name: Restore the call log from the encrypted backup
+        if: steps.cache.outputs.cache-matched-key == ''
+        env:
+          KEY: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          mkdir -p state/lab
+          if git fetch --depth=1 origin lab-data 2>/dev/null; then
+            git show FETCH_HEAD:lab.tgz.enc > /tmp/lab.tgz.enc \
+              && openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:KEY -in /tmp/lab.tgz.enc | tar xz -C state/lab \
+              && echo "Restored from backup" || echo "Backup could not be read; starting fresh"
+          else
+            echo "No backup yet (first run)"
+          fi
+
+      # Market backdrop (policy rate, CPI, reserves, rupee...) from the news pipeline's saved state, read only
+      - name: Latest market context (read only)
+        run: |
+          git fetch --depth=1 origin state 2>/dev/null && git show FETCH_HEAD:state.json > state/state.json || echo "no state"
+
+      - name: Run
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+          TELEGRAM_RESEARCH_CHAT_ID: ${{ secrets.TELEGRAM_RESEARCH_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TZ: Asia/Karachi
+        run: python -m pipeline ${{ inputs.command || 'lab' }}
+
+      - name: Keep the news pipeline's state out of this workflow
+        if: always()
+        run: rm -f state/state.json state/state.bak
+
+      - name: Save the call log
+        if: always() && hashFiles('state/lab/calls.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: state/lab
+          key: psx-lab-v1-${{ github.run_id }}
+
+      - name: Back up the call log (encrypted)
+        if: always() && hashFiles('state/lab/calls.json') != ''
+        env:
+          KEY: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          tmp=$(mktemp -d)
+          tar cz -C state/lab . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:KEY -out "$tmp/lab.tgz.enc"
+          cd "$tmp"
+          git init -q -b lab-data
+          git config user.name "pipeline-bot"
+          git config user.email "pipeline-bot@users.noreply.github.com"
+          git add lab.tgz.enc
+          git commit -qm "lab backup $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" lab-data \
+            && echo "Backed up" || echo "Backup push failed (will retry next time)"

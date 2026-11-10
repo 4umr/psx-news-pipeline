@@ -100,6 +100,37 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 - Known risk: a job that is always open is a grey area of GitHub's Actions terms (free for public repos); if GitHub
   ever objects, set `fast_loop.enabled: false` and the old behaviour returns. Local test: `loop --minutes 3 --dry-run`.
 
+## Research Lab (built 2026-11-11) — EXPERIMENT, test chat only
+- Umer's idea: compile everything scstrade + other sources show about a stock, let the AI make a call, and TEST
+  whether it beats simple rules. Top 5 KSE-100 weights: FFC, UBL, MEBL, ENGROH, OGDC (`lab.symbols`).
+- `sources/scs_deep.py`: `snapshot(sym)` = SS_CompanySnapShot.aspx HTML, values in spans `ContentPlaceHolder1_lbl_<key>`
+  (strip 24 chars; FIELDS map ~55 keys: price ranges, 1/3/6/12m returns, beta, free float, EPS ytd/last/annual,
+  P/E, SCS EXPECTED P/E / growth / BV / ROE / dividend / sales, P/B, ROE/ROA, dividend yield, payout, EV/EBITDA,
+  margins, current ratio, debt), EPS by year + by quarter from the highcharts arrays, insider + announcement
+  tables. TRAP: SCS appends "at <today's date>" to old board-meeting notices; stripped, never used as a date.
+  `technicals()` TA_TechnicalReport.aspx/resdata (MACD d/w, RSI, S1/S2/R1/R2, SMA50/100, 52w; 74 stocks);
+  `signal(sym)` TA_TradingSignals.aspx/chart (index KSE100); `signal_record(sym)` TA_TradingSignalsHistory.aspx/grid
+  (Buy->next Sell trades over 3 years: FFC 60% right, UBL 40, MEBL 55, ENGROH 38, OGDC 35 as of Nov 2026);
+  `research(sym)` RE_Reports.aspx/chart (par, date1, date2); `opinions()` AnalystOpinionMain.aspx tables
+  class sTable (sym - company / title / author + m/d/yyyy / text). Market valuation lists, stock comparison,
+  heat map, MTS / Valuation Matrix PDFs exist but are not used yet.
+- `lab.py`: `dossier()` = snapshot + technicals + SCS signal and its record + SCS reports + analyst notes +
+  12-month prices and returns vs KSE-100 (scs price/index history) + volatility/volume + results history
+  (earnings.company, NaN-safe) + board meetings + ex-dates + PSX filings + Google News 14 days
+  (`lab.news_terms`) + ksealert broker titles + sector flows 4 weeks (flows.week) + news-pipeline market
+  context (state branch). `call()` one Gemini request: view Outperform/Neutral/Underperform vs KSE-100 over
+  20 sessions, confidence 1-5, headline, 3 thesis points, risks, catalysts, valuation/momentum/technical,
+  change_view_if; every sentence passes analysis._checked against the dossier text; < 2 thesis -> no call.
+- Scoring: calls in `state/lab/calls.json` (cache psx-lab-v1 + ENCRYPTED branch lab-data); `score()` = entry next
+  session's OPEN, exit close after 5 and 20 sessions, minus KSE-100 over the same days; `scoreboard()` hit
+  rates for the AI, SCS signal and 1-month momentum on the same dates, Outperform minus Underperform spread.
+  Daily calls on the same stocks overlap: judge after ~3 months, not on a few weeks.
+- `labcard.py` one-page card (two-pass height): call banner, 8 tiles, 12m price vs SMA50 vs KSE-100 rebased with
+  S1/R1, quarterly EPS vs a year earlier, why / risks / coming up, signal strip, lab record line.
+- Workflow `lab.yml` (dispatched by the loop at 18:20 Mon-Fri via start_workflows; backstop cron 18:30; manual
+  lab / lab --force). Sends to secret TELEGRAM_RESEARCH_CHAT_ID, else the admin chat. Never the main channel.
+  Local test without Gemini: build dossiers + placeholder call (cards render, scoring testable).
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,

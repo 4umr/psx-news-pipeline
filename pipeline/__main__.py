@@ -51,6 +51,10 @@ def main() -> None:
     sw.add_argument("--force", action="store_true", help="scan again even if this session was already scanned")
     sw.add_argument("--weekly", action="store_true", help="Sunday public cards: mid & small caps + results week ahead")
     sub.add_parser("site", help="build the data hub website into out/site")
+    lb = sub.add_parser("lab", help="Research Lab experiment: AI one-month views on the top blue chips")
+    lb.add_argument("--dry-run", action="store_true")
+    lb.add_argument("--force", action="store_true")
+    lb.add_argument("--symbols", default="", help="comma-separated; default config lab.symbols")
     rv = sub.add_parser("review", help="replay recent important headlines through the main-channel editor")
     rv.add_argument("--hours", type=float, default=36)
     so = sub.add_parser("sotd", help="Stock of the Day: pick today's company, build the report, post it")
@@ -63,6 +67,11 @@ def main() -> None:
     bt.add_argument("--notify-changes", action="store_true", help="send the report only if a live rule's verdict changed")
     args = p.parse_args()
 
+    if args.cmd == "lab":
+        from .lab import run as lab
+        syms = [x.strip().upper() for x in args.symbols.split(",") if x.strip()]
+        lab(load_config(), args.dry_run, args.force, syms or None)
+        return
     if args.cmd == "review":
         from .review import run as review
         review(load_config(), args.hours)

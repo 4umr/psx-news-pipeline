@@ -123,12 +123,25 @@ official_data:
   bop: true
   autos: true
 
+# Research Lab (experiment, pipeline/lab.py): one AI view a trading day per stock, versus the KSE-100 over
+# 20 sessions, scored automatically. Goes ONLY to the test chat (secret TELEGRAM_RESEARCH_CHAT_ID, or the
+# admin chat until that is set). news_terms = Google News search words per symbol.
+lab:
+  symbols: [FFC, UBL, MEBL, ENGROH, OGDC]
+  news_terms:
+    FFC: '"Fauji Fertilizer" OR FFC'
+    UBL: '"United Bank" OR UBL'
+    MEBL: '"Meezan Bank" OR MEBL'
+    ENGROH: '"Engro Holdings" OR "Engro Corporation" OR ENGROH'
+    OGDC: 'OGDC OR OGDCL OR "Oil and Gas Development"'
+
 # The other workflows, started on time by the loop (their own GitHub schedules run hours late and stay
 # only as a backstop; each of them refuses to do the same work twice). Times in PKT, days 0 = Monday.
 start_workflows:
   - {workflow: swing.yml, command: "swing", time: "17:40", days: [0, 1, 2, 3, 4]}
   - {workflow: stock.yml, command: "sotd", time: "18:00"}
   - {workflow: stock.yml, command: "sotd", time: "20:00"}            # publishes only if 18:00 could not
+  - {workflow: lab.yml, command: "lab", time: "18:20", days: [0, 1, 2, 3, 4]}
   - {workflow: swing.yml, command: "swing --weekly", time: "18:00", days: [6]}
   - {workflow: swing.yml, command: "backtest --notify-changes", time: "10:00", days: [5]}
 
