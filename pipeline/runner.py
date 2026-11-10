@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import analysis, briefs, context, expectations, impact, intraday, street, watchers
+from . import analysis, briefs, context, expectations, impact, intraday, official, street, watchers
 from .common import Alert, NewsItem, esc, hours_ago, in_window, link, log, now_pkt, to_pkt
 from .links import short
 from .scoring import Scorer, is_duplicate, is_stale, title_tokens
@@ -610,6 +610,7 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
     alerts += S("corporate results", watchers.corporate_results, f_res.result(), state, kse_symbols, cfg, default=[])
     if not light:
         alerts += S("FIPI", watchers.fipi_alert, now, state, default=[])
+        alerts += S("official data", official.official_data, now, state, cfg, default=[])
     kse_alerts, view = S("KSE moves", watchers.kse_moves, now, state, cfg, default=([], []))
     alerts += kse_alerts
     view = view or view_now

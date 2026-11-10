@@ -100,6 +100,27 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 - Known risk: a job that is always open is a grey area of GitHub's Actions terms (free for public repos); if GitHub
   ever objects, set `fast_loop.enabled: false` and the old behaviour returns. Local test: `loop --minutes 3 --dry-run`.
 
+## Official data cards (built 2026-11-11) — new sources, one infographic per release
+- `sources/official.py` readers (each returns None on fetch/layout problems and has its own sanity checks):
+  `fuel_prices()` PSO price page (psopk.com/en/fuels/fuel-prices: "Effective From" + PREMIER EURO 5 = petrol,
+  HI-CETANE DIESEL EURO 5, SKO, LDO); `remittances()` SBP `assets/document/Homeremit_Arch.xlsx` (sheet "July 2018
+  onwards", first row under "Country" = total, column labels are dates or 'Oct-26'/'Sep-26R'; needs openpyxl);
+  `bop()` SBP `Balancepayment_BPM6.pdf` page 1 in pypdf layout mode (title month, "Items" header + FY label row:
+  the year-to-date heading spans the last two columns; exports - imports must equal the trade balance);
+  `auto_link()` + `auto_sales()` PAMA monthly "Production-Sales-<Month>-<Year>.pdf" (layout mode; every company
+  has a Prod row and a Sale row with last year's months + cumulative, then this year's; company rows on the car
+  page must add up to PAMA's TOTAL CARS or nothing is posted). GROUPS maps rows to INDU, HCAR, SAZEW, MTL, AGTL,
+  ATLH (+ Pak Suzuki, Hyundai Nishat, unlisted). PAMA excludes Kia, Changan, MG (said on the card).
+- `official.py` watchers, called in full passes (`runner`: "official data"): fuel every 20 min, remit/bop hourly,
+  autos every 2 h; state in `state.data["official"][name]` (checked, key, data, fails). First sighting is silent
+  unless the file's Last-Modified is under 3 days old; fuel always needs a previous list to show the change.
+  8 failures in a row -> one admin note; >30% fuel move or >45% remittance MoM -> admin "data check", not posted.
+  Config `official_data:` switches each one. Test: call `official.WATCHERS` functions with a fake old state.
+- All four sites answer from GitHub's servers (checked with `.github/workflows/probe.yml`, a push/manual probe
+  whose results are public run annotations: `/check-runs/<job id>/annotations`). SBP rejects HEAD requests (403).
+- NOT available: APCMA publishes no despatch data on its site; NFDC site unreachable; OGRA/NEPRA/Finance pages
+  answer but are not parsed yet (PSO covers fuel prices).
+
 ## Intraday snapshots (built 2026-11-10, first data 2026-11-11) — the dataset nobody else has
 - `intraday.py`: every pass in market hours (Mon-Fri 09:15-16:45) appends changed rows of scstrade daily
   activity (time, sym, last price, cumulative volume, high, low) + the KSE-100 level to

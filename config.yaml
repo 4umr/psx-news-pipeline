@@ -114,6 +114,15 @@ fast_loop:
   always_on: true
   idle_seconds: 600
 
+# Official data straight from the publishers, one infographic per new release (pipeline/official.py):
+# fuel = petrol/diesel prices (PSO list), remittances and bop = SBP monthly files, autos = PAMA vehicle sales.
+official_data:
+  enabled: true
+  fuel: true
+  remit: true
+  bop: true
+  autos: true
+
 # The other workflows, started on time by the loop (their own GitHub schedules run hours late and stay
 # only as a backstop; each of them refuses to do the same work twice). Times in PKT, days 0 = Monday.
 start_workflows:
