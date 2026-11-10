@@ -88,6 +88,28 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 - Known risk: a 10-hour job on weekdays is a grey area of GitHub's Actions terms (free for public repos); if GitHub
   ever objects, set `fast_loop.enabled: false` and the old behaviour returns. Local test: `loop --minutes 3 --dry-run`.
 
+## Research round 3 (2026-11-10): `edge.py` — results season and dividend calendar, tested 2018-2026
+- `peer_results` (sector peers strong -> laggard 5 sessions before its own results): NO edge (design half -1.4%).
+  `peer_results_risk`: nothing. `div_runup` (sell before ex-date) +0.2%, `div_capture` (collect the dividend at
+  the ex-date close, adjusted return includes it) +0.4% vs similar, t 2.1, 7/9 years up: real but under our
+  0.75% bar after costs -> not live; good content ("stocks do not fall by the full dividend").
+  `runup_momentum` (up 15%+ in 20 sessions before results): the opposite of "sell the news": +1.6% over 60
+  sessions, both halves positive, but median negative, beat 43%, design-half t 1.0 -> candidate, NOT live.
+- **`peer_spillover` = the finding, but weak.** The day a sector's season tally first reaches 2+ reported with
+  2 in 3 strong (EPS +50%/turnaround), the sector's liquid stocks still to report within 14 days lagged similar
+  stocks over the next 10 sessions. Idea was tested as a long and came out reversed, so it is a WARNING rule
+  (kind risk, h 10, live). On the Oct-16 data files it looked strong (-1.4%, t -4.1); on data refreshed 2026-11-10
+  it is -0.6%, t -2.6, both halves negative, 62% did worse, median -1.7%, mid caps -1.5% / large caps +0.9%,
+  3 of 9 years positive -> "Weak warning". The shrink on refresh is a fragility sign: do not over-claim.
+  Live: `swing._spillover_signals`: scs.results (latest 200 only) just says WHICH sectors had a result today; the
+  season tally comes from every sector member's own history (`_history`); laggards = members, liquid, not
+  reported in 45 days, board meeting within 14 days; `done` key `spill:{SECTOR}:{date}` = once per 45 days;
+  no signal if the tally was already strong before today. Replay on 2026-10-29 showed sane tallies (16 cement
+  reported, 5 strong etc.).
+- Same re-test switched `pre_results_risk` OFF (Weak warning -> Not a warning) automatically.
+- Scratch evaluation without downloads: build df from data/history.csv.gz + state/meta.json, `backtest.forward`,
+  `edge.events`, report every horizon and both halves (script idea in the 2026-11-10 session; ~4 min).
+
 ## Swing research (Phase 1, built 2026-10-16) — PRIVATE, admin chat only
 - Workflow `.github/workflows/swing.yml` (Mon-Fri 17:40 PKT + catch-ups 19:40 and 08:10; manual: swing / swing --force /
   backtest --send). Data in Actions cache `psx-swing-v1-*` + **encrypted** backup branch `swing-data` (openssl, key = bot

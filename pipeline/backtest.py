@@ -21,7 +21,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from . import earnings, flows, prices, research
+from . import earnings, edge, flows, prices, research
 from .common import ROOT, log
 from .signals import SIGNALS, events, features
 
@@ -33,7 +33,7 @@ ACTIVE = {"Works", "Promising", "Reliable warning", "Weak warning"}
 HORIZONS = (4, 5, 10, 20, 40, 60)
 YEARS = [str(y) for y in range(2018, 2027)]
 DEFAULT_COST = {"Large": 0.005, "Mid": 0.006, "Small": 0.009, "Micro": 0.013, "n/a": 0.013}
-SPECS = {**SIGNALS, **earnings.EVENT_SIGNALS, **research.EXTRA_SIGNALS}
+SPECS = {**SIGNALS, **earnings.EVENT_SIGNALS, **research.EXTRA_SIGNALS, **edge.EDGE_SIGNALS}
 SPLIT = "2023-01-01"   # rules are designed on data before this date and must also work after it
 
 
@@ -150,7 +150,7 @@ def run(cfg: dict, refresh: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         log.warning("sector flows unavailable: %s", e)
         fl = None
     ev = pd.concat([events(df, min_adtv), earnings.event_rows(res, df, min_adtv),
-                    research.events(df, res, sectors, min_adtv, fl)])
+                    research.events(df, res, sectors, min_adtv, fl), edge.events(df, res, sectors, min_adtv)])
     try:  # sector P/E history since 2018 for the public valuation card and the website
         val = research.valuation(df, res)
         research.save_sector_history(val, sectors, min_adtv)

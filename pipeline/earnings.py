@@ -167,7 +167,7 @@ def classify(res: pd.DataFrame) -> pd.DataFrame:
 
 
 def event_rows(res: pd.DataFrame, df: pd.DataFrame, min_adtv: float, rules: dict | None = None,
-               react_min: dict | None = None) -> pd.DataFrame:
+               react_min: dict | None = None, offsets: dict | None = None) -> pd.DataFrame:
     """Map announcements to price rows and apply EVENT_SIGNALS (or the given rules: name -> mask on res).
     Returns rows like signals.events()."""
     res = res[res["date"] >= df["date"].min()].copy()
@@ -202,7 +202,8 @@ def event_rows(res: pd.DataFrame, df: pd.DataFrame, min_adtv: float, rules: dict
         if react_min and name in react_min:
             m = m & (res["react"] >= react_min[name])
         rows, syms = res.loc[m, "R"].values, res.loc[m, "sym"].values
-        if off := EVENT_SIGNALS.get(name, {}).get("offset"):  # signal earlier, same stock only
+        off = (offsets or {}).get(name) or EVENT_SIGNALS.get(name, {}).get("offset")
+        if off:  # signal earlier, same stock only
             rows = rows - off
             ok = rows >= 0
             rows, syms = rows[ok], syms[ok]

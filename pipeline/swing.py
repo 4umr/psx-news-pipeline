@@ -19,7 +19,7 @@ from datetime import timedelta
 
 import pandas as pd
 
-from . import backtest, earnings, prices
+from . import backtest, earnings, edge, prices
 from .common import ROOT, esc, log, now_pkt
 from .signals import SIGNALS, detect, features
 from .sources import scs
@@ -157,6 +157,94 @@ def _pre_results(df: pd.DataFrame, sess: pd.Timestamp, min_adtv: float, st: dict
         what = f"{lab} results" if lab else "Board meeting"
         out.append(_signal("pre_results_risk", r, f"{what} on {d:%a %d %b}; last result ({last['label']}): {_eps_text(last)}",
                            meeting=f"{d:%Y-%m-%d}"))
+    return out
+
+
+def _spillover_signals(df: pd.DataFrame, sess: pd.Timestamp, min_adtv: float, st: dict,
+                       sectors: dict[str, str]) -> list[dict]:
+    """The day a sector's results this season first reach 2+ reported with 2 in 3 strong: a warning for the
+    sector's liquid stocks that have not reported yet and whose board meeting is within 14 days
+    (backtest: they lagged similar stocks by about 1.4% over the next 2 weeks). Once per sector per season."""
+    today = df[df["date"] == sess].set_index("sym")
+    sessions = sorted(df["date"].unique())
+    window = sess - pd.Timedelta(days=edge.SEASON_DAYS)
+    sec_of = {s: (sec or "").strip().upper() for s, sec in sectors.items()}
+
+    def public(d, ah) -> pd.Timestamp | None:
+        d = pd.Timestamp(pd.Timestamp(d).strftime("%Y-%m-%d"))
+        return next((s for s in sessions if (s > d if ah else s >= d)), None)
+
+    # sectors with a result that became public today (scs.results lists only the latest ~200 announcements,
+    # so the season's full tally is built from each member's own history below)
+    today_secs = set()
+    for r in scs.results():
+        sym = (r.get("company_code") or "").strip()
+        if r.get("date") and sec_of.get(sym) and public(r["date"], earnings.after_hours(r.get("bm_time") or "")) == sess:
+            today_secs.add(sec_of[sym])
+    last_fire: dict[str, str] = {}
+    for k in st["done"]:
+        if k.startswith("spill:"):
+            _, sec, d = k.split(":", 2)
+            last_fire[sec] = max(last_fire.get(sec, ""), d)
+    cand = sorted(sec for sec in today_secs if not last_fire.get(sec) or pd.Timestamp(last_fire[sec]) < window)
+    if not cand:
+        return []
+    members = {sec: sorted(s for s, x in sec_of.items() if x == sec) for sec in cand}
+    hist = _history(sorted({s for lst in members.values() for s in lst}))
+    recent: dict[str, list[tuple]] = {}  # sector -> (sym, label, public-by-close date) this season
+    for sec, syms in members.items():
+        for sym in syms:
+            h = hist.get(sym)
+            if h is None or h.empty:
+                continue
+            for _, row in h.iterrows():
+                pub = public(row["date"], bool(row.get("after_hours")))
+                if pub is not None and window <= pub <= sess:
+                    recent.setdefault(sec, []).append((sym, row["label"], pub))
+    meetings: dict[str, tuple] = {}
+    for b in scs.board_meetings():
+        sym = (b.get("company_code") or "").strip()
+        if b.get("date") and sym:
+            d = pd.Timestamp(b["date"].strftime("%Y-%m-%d"))
+            if sess < d <= sess + pd.Timedelta(days=14):
+                meetings[sym] = (d, (b.get("bm_quarter_number") or "").strip())
+    out = []
+    for sec in cand:
+        tally, seen = [], set()
+        for sym, lab, pub in sorted(recent.get(sec, []), key=lambda t: t[2], reverse=True):
+            h = hist[sym]
+            row = h[h["label"] == lab]
+            if sym in seen or row.empty or row.iloc[-1]["cls"] == "n/a":
+                continue
+            seen.add(sym)  # one announcement per company this season (the latest usable one)
+            tally.append((sym, row.iloc[-1]["cls"], pub))
+
+        def strong(items):
+            return len(items) >= edge.MIN_PEERS and sum(c in earnings.GOOD for _, c, _ in items) / len(items) >= edge.PEER_SHARE
+
+        n_good_all = sum(c in earnings.GOOD for _, c, _ in tally)
+        log.info("peer spillover: %s has %d reported this season, %d strong", sec, len(tally), n_good_all)
+        if not strong(tally):
+            continue
+        st["done"][f"spill:{sec}:{sess:%Y-%m-%d}"] = time.time()
+        if strong([t for t in tally if t[2] < sess]):
+            log.info("peer spillover: %s was already strong before today, no signal", sec)
+            continue  # the tally was already strong before today: the signal day has passed
+        reported = {sym for sym, _, _ in recent.get(sec, [])}
+        good = [sym for sym, c, _ in tally if c in earnings.GOOD]
+        n_good = len(good)
+        for sym, sec2 in sec_of.items():
+            if sec2 != sec or sym in reported or sym not in today.index or sym not in meetings:
+                continue
+            if today.at[sym, "adtv20"] < min_adtv:
+                continue
+            r = today.loc[sym].copy()
+            r["sym"] = sym
+            d, lab = meetings[sym]
+            what = f"{lab} results" if lab else "Board meeting"
+            detail = (f"{sec.title()}: {len(tally)} peers reported this season, {n_good} strong ({', '.join(good[:4])}); "
+                      f"{what} on {d:%a %d %b}")
+            out.append(_signal("peer_spillover", r, detail, meeting=f"{d:%Y-%m-%d}"))
     return out
 
 
@@ -439,6 +527,9 @@ def scan(cfg: dict, dry: bool = False, force: bool = False) -> None:
               ("results rules", lambda: _results_signals(df, sess, since, min_adtv, st))]
     if "pre_results_risk" in use:
         groups.append(("pre-results rule", lambda: _pre_results(df, sess, min_adtv, st)))
+    if "peer_spillover" in use:
+        sectors = raw.attrs.get("sectors") or prices.universe()[1]
+        groups.append(("peer spillover rule", lambda: _spillover_signals(df, sess, min_adtv, st, sectors)))
     if "dear_worsening" in use and (sess.dayofweek == 4 or force):
         groups.append(("valuation rule", lambda: _valuation_signals(df, sess, min_adtv)))
     for label, part in groups:
