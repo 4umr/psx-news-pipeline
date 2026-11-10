@@ -52,11 +52,13 @@ def google_news_url(query: str) -> str:
             "&hl=en-PK&gl=PK&ceid=PK:en")
 
 
-def collect(cfg: dict) -> list[NewsItem]:
+def collect(cfg: dict, google: bool = True) -> list[NewsItem]:
+    """All RSS feeds, plus the Google News searches unless google=False (the fast loop's light passes
+    skip them: Google rate-limits searches repeated every minute; the full pass still runs them)."""
     jobs = []
     for f in cfg.get("feeds", []):
         jobs.append((f["name"], f["url"], bool(f.get("pk")), bool(f.get("official")), False))
-    for q in cfg.get("google_news", []):
+    for q in cfg.get("google_news", []) if google else []:
         jobs.append((f"GN:{q[:30]}", google_news_url(q), False, False, True))
     out: list[NewsItem] = []
     with ThreadPoolExecutor(max_workers=10) as ex:

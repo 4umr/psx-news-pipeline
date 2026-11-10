@@ -2,7 +2,8 @@
 
   python -m pipeline run                 one pass (what the scheduler calls)
   python -m pipeline run --dry-run       print messages instead of sending
-  python -m pipeline loop --every 120    run forever, every N seconds (PC / VPS)
+  python -m pipeline auto                what the scheduler calls: fast loop in market hours, else one pass
+  python -m pipeline loop --minutes 100  market-hours fast loop (light pass every minute, full every 5th)
   python -m pipeline brief morning       send a brief now (morning | close | week_ahead)
   python -m pipeline test                send a test message to Telegram
   python -m pipeline chats               list chats the bot can see (find channel id)
@@ -13,7 +14,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-import time
 
 from .common import load_config, log
 
@@ -33,9 +33,11 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
     r.add_argument("--dry-run", action="store_true")
-    lp = sub.add_parser("loop")
-    lp.add_argument("--every", type=int, default=120)
+    lp = sub.add_parser("loop", help="market-hours fast loop: light pass every minute, full pass every 5th")
+    lp.add_argument("--minutes", type=int, default=0, help="stop after this long (default: config chunk_minutes)")
     lp.add_argument("--dry-run", action="store_true")
+    au = sub.add_parser("auto", help="the scheduler's command: fast loop inside market hours, one pass outside")
+    au.add_argument("--dry-run", action="store_true")
     b = sub.add_parser("brief")
     b.add_argument("name", choices=["morning", "opening", "midday", "close", "results", "macro", "brokers", "week_ahead"])
     b.add_argument("--dry-run", action="store_true")
@@ -115,12 +117,14 @@ def main() -> None:
     elif args.cmd == "brief":
         run_once(cfg, args.dry_run, force_brief=args.name)
     elif args.cmd == "loop":
-        while True:
-            try:
-                run_once(cfg, args.dry_run)
-            except Exception:  # noqa: BLE001
-                log.exception("run failed")
-            time.sleep(args.every)
+        from .runner import run_loop
+        run_loop(cfg, args.dry_run, args.minutes or None)
+    elif args.cmd == "auto":
+        from .runner import fast_window, run_loop
+        if fast_window(cfg):
+            run_loop(cfg, args.dry_run)
+        else:
+            run_once(cfg, args.dry_run)
     elif args.cmd == "test":
         s = Sender()
         if s.dry:

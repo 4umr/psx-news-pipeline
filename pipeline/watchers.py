@@ -896,11 +896,26 @@ NOISE = re.compile(r"transmission of|unclaimed|e-?dividend|zakat|change of (regi
                    r"resolutions passed|proxy|video recording|dissemination of", re.I)
 
 
-def psx_filings(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
+def results_due(now, state: State) -> list[str]:
+    """Companies whose board meeting (results) is today or was yesterday: their PSX page is checked on every
+    pass, so the announcement is caught within a minute or two. The list is refreshed once an hour."""
+    snap = state.snap("bm_due") or {}
+    stamp = f"{now:%Y-%m-%d %H}"
+    if snap.get("at") == stamp:
+        return snap.get("syms", [])
+    days = {f"{now:%Y-%m-%d}", f"{now - timedelta(days=1):%Y-%m-%d}"}
+    syms = sorted({(r.get("company_code") or "").strip() for r in scs.board_meetings()
+                   if r.get("date") and f"{r['date']:%Y-%m-%d}" in days and r.get("company_code")})
+    state.set_snap("bm_due", {"at": stamp, "syms": syms})
+    return syms
+
+
+def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = False) -> list[Alert]:
     """New company filings on PSX (material information, results, corporate actions).
 
-    Checks your watchlist every run and rotates through the KSE-100 (heaviest stocks first),
-    so each constituent is checked every few runs without hammering PSX.
+    Every pass checks your watchlist, the 10 heaviest index stocks and the companies with results due
+    (board meeting today / yesterday); the rest rotates through the KSE-100 and then every liquid stock,
+    so each company is checked regularly without hammering PSX. Light passes use a smaller rotation.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -919,11 +934,16 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
         ranked += [c for c, v in sorted(vals.items(), key=lambda x: -x[1]) if v >= min_val and c not in ranked]
     except Exception as e:  # noqa: BLE001  KSE-100 rotation still works without it
         log.warning("liquid stock list for filings failed: %s", e)
-    per_run = cfg.get("psx_filings_per_run", 30)
+    try:
+        due = results_due(now, state)
+    except Exception as e:  # noqa: BLE001
+        log.warning("board meeting list failed: %s", e)
+        due = (state.snap("bm_due") or {}).get("syms", [])
+    per_run = cfg.get("psx_filings_per_pass_light", 8) if light else cfg.get("psx_filings_per_run", 30)
     cur = state.data.get("psx_cursor", 0) % len(ranked)
     batch = (ranked + ranked)[cur:cur + per_run]
     state.data["psx_cursor"] = cur + per_run
-    symbols = list(dict.fromkeys(wl + ranked[:10] + batch))  # top-10 weights checked every run
+    symbols = list(dict.fromkeys(wl + due + ranked[:10] + batch))  # watchlist, results due, top-10 every pass
     kse_set = {r["company_code"] for r in view}
     with ThreadPoolExecutor(max_workers=8) as ex:
         pages = [p for p in ex.map(psx.company, symbols) if p]

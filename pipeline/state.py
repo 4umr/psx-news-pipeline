@@ -73,6 +73,7 @@ class State:
         d["headlines"] = [h for h in d["headlines"] if now - h["ts"] < 36 * 3600][-400:]
         closes = d["kse_closes"]
         d["kse_closes"] = dict(sorted(closes.items())[-30:])
+        d["_saved"] = int(now)  # the workflow keeps whichever copy (cache or backup branch) is newer
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():  # keep the previous good copy
             try:

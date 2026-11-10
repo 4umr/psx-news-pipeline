@@ -399,14 +399,16 @@ def _daily_report(cfg: dict, state: State, sender: Sender, now: datetime) -> Non
     sender.send_admin("\n".join(lines))
 
 
-def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -> None:
+def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None, light: bool = False) -> None:
+    """One pass. light=True (fast loop): only the quick sources (RSS news, PSX data, results, filings of the
+    companies that matter today); SBP, PBS, global markets and Google News are left to the next full pass."""
     t0 = time.time()
     state = State()
     sender = Sender(dry_run)
     now = now_pkt()
     errors: list[str] = []
     try:
-        _run(cfg, state, sender, now, errors, force_brief, t0)
+        _run(cfg, state, sender, now, errors, force_brief, t0, light)
     except Exception as e:  # noqa: BLE001 — last line of defence: never lose progress
         log.exception("run crashed")
         errors.append(f"run: {type(e).__name__}: {str(e)[:120]}")
@@ -418,8 +420,48 @@ def run_once(cfg: dict, dry_run: bool = False, force_brief: str | None = None) -
             if sender.failed:
                 state.data["outbox"] = (state.data.get("outbox", []) + sender.failed)[-20:]
             state.save()
-        log.info("run finished in %.1fs, messages=%d, component errors=%d",
-                 time.time() - t0, sender.sent, len(errors))
+        log.info("%s finished in %.1fs, messages=%d, component errors=%d",
+                 "light pass" if light else "run", time.time() - t0, sender.sent, len(errors))
+
+
+def fast_window(cfg: dict, now: datetime | None = None) -> bool:
+    """True while the market-hours fast loop should be running (config `fast_loop`)."""
+    fl = cfg.get("fast_loop") or {}
+    now = now or now_pkt()
+    if not fl.get("enabled", True) or now.weekday() not in fl.get("days", [0, 1, 2, 3, 4]):
+        return False
+    return in_window(now, fl.get("start", "08:30"), fl.get("end", "18:45"))
+
+
+def run_loop(cfg: dict, dry_run: bool = False, minutes: int | None = None) -> bool:
+    """Market-hours fast loop: a light pass every `every_seconds`, a full pass every `full_every` passes.
+
+    Stops after `minutes` (the job hands over to the next one) or when the fast window ends.
+    Returns True when it stopped while the window was still open (the caller starts the next job)."""
+    import os
+    fl = cfg.get("fast_loop") or {}
+    every = int(fl.get("every_seconds", 60))
+    full_every = max(1, int(fl.get("full_every", 5)))
+    minutes = minutes or int(fl.get("chunk_minutes", 100))
+    stop_at = time.time() + minutes * 60
+    n = 0
+    log.info("fast loop: every %ds, full pass every %d passes, for up to %d minutes", every, full_every, minutes)
+    try:
+        while fast_window(cfg) and time.time() < stop_at:
+            t0 = time.time()
+            run_once(cfg, dry_run, light=n % full_every != 0)
+            n += 1
+            if time.time() >= stop_at:
+                break
+            time.sleep(max(5.0, every - (time.time() - t0)))
+    except KeyboardInterrupt:
+        log.info("fast loop interrupted")
+    more = fast_window(cfg)
+    log.info("fast loop done: %d passes, window still open: %s", n, more)
+    if more and os.environ.get("GITHUB_OUTPUT"):  # tells the workflow to start the next job right away
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write("continue=true\n")
+    return more
 
 
 def _contradicts_official(it: NewsItem, state: State, now: datetime) -> bool:
@@ -449,8 +491,13 @@ def _refresh_broker_notes(state: State, now: datetime) -> None:
         state.set_snap("broker_notes", notes[:10])
 
 
-def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, force_brief, t0: float) -> None:
+def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, force_brief, t0: float,
+         light: bool = False) -> None:
     analysis.init(state, cfg)
+    if light and (state.is_new or force_brief or briefs.due(cfg, state, now)):
+        light = False  # a brief needs the full data set (global markets, SBP)
+    mpc_today = f"{now:%Y-%m-%d}" in (state.snap("mpc") or {}).get("dates", [])
+    want_sbp = not light or mpc_today  # on MPC day every pass watches SBP for the decision
     if not state.flag(f"ai_check:{now:%Y-%m-%d}"):
         state.set_flag(f"ai_check:{now:%Y-%m-%d}")
         status = analysis.health(cfg)
@@ -464,41 +511,48 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         return _safe(state, errors, name, fn, *a, default=default)
 
     with ThreadPoolExecutor(max_workers=5) as ex:
-        f_news = ex.submit(S, "news feeds", news.collect, cfg, default=[])
-        f_sbp = ex.submit(S, "SBP", sbp.fetch, default=({}, []))
+        f_news = ex.submit(S, "news feeds", news.collect, cfg, not light, default=[])
+        f_sbp = ex.submit(S, "SBP", sbp.fetch, default=({}, [])) if want_sbp else None
         f_res = ex.submit(S, "SCS results", scs.results, default=[])
-        f_mk = ex.submit(S, "global markets", markets.snapshot, list(cfg["global_markets"]), default={})
+        f_mk = ex.submit(S, "global markets", markets.snapshot, list(cfg["global_markets"]), default={}) if not light else None
         f_view = ex.submit(S, "KSE-100 view", scs.kse100_view, default=[])
-        sbp_snap, sbp_items = f_sbp.result()
-        mk = f_mk.result()
+        sbp_snap, sbp_items = f_sbp.result() if f_sbp else ({}, [])
+        mk = f_mk.result() if f_mk else (state.snap("mk_last") or {})
         view_now = f_view.result()
         kse_symbols = {r.get("company_code") for r in view_now}
         news_items = f_news.result()
+    if not light and mk:
+        state.set_snap("mk_last", mk)  # light passes reuse the last global snapshot (card tiles, context)
 
-    _health(cfg, state, sender, {
-        "SBP website": bool(sbp_snap.get("policy_rate")),
-        "PSX data (SCS Trade)": bool(kse_symbols),
-        "News feeds": len(news_items) >= 100,
-        "Global markets": len(mk) >= 5,
-        "Telegram channel delivery": not state.data.get("channel_fail", False),
-    })
+    if not light:
+        _health(cfg, state, sender, {
+            "SBP website": bool(sbp_snap.get("policy_rate")),
+            "PSX data (SCS Trade)": bool(kse_symbols),
+            "News feeds": len(news_items) >= 100,
+            "Global markets": len(mk) >= 5,
+            "Telegram channel delivery": not state.data.get("channel_fail", False),
+        })
 
     S("street capture", street.capture, sbp_items + news_items, state)
     S("EPS expectations", expectations.capture, news_items, state)
 
     alerts: list[Alert] = []
-    alerts += S("PBS releases", watchers.pbs_releases, state, default=[])  # before news: marks PBS posts handled
-    alerts += S("MPC calendar", watchers.mpc_watch, now, state, default=[])
-    S("MPC hold check", watchers.mpc_hold_check, now, state)
-    alerts += S("PSX filings", watchers.psx_filings, now, state, cfg, view_now, default=[])
+    if not light:
+        alerts += S("PBS releases", watchers.pbs_releases, state, default=[])  # before news: marks PBS posts handled
+        alerts += S("MPC calendar", watchers.mpc_watch, now, state, default=[])
+        S("MPC hold check", watchers.mpc_hold_check, now, state)
+    alerts += S("PSX filings", watchers.psx_filings, now, state, cfg, view_now, light, default=[])
     alerts += S("unusual volume", watchers.unusual_volume, now, state, cfg, kse_symbols, default=[])
-    alerts += S("SBP changes", watchers.sbp_changes, sbp_snap, state, default=[])
+    if want_sbp:
+        alerts += S("SBP changes", watchers.sbp_changes, sbp_snap, state, default=[])
     alerts += S("corporate results", watchers.corporate_results, f_res.result(), state, kse_symbols, cfg, default=[])
-    alerts += S("FIPI", watchers.fipi_alert, now, state, default=[])
+    if not light:
+        alerts += S("FIPI", watchers.fipi_alert, now, state, default=[])
     kse_alerts, view = S("KSE moves", watchers.kse_moves, now, state, cfg, default=([], []))
     alerts += kse_alerts
     view = view or view_now
-    alerts += S("global moves", watchers.global_moves, mk, state, cfg, default=[])
+    if not light:
+        alerts += S("global moves", watchers.global_moves, mk, state, cfg, default=[])
     S("record close", watchers.record_close, now, state)
 
     # official items first so their links win over re-reports

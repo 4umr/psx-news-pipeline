@@ -1,15 +1,20 @@
 name: PSX News Pipeline
 
+# Market hours (Mon-Fri 08:30-18:45 PKT): one job stays open and checks every minute (the "fast loop"),
+# handing over to the next job every 100 minutes. Outside market hours: one pass per scheduled run.
+# GitHub's free schedule is slow (it starts runs only every 35-80 minutes), so the loop is what makes
+# news, results and filings arrive within a minute or two.
 on:
   schedule:
-    - cron: "*/5 * * * *"   # every 5 minutes, 24/7 (GitHub may delay runs; cron-job.org can trigger faster)
-  workflow_dispatch:         # "Run workflow" button and external 2-minute trigger
+    - cron: "*/5 * * * *"   # every 5 minutes nominally; GitHub delays it (fast loop fills the gaps)
+  workflow_dispatch:         # "Run workflow" button
     inputs:
       command:
         description: "What to do"
         type: choice
-        default: run
+        default: auto
         options:
+          - auto
           - run
           - test --admin-only
           - test
@@ -30,12 +35,13 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write   # needed only to keep the backup copy of the state in the 'state' branch
+  contents: write   # keeps the backup copy of the state in the 'state' branch
+  actions: write    # lets a finishing loop job start the next one right away
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 125   # a fast-loop chunk is 100 minutes; single passes take about a minute
     steps:
       - uses: actions/checkout@v4
 
@@ -56,25 +62,51 @@ jobs:
           key: psx-state-v2-${{ github.run_id }}
           restore-keys: psx-state-v2-
 
-      # 2) Fallback memory: the 'state' branch backup (if the cache was evicted or GitHub lost it)
-      - name: Restore state from backup branch
-        if: steps.cache.outputs.cache-matched-key == ''
+      # 2) Backup memory: the 'state' branch. The newer of the two copies wins (a loop job that was
+      #    killed by GitHub has backed up to the branch every 10 minutes, while its cache is older).
+      - name: Use the newer copy (cache or backup branch)
         run: |
           mkdir -p state
           if git fetch --depth=1 origin state 2>/dev/null; then
-            git show FETCH_HEAD:state.json > state/state.json && echo "Restored state from backup branch"
-          else
-            echo "No backup yet (first run)"
+            git show FETCH_HEAD:state.json > state/state.branch.json || true
           fi
+          python - <<'EOF'
+          import json, os
+          def saved(p):
+              try:
+                  return json.load(open(p, encoding="utf-8")).get("_saved", 0)
+              except Exception:
+                  return -1
+          c, b = "state/state.json", "state/state.branch.json"
+          sc, sb = saved(c), saved(b)
+          if sb > sc:
+              os.replace(b, c); print("Using the backup branch copy (newer)")
+          elif sc >= 0:
+              print("Using the cache copy")
+          else:
+              print("No saved state yet (first run)")
+          if os.path.exists(b):
+              os.remove(b)
+          EOF
 
+      # The pipeline runs in the background so that, while the fast loop is open, the state can be
+      # copied to the backup branch every 10 minutes.
       - name: Run pipeline
+        id: run
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TZ: Asia/Karachi
-        run: python -m pipeline ${{ inputs.command || 'run' }}
+        run: |
+          python -m pipeline ${{ inputs.command || 'auto' }} &
+          pid=$!
+          while kill -0 $pid 2>/dev/null; do
+            for i in $(seq 60); do sleep 10; kill -0 $pid 2>/dev/null || break 2; done
+            bash .github/backup_state.sh "${{ github.repository }}" "${{ github.token }}"
+          done
+          wait $pid
 
       - name: Save state
         if: always() && hashFiles('state/state.json') != ''
@@ -84,22 +116,28 @@ jobs:
           key: psx-state-v2-${{ github.run_id }}
 
       # Back up the state to the 'state' branch after every run (one commit, force-pushed: no history growth).
-      # GitHub's schedule is irregular, so a clock-based "every 15 minutes" rule often skipped backups for hours.
       # This also counts as repository activity, so GitHub never pauses the schedule.
       - name: Back up state
         if: always() && hashFiles('state/state.json') != ''
+        run: bash .github/backup_state.sh "${{ github.repository }}" "${{ github.token }}"
+
+      # A loop job that stopped while the market window is still open asks for the next job at once,
+      # unless a scheduled run is already waiting its turn (the concurrency group keeps one in line).
+      - name: Hand over to the next loop job
+        if: steps.run.outputs.continue == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if true; then
-            tmp=$(mktemp -d)
-            cp state/state.json "$tmp/state.json"
-            cd "$tmp"
-            git init -q -b state
-            git config user.name "pipeline-bot"
-            git config user.email "pipeline-bot@users.noreply.github.com"
-            git add state.json
-            git commit -qm "state backup $(date -u +%FT%TZ)"
-            git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" state \
-              && echo "State backed up" || echo "Backup push failed (will retry next time)"
+          waiting=0
+          for s in queued pending waiting; do
+            n=$(gh run list --workflow=pipeline.yml --status=$s --json databaseId --jq length 2>/dev/null || echo 0)
+            waiting=$((waiting + ${n:-0}))
+          done
+          if [ "$waiting" = "0" ]; then
+            gh workflow run pipeline.yml -f command=auto && echo "Next loop job requested" \
+              || echo "Could not request the next job (the schedule will start it)"
+          else
+            echo "A run is already waiting; it will continue the loop"
           fi
 
       # If the whole run failed (e.g. GitHub/PyPI outage), tell the owner privately — at most every 3 hours.

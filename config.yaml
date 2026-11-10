@@ -90,9 +90,24 @@ market_hours: {start: "09:15", end: "16:45"} # window for intraday checks (PKT)
 big_stock_move_pct: 7.5
 # Unusual volume: alert when a KSE-100/watchlist stock trades this multiple of its 10-day average
 unusual_volume_x: 3.0
-# PSX company filings: company pages checked per run (top-10 by index weight + watchlist every run;
-# the rest rotates through the KSE-100 and then every liquid mid and small cap)
+# PSX company filings: company pages checked per pass (watchlist, companies with results due and the
+# top-10 by index weight every pass; the rest rotates through the KSE-100 and then every liquid mid and
+# small cap). The fast loop's light passes use the smaller number (about 8 pages a minute).
 psx_filings_per_run: 25
+psx_filings_per_pass_light: 8
+
+# Fast loop (market hours, Mon-Fri): one GitHub job stays open and checks every minute instead of waiting
+# for GitHub's schedule (which starts runs only every 35-80 minutes). A light pass = RSS news, PSX data,
+# results, filings; every 5th pass is a full pass (SBP, PBS, global markets, Google News). Each job hands
+# over to the next after chunk_minutes. Outside the window the normal single runs continue.
+fast_loop:
+  enabled: true
+  days: [0, 1, 2, 3, 4]
+  start: "08:30"
+  end: "18:45"
+  every_seconds: 60
+  full_every: 5
+  chunk_minutes: 100
 
 # ---------------------------------------------------------------------
 # Swing scanner (private research, admin chat only). Runs after the close
@@ -161,7 +176,7 @@ feeds:
   - {name: "Business Recorder", url: "https://www.brecorder.com/feeds/pakistan", pk: true}
   - {name: "Business Recorder", url: "https://www.brecorder.com/feeds/business-finance", pk: false}
   - {name: "Geo News", url: "https://www.geo.tv/rss/1/2", pk: true}
-  - {name: "ARY News", url: "https://arynews.tv/category/business/feed/", pk: true}
+  - {name: "ARY News", url: "https://arynews.tv/feed", pk: true}   # the business-only feed was removed (404)
   - {name: "Dawn", url: "https://www.dawn.com/feeds/home", pk: true}
   - {name: "Express Tribune", url: "https://tribune.com.pk/feed/pakistan", pk: true}
   - {name: "The Nation", url: "https://www.nation.com.pk/rss/business", pk: true}

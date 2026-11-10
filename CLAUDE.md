@@ -74,6 +74,20 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 - `config.yaml` everything tunable: brand (name/author/title/channel_link/cards/alert_cards/whatsapp_copy), briefs times,
   thresholds, feeds, Google queries, topics + topic_meta (sectors), watchlist (empty), commodities/regional, `swing:`.
 
+## Fast loop (built 2026-11-10) — the fix for information delay
+- Measured 2026-11-06: GitHub started the scheduled pipeline only every 55 min on average (35-82), not every 5.
+- `python -m pipeline auto` (the workflow's default): inside `config.fast_loop` (Mon-Fri 08:30-18:45 PKT) it runs
+  `runner.run_loop`: a light pass every 60 s (RSS feeds only, scstrade results/KSE-100 view/daily activity, PSX
+  filings with an 8-page rotation + watchlist + top-10 + `watchers.results_due` = board meetings today/yesterday
+  checked EVERY pass), and every 5th pass a full pass (SBP, PBS, global markets, Google News, FIPI, MPC). A due
+  brief or MPC day forces full data. Each job stops after 100 min (`chunk_minutes`) or at the window end and
+  writes `continue=true` to GITHUB_OUTPUT; the workflow then dispatches the next job (`actions: write`) unless a
+  scheduled run is already queued in the concurrency group. Outside the window: one pass per scheduled run.
+- Workflow: `timeout-minutes: 125`; python runs in the background and `.github/backup_state.sh` pushes the state
+  to the `state` branch every 10 min; restore keeps the NEWER of cache vs branch (`_saved` stamp in state.json).
+- Known risk: a 10-hour job on weekdays is a grey area of GitHub's Actions terms (free for public repos); if GitHub
+  ever objects, set `fast_loop.enabled: false` and the old behaviour returns. Local test: `loop --minutes 3 --dry-run`.
+
 ## Swing research (Phase 1, built 2026-10-16) — PRIVATE, admin chat only
 - Workflow `.github/workflows/swing.yml` (Mon-Fri 17:40 PKT + catch-ups 19:40 and 08:10; manual: swing / swing --force /
   backtest --send). Data in Actions cache `psx-swing-v1-*` + **encrypted** backup branch `swing-data` (openssl, key = bot
