@@ -32,6 +32,7 @@ _model: str | None = None
 _disabled = False
 _state = None
 _limit = 200
+last_status = ""   # outcome of the latest analyse(): ok / unavailable / error / check_failed
 
 _ADVICE = re.compile(r"\b(buy|sell|accumulate|book (profits?|gains)|target price|go long|go short|"
                      r"should (buy|sell|invest)|recommend\w*)\b", re.I)
@@ -42,7 +43,15 @@ from the article and the context. Never invent numbers, dates or quotes. If unsu
 
 Return JSON with exactly these keys:
 "relevant": true if it can affect Pakistani markets, the economy, rates, the rupee or listed companies.
-"kind": "news" (new event or official data), "opinion" (editorial/column/comment), "analysis" (explainer/background) or "promo" (advertising/sponsored).
+"kind": "news" (new event or official data), "opinion" (editorial/column/comment), "analysis" (explainer, background, how-to, comparison such as "gold vs stocks") or "promo" (advertising/sponsored).
+"confirmed": true only if the main event has actually happened or been officially announced or notified. false for forecasts, expectations, proposals, demands, claims by politicians or parties, "sources say" reports, and anything described with may, could, likely, set to or expected.
+"materiality": how much a PSX investor needs this on their phone right now, 1 to 5:
+  5 = moves the whole market, interest rates or the rupee today (policy rate decision, IMF approval or tranche, major new tax, KSE-100 move of 2% or more, war or major security escalation, sovereign rating change);
+  4 = clearly moves a sector or a major listed company (fuel or gas or power price change actually notified, a big company result, deal or regulatory decision, official sector data, T-bill or PIB auction result);
+  3 = useful background for investors but not urgent;
+  2 = minor, local or ceremonial (meetings, visits, MoUs without amounts, statements of intent, speeches, protests, local shortages, political claims of credit);
+  1 = not market news.
+"same_event": if this article reports the same event as one of the ALREADY POSTED items (the same decision, figure or announcement, even in different words or from another outlet), copy that item's text exactly; otherwise null. A genuinely new development on the same subject is not the same event.
 "event_date": date the main event happened or was announced, YYYY-MM-DD from the article, or null.
 "conflicts_official": true if the article's main claim contradicts official data in the MARKET CONTEXT (for example it reports a policy rate, CPI or reserves figure different from the official one there), otherwise false. Official data always wins over headlines.
 "summary": two short, simple sentences on what happened, with the key numbers from the article.
@@ -60,6 +69,9 @@ Never give advice to buy or sell.
 
 MARKET CONTEXT:
 {context}
+
+ALREADY POSTED on the channel in the last 24 hours:
+{posted}
 
 HEADLINE: {title}
 SOURCE: {source}
@@ -241,8 +253,11 @@ def _checked(s, sources: str) -> str:
 
 # ---------------------------------------------------------------- news analysis
 def analyse(title: str, url: str, source: str, cfg: dict, summary: str = "", context: str = "",
-            tickers: list[str] | None = None) -> dict | None:
-    """Gemini's reading of the article in today's market context, checked against the sources; or None."""
+            tickers: list[str] | None = None, posted: list[str] | None = None) -> dict | None:
+    """Gemini's reading of the article in today's market context, checked against the sources; or None.
+    `posted` = recent main-channel posts, so the AI can tell a re-report of the same event."""
+    global last_status
+    last_status = "unavailable"
     if not available(cfg):
         return None
     text = article_text(url) if url else ""
@@ -250,14 +265,17 @@ def analyse(title: str, url: str, source: str, cfg: dict, summary: str = "", con
         text = (text + "\n" + (summary or "")).strip() or "(article text not available; use the headline only)"
     tick = tickers or []
     d = _call(cfg, ANALYSE.format(sectors=", ".join(SECTORS), tickers=", ".join(tick) or "(none listed)",
-                                  context=context or "(not available)", title=title, source=source, text=text))
+                                  context=context or "(not available)", title=title, source=source, text=text,
+                                  posted="\n".join(posted or []) or "(nothing yet)"))
     if not d:
+        last_status = "error" if available(cfg) else "unavailable"
         return None
     article = f"{title}\n{text}"
     both = f"{article}\n{context}"
     out_summary = _checked(d.get("summary"), article)
     if not out_summary:
-        log.warning("AI summary failed the number check, using rule-based text: %s", title[:70])
+        log.warning("AI summary failed the number check: %s", title[:70])
+        last_status = "check_failed"
         return None
     level = d.get("impact_level") if d.get("impact_level") in ("High", "Medium", "Low") else "Medium"
     tone = d.get("tone") if d.get("tone") in ("Positive", "Negative", "Mixed", "Neutral") else "Neutral"
@@ -271,6 +289,15 @@ def analyse(title: str, url: str, source: str, cfg: dict, summary: str = "", con
             stale = False
     kind = d.get("kind") if d.get("kind") in ("news", "opinion", "analysis", "promo") else "news"
     stocks = [t for t in (d.get("stocks_in_view") or []) if t in tick][:4]
+    try:
+        materiality = max(1, min(5, int(d.get("materiality", 3))))
+    except (TypeError, ValueError):
+        materiality = 3
+    same = d.get("same_event")
+    same = str(same).strip() if same and str(same).strip().lower() not in ("null", "none", "false", "") else ""
+    if same and posted and not any(same[:40].lower() in p.lower() or p.lower()[6:46] in same.lower() for p in posted):
+        same = ""  # must point at a real earlier post
+    last_status = "ok"
     if d.get("conflicts_official") is True:
         log.warning("AI: article contradicts official data, kept off main channel: %s", title[:80])
         stale = True
@@ -279,7 +306,8 @@ def analyse(title: str, url: str, source: str, cfg: dict, summary: str = "", con
             "watch": _checked(d.get("watch"), both),
             "facts": [f for f in (_checked(x, article) for x in (d.get("key_facts") or [])[:3]) if f],
             "level": level, "tone": tone, "pos": pos, "neg": neg, "stocks": stocks, "sectors": [],
-            "read_article": len(text) >= 300, "ai": True}
+            "read_article": len(text) >= 300, "ai": True, "materiality": materiality,
+            "confirmed": d.get("confirmed") is not False, "same_event": same}
 
 
 # ---------------------------------------------------------------- brief commentary

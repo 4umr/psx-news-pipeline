@@ -1,0 +1,32 @@
+name: Editor replay test
+
+# Replays the important headlines of the last hours (from the saved state) through the main-channel
+# editor and the AI, and prints what would have been posted. Sends nothing, saves nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "How many hours back"
+        default: "36"
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Latest saved state (backup branch)
+        run: |
+          mkdir -p state
+          git fetch --depth=1 origin state && git show FETCH_HEAD:state.json > state/state.json
+      - name: Replay
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TZ: Asia/Karachi
+        run: python -m pipeline review --hours "${{ inputs.hours }}"

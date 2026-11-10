@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import analysis, briefs, context, expectations, impact, intraday, official, street, watchers
+from . import analysis, briefs, context, editor, expectations, impact, intraday, official, street, watchers
 from .common import Alert, NewsItem, esc, hours_ago, in_window, link, log, now_pkt, to_pkt
 from .links import short
 from .scoring import Scorer, is_duplicate, is_stale, title_tokens
@@ -393,6 +393,8 @@ def _daily_report(cfg: dict, state: State, sender: Sender, now: datetime) -> Non
              f"Street forecasts tracked: {len(state.data.get('street', {}).get('forecasts', []))}",
              f"AI analysis: {state.snap('ai_status') or 'not checked'} · requests today "
              f"{(state.data.get('ai_usage') or {}).get(str(now.date()), 0)}"]
+    if ed := editor.day_summary(state, now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()):
+        lines.append(ed)
     if day.get("runs", 0) < 30:
         lines.append("ℹ️ Fewer runs than expected — GitHub's free scheduler may be slow today; "
                      "the 2-minute cron-job.org trigger fixes this.")
@@ -663,31 +665,36 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
                             _market_tiles(state, view_now))
         else:
             sender.send(msg, preview=a.preview)
+        editor.record_alert(state, a.key, (a.extra.get("card") or {}).get("title") or a.text.split("\n", 1)[0])
         S("whatsapp copy", wa, msg, a.priority >= 9)
     ai_budget = (cfg.get("ai") or {}).get("max_per_run", 6)
     ctx_text, tickers = "", context.tickers(view_now)
     if instant and analysis.available(cfg):
         S("broker notes", _refresh_broker_notes, state, now)
         ctx_text = S("market context", context.build, state, view_now, mk, default="") or ""
+    def hold(it: NewsItem, reason: str, ai: dict | None = None) -> None:
+        """Not for the main channel: the owner still sees it in the admin chat, with the reason."""
+        editor.log_decision(state, it, "admin", reason, ai)
+        sender.send_admin(editor.admin_note(reason) + _fmt_compact(
+            {"t": it.title, "u": it.url, "s": it.source, "sc": it.score, "l": it.label, "topic": it.topic,
+             "ts": int(time.time())}, cfg))
+
     for it in instant:
         imp = impact.assess(it.title, it.topic, it.score, cfg, it.summary)
         if _contradicts_official(it, state, now):
-            log.warning("unconfirmed policy-rate claim kept off main channel: %s", it.title[:80])
-            sender.send_admin("<b>Unconfirmed (no SBP meeting today):</b>\n" + _fmt_compact(
-                {"t": it.title, "u": it.url, "s": it.source, "sc": it.score, "l": it.label, "topic": it.topic,
-                 "ts": int(time.time())}, cfg))
+            hold(it, "policy-rate claim with no SBP meeting today or yesterday")
             continue
-        ai = None
+        if reason := editor.before_ai(it, state, cfg, view_now):
+            hold(it, reason)
+            continue
+        ai, status = None, "unavailable"
         if ai_budget > 0:
             ai_budget -= 1
             ai = S("article analysis", analysis.analyse, it.title, it.url, it.source, cfg, it.summary,
-                   ctx_text, tickers)
-        if ai and (not ai["relevant"] or ai["kind"] != "news" or ai["stale"]):
-            # Gemini read the article: not market news (opinion, promo, old event) -> raw feed only
-            log.info("kept off main channel (%s): %s", "stale" if ai["stale"] else ai["kind"] if ai["relevant"]
-                     else "not relevant", it.title[:80])
-            sender.send_admin(_fmt_compact({"t": it.title, "u": it.url, "s": it.source, "sc": it.score, "l": it.label,
-                                            "topic": it.topic, "ts": int(time.time())}, cfg))
+                   ctx_text, tickers, editor.posted_list(state))
+            status = analysis.last_status
+        if reason := editor.after_ai(it, ai, status, state, cfg):
+            hold(it, reason, ai)
             continue
         if ai:
             imp = {**ai, "sectors": imp["sectors"] if not (ai["pos"] or ai["neg"]) else []}
@@ -721,6 +728,8 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
             lines.append("Watch: " + esc(ai["watch"]))
         cap = _caption(cfg, f"<b>{esc(it.title)}</b>\n\n" + "\n".join(lines), [link(it.url, it.source)])
         _post_with_card(sender, cfg, msg, spec, when, "news", _market_tiles(state, view_now), cap)
+        editor.record_post(state, it.title, it.topic)
+        editor.log_decision(state, it, "posted", "", ai)
         S("whatsapp copy", wa, msg, it.score >= 10)
     if analysis._disabled and not state.flag(f"gemini_bad:{now:%Y-%m-%d}"):
         state.set_flag(f"gemini_bad:{now:%Y-%m-%d}")
