@@ -70,9 +70,19 @@ def kse100_view() -> list[dict]:
     return _post("MarketStatistics/MS_IndexView.aspx/chartact")
 
 
-def daily_activity() -> list[dict]:
-    """Every listed stock: open/high/low/close, volume, change (market breadth & volume leaders)."""
-    return _post("MarketStatistics/MS_DailyActivity.aspx/chartact", {"rows": 3000})
+_ACT: dict = {"at": 0.0, "rows": []}
+
+
+def daily_activity(max_age: float = 30.0) -> list[dict]:
+    """Every listed stock: open/high/low/close, volume, change (market breadth & volume leaders).
+    Several watchers need it in the same pass, so one download is shared for `max_age` seconds."""
+    import time
+    if _ACT["rows"] and time.time() - _ACT["at"] < max_age:
+        return _ACT["rows"]
+    rows = _post("MarketStatistics/MS_DailyActivity.aspx/chartact", {"rows": 3000})
+    if rows:
+        _ACT.update(at=time.time(), rows=rows)
+    return rows
 
 
 def price_history(symbol: str, start: datetime, end: datetime) -> list[dict]:

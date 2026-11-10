@@ -88,6 +88,16 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 - Known risk: a 10-hour job on weekdays is a grey area of GitHub's Actions terms (free for public repos); if GitHub
   ever objects, set `fast_loop.enabled: false` and the old behaviour returns. Local test: `loop --minutes 3 --dry-run`.
 
+## Intraday snapshots (built 2026-11-10, first data 2026-11-11) — the dataset nobody else has
+- `intraday.py`: every pass in market hours (Mon-Fri 09:15-16:45) appends changed rows of scstrade daily
+  activity (time, sym, last price, cumulative volume, high, low) + the KSE-100 level to
+  `state/intraday/YYYY-MM-DD.csv`; `housekeeping` gzips finished days (yesterday, or today after 17:00) and
+  keeps 10 days. `scs.daily_activity()` is memoised 30 s so a pass downloads it once.
+- Workflow: the pipeline cache now holds `state/state.json` + `state/intraday`; the "Archive intraday data"
+  step uploads each finished day once to the GitHub release **`intraday`** (assets named YYYY-MM-DD.csv.gz,
+  public URL https://github.com/4umr/psx-news-pipeline/releases/download/intraday/<file>). Nothing reads
+  it yet: after ~3 months, test early unusual volume / opening gaps with the usual backtest discipline.
+
 ## Research round 3 (2026-11-10): `edge.py` — results season and dividend calendar, tested 2018-2026
 - `peer_results` (sector peers strong -> laggard 5 sessions before its own results): NO edge (design half -1.4%).
   `peer_results_risk`: nothing. `div_runup` (sell before ex-date) +0.2%, `div_capture` (collect the dividend at

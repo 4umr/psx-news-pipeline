@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import analysis, briefs, context, expectations, impact, street, watchers
+from . import analysis, briefs, context, expectations, impact, intraday, street, watchers
 from .common import Alert, NewsItem, esc, hours_ago, in_window, link, log, now_pkt, to_pkt
 from .links import short
 from .scoring import Scorer, is_duplicate, is_stale, title_tokens
@@ -523,6 +523,9 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         news_items = f_news.result()
     if not light and mk:
         state.set_snap("mk_last", mk)  # light passes reuse the last global snapshot (card tiles, context)
+    if intraday.session_open(now) and not bootstrap:
+        S("intraday record", lambda: intraday.record(now, scs.daily_activity(), view_now))
+    S("intraday housekeeping", intraday.housekeeping, now)
 
     if not light:
         _health(cfg, state, sender, {

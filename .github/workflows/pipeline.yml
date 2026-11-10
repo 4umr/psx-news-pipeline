@@ -53,12 +53,16 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt || (sleep 20 && pip install -r requirements.txt)
 
-      # 1) Primary memory: GitHub cache (what was already sent, last indicator values)
+      # 1) Primary memory: GitHub cache (what was already sent, last indicator values) plus the last
+      #    10 days of intraday snapshots. (Changing this path list starts a new cache version; the
+      #    state then comes from the backup branch below, so nothing is lost.)
       - name: Restore state
         id: cache
         uses: actions/cache/restore@v4
         with:
-          path: state/state.json
+          path: |
+            state/state.json
+            state/intraday
           key: psx-state-v2-${{ github.run_id }}
           restore-keys: psx-state-v2-
 
@@ -112,8 +116,32 @@ jobs:
         if: always() && hashFiles('state/state.json') != ''
         uses: actions/cache/save@v4
         with:
-          path: state/state.json
+          path: |
+            state/state.json
+            state/intraday
           key: psx-state-v2-${{ github.run_id }}
+
+      # Finished trading days (gzipped by the pipeline) are kept for good as files of the GitHub
+      # release "intraday": public PSX price snapshots, about 0.5 MB a day, one file per day.
+      - name: Archive intraday data
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(state/intraday/*.csv.gz)
+          [ ${#files[@]} -eq 0 ] && { echo "No finished day to archive"; exit 0; }
+          if ! gh release view intraday >/dev/null 2>&1; then
+            gh release create intraday --title "Intraday price snapshots" --latest=false \
+              --notes "One file per trading day: time, symbol, last price, cumulative volume, high, low, recorded about once a minute during the session. Public PSX data collected by the pipeline." \
+              || { echo "Could not create the release (will retry next run)"; exit 0; }
+          fi
+          have=$(gh release view intraday --json assets --jq '.assets[].name' 2>/dev/null || true)
+          for f in "${files[@]}"; do
+            n=$(basename "$f")
+            if printf '%s\n' "$have" | grep -qx "$n"; then continue; fi
+            gh release upload intraday "$f" && echo "Archived $n" || echo "Upload of $n failed (will retry next run)"
+          done
 
       # Back up the state to the 'state' branch after every run (one commit, force-pushed: no history growth).
       # This also counts as repository activity, so GitHub never pauses the schedule.

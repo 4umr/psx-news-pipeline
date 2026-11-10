@@ -16,3 +16,4 @@ state/swing_stats.json
 state/sector_pe.csv
 state/stock_pe.csv
 state/sotd/
+state/intraday/
