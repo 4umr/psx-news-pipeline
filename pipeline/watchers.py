@@ -968,7 +968,7 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
             known.add(sym)
         state.set_snap(f"eps:{sym}", {"annual": p["annual_eps"], "quarterly": p["quarterly_eps"]})
     state.data["psx_known"] = sorted(known)
-    if not fresh:
+    if not fresh and not state.data.get("filings_pending"):
         return []
     # Keep a log of insider dealings and material information with the price at the time, so these
     # events can be tested later (PSX pages only show a few recent filings, so history must be collected)
@@ -982,6 +982,16 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
             ev.append({"d": f["date"], "t": f"{now:%Y-%m-%d %H:%M}", "sym": sym, "kind": kind, "title": f["title"][:160],
                        "px": r.get("CurrentPrice"), "url": f["url"]})
     state.data["events"] = ev[-1500:]
+    # Batch: with a pass every minute, filings arrive one at a time. Collect them and post one card at most
+    # every psx_filings_batch_minutes (or at 8 filings); material information goes out at once.
+    pend = state.data.setdefault("filings_pending", [])
+    pend += [{"sym": sym, "f": f, "t": int(time.time())} for sym, f in fresh]
+    urgent = any("material" in x["f"]["title"].lower() for x in pend)
+    wait = float(cfg.get("psx_filings_batch_minutes", 30)) * 60
+    if not pend or (not urgent and len(pend) < 8 and time.time() - min(x["t"] for x in pend) < wait):
+        return []
+    fresh = [(x["sym"], x["f"]) for x in pend]
+    state.data["filings_pending"] = []
     lines, done = [], set()
     for sym, f in fresh:
         if (sym, f["title"].lower()) in done:  # same notice filed twice (e.g. daily buy-back reports)

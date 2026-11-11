@@ -95,6 +95,7 @@ unusual_volume_x: 3.0
 # small cap). The fast loop's light passes use the smaller number (about 8 pages a minute).
 psx_filings_per_run: 25
 psx_filings_per_pass_light: 8
+psx_filings_batch_minutes: 30   # one filings card at most every 30 min (material information at once)
 
 # Fast loop (market hours, Mon-Fri): one GitHub job stays open and checks every minute instead of waiting
 # for GitHub's schedule (which starts runs only every 35-80 minutes). A light pass = RSS news, PSX data,
@@ -520,6 +521,7 @@ editor:
   min_materiality: 4        # AI score 1-5: 4 = moves a sector or a big company, 5 = the whole market
   max_per_topic_day: 3      # main-channel news posts per topic per day (score-10 news is exempt)
   topic_gap_hours: 3        # without AI: no second post on a topic within this many hours
+  burst_hours: 2            # with AI: a second post on a topic within 2 hours needs materiality 5
   index_tolerance: 0.10     # a KSE-100 level in a headline must be within 10% of the real index
 
 low_priority_sources: '(times of india|dna india|sunday guardian|ndtv|india today|hindustan times|news18|firstpost|wion|republic|zee news|economic times|indian express|the print|opindia|tolonews|stocktwits|benzinga|zacks|tipranks|marketbeat|seeking alpha|motley fool)'

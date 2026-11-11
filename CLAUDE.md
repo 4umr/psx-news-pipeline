@@ -150,6 +150,11 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   lvl) in the PUBLIC state branch: review decisions any time from
   raw.githubusercontent.com/4umr/psx-news-pipeline/state/state.json. Admin chat items carry "Kept off the main
   channel: <reason>". 23:45 report adds "Main channel news: N posted, M kept for you (reasons)".
+- First live day (11 Nov): 5 news posts (Hormuz, OGDCL discovery, ADB $500m, petrol cut twice), 22 kept for admin.
+  Fixes: `editor.burst_hours` (2): a second post on a topic within 2 h needs materiality 5 (AI same_event missed the
+  ProPakistani + The Nation petrol posts 10 min apart); PSX filings are batched (`psx_filings_batch_minutes` 30,
+  `state.data["filings_pending"]`, 8 filings or any "material" title flushes at once) because the every-minute
+  loop produced ~20 "1 new filing on PSX" cards a day. Lab ran on time 18:20 (5 calls, 5 cards, admin chat).
 - Replay test: `python -m pipeline review --hours 36` (workflow `review.yml`, manual, uses the Gemini key, reads
   the state branch, sends/saves nothing): runs the last hours' candidates in time order through the same gates
   with a simulated posted list (`editor._clock` set to each item's time) and prints a table + RESULT.

@@ -146,6 +146,10 @@ def after_ai(it: NewsItem, ai: dict | None, status: str, state, cfg: dict) -> st
         return f"AI: materiality {mat} of 5 (needs {need})"
     if not ai.get("confirmed", True) and mat < 5:
         return "AI: not confirmed (claim, proposal or expectation)"
+    burst = float(ed.get("burst_hours", 2))
+    if mat < 5 and not topic_gap_ok(state, it.topic, burst):
+        # 11 Nov: the same petrol cut went out twice in 10 minutes; the AI's same-event check missed it
+        return f"the channel covered this topic in the last {burst:g} hours (needs materiality 5)"
     return ""
 
 
@@ -168,7 +172,8 @@ def admin_note(reason: str) -> str:
 BUCKETS = (("source not on", "weak source"), ("index level", "wrong index level"), ("already", "topic cap"),
            ("materiality", "minor"), ("not confirmed", "unconfirmed"), ("same event", "duplicate"),
            ("not relevant", "not relevant"), ("old event", "old or wrong"), ("not news", "not news"),
-           ("AI unavailable", "AI unavailable"), ("verify", "AI could not verify"), ("policy-rate", "rate rumour"))
+           ("AI unavailable", "AI unavailable"), ("verify", "AI could not verify"), ("policy-rate", "rate rumour"),
+           ("covered this topic", "topic just covered"))
 
 
 def _bucket(reason: str) -> str:
