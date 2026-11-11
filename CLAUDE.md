@@ -359,8 +359,9 @@ Yahoo `^KSE` (no data). Gold per tola: sources disagree — intentionally not sh
   Telegram curl steps failed with exit 3 (bot token secret likely has trailing whitespace): secrets are trimmed with
   `tr -d '[:space:]'` and curl ends `|| true`; caches now use whole folders (`state`, `data`) because changing
   the path list changes the cache version (silent fresh start). Backup tar = all of state/ except state.json/.bak.
-- TELEGRAM_ADMIN_CHAT_ID IS set (the notify step ran its `-n "$ADMIN"` branch). Ask Umer whether the Swing Radar
-  and notes arrive in his admin chat.
+- CONFIRMED 2026-11-12 with `python -m pipeline whereis` (lab.yml menu; prints chat type/name, never full ids, and
+  sends a test note): bot @Newsfunnel_bot; TELEGRAM_CHAT_ID = channel "News Feed"; TELEGRAM_ADMIN_CHAT_ID = Umer's
+  private chat with the bot (he sees it there); TELEGRAM_RESEARCH_CHAT_ID not set (lab cards fall back to admin).
 - Company pages: `site._quick_check` (profit trend last 4 results, profitable years, dividend years, P/E vs sector
   and own usual P/E from `state/stock_pe.csv` (Saturday re-test, 5-year weekly median), 200-day trend, 12-month high,
   liquidity, PSX defaulter flag from "(Defaulter)" in the company name). No EPS growth line on purpose: bonus
