@@ -57,6 +57,9 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
                     ("1 month vs KSE-100", "n/a" if rel20 is None else f"{rel20:+.1f} pts", None),
                     ("From 52-week high", "n/a" if off_hi is None else f"{off_hi:+.1f}%", None)],
                 cols=4, tile_h=90)
+    if d.get("fv"):
+        from .underdogcard import fv_items
+        y = c.tiles(y, fv_items(d["fv"], d.get("fv_rank")), title="Fair value and balance sheet", cols=4, tile_h=88)
 
     # 12-month chart: price, 50-day average, support / resistance, KSE-100 rebased
     px = d["px"][-250:]

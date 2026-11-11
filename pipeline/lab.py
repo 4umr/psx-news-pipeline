@@ -178,7 +178,10 @@ def dossier(sym: str, shared: dict, cfg: dict) -> dict | None:
                     if any(w in b["title"].lower() for w in words)][:4]
     sec = flows.sector_key(snap["sector"])
     d["flows"] = {r["who"]: r["net"] for r in shared["flows"] if r["sector"] == sec}
-    d["text"] = _text(d, shared)
+    from . import fairvalue
+    d["fv"] = fairvalue.compute(snap, shared.get("coe") or fairvalue.coe(cfg, None))
+    d["text"] = _text(d, shared) + "\nFAIR VALUE AND BALANCE SHEET: " + " ".join(fairvalue.lines(d["fv"])) + (
+        " Flags: " + "; ".join(d["fv"]["flags"]) if d["fv"].get("flags") else "")
     return d
 
 
@@ -397,18 +400,21 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
         return
     view = scs.kse100_view()
     analysis.init(State(), cfg)
+    from . import fairvalue
+    policy = (State().snap("sbp") or {}).get("policy_rate")
     end = now_pkt().replace(tzinfo=None)
     from . import flows
     shared = {"index": idx, "session": session, "tech": scs_deep.technicals(), "opinions": scs_deep.opinions(),
               "meetings": scs.board_meetings(), "xdates": scs.book_closures(), "brokers": brokers.reports(),
               "flows": flows.week(end - timedelta(days=28), end),
-              "context": context.build(State(), view, (State().snap("mk_last") or {}))}
+              "context": context.build(State(), view, (State().snap("mk_last") or {})),
+              "coe": fairvalue.coe(cfg, policy)}
     with ThreadPoolExecutor(3) as ex:
         dossiers = dict(zip(syms, ex.map(lambda s: dossier(s, shared, cfg), syms)))
     # score the open calls with fresh prices before adding today's
     score(st, idx, {s: d["px"] for s, d in dossiers.items() if d})
     sb = scoreboard(st)
-    cards, lines = [], []
+    cards, lines, pending = [], [], []
     from .labcard import lab_card
     for sym in syms:
         d = dossiers.get(sym)
@@ -424,12 +430,42 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
                  "view": c["view"], "conf": c["confidence"], "headline": c["headline"], "base": _baselines(d)}
         if not any(x["id"] == entry["id"] for x in st["calls"]):
             st["calls"].append(entry)
+        pending.append((sym, d, c))
+        lines.append(f"<b>{sym}</b>: {c['view']} (confidence {c['confidence']}/5). {esc(c['headline'])}")
+    st["last"] = session
+    # ---- underdog radar (asset-backed small and mid caps) + watch stocks
+    ud_cards, ud_lines = [], []
+    if (conf.get("underdog") or {}).get("enabled", True):
+        from . import underdog
+        from .underdogcard import radar_card, watch_card
+        try:
+            r = underdog.radar(cfg, session, policy)
+            ranks = {x["sym"]: x.get("upside_rank") for x in r["rows"]}
+            for sym, d, _ in pending:
+                if ranks.get(sym) is not None:
+                    d["fv_rank"] = ranks[sym]
+            ud_cards.append(("radar", radar_card(cfg, r)))
+            for w in r["watch"]:
+                ud_cards.append((w["sym"], watch_card(cfg, w, session)))
+            for x in r["triggers"]:
+                st.setdefault("underdog", []).append({"id": f"UD:{x['sym']}:{session}", "sym": x["sym"], "date": session,
+                                                      "price": x["price"], "view": "Outperform", "pb": x["pb"]})
+                ud_lines.append(f"<b>{x['sym']}</b>: {esc(x['eps_line'])}, {x['react']:+.1f}% today, P/B {x['pb']:.2f}")
+            ud_lines.append(f"{r['n_backed']} liquid small and mid caps trade at 1.2x book or less; "
+                            f"{len(r['triggers'])} met the tested trigger today.")
+        except Exception:  # noqa: BLE001  the blue-chip part must still go out
+            log.exception("lab: underdog radar failed")
+            ud_lines.append("Underdog radar could not be built today.")
+        # score earlier underdog triggers too
+        open_ud = [c for c in st.get("underdog", []) if not all(f"r{h}" in c for h in HORIZONS)]
+        if open_ud:
+            score({"calls": open_ud}, idx, {c["sym"]: _history(c["sym"]) for c in open_ud})
+    for sym, d, c in pending:
         try:
             cards.append((sym, lab_card(cfg, d, c, sb, session)))
         except Exception:  # noqa: BLE001
             log.exception("lab card %s failed", sym)
-        lines.append(f"<b>{sym}</b>: {c['view']} (confidence {c['confidence']}/5). {esc(c['headline'])}")
-    st["last"] = session
+    cards += ud_cards
     s = Sender(dry)
     chat = __import__("os").environ.get("TELEGRAM_RESEARCH_CHAT_ID", "").strip() or s.admin
     if s.dry or not chat:
@@ -443,7 +479,8 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
     else:
         s._post(chat, f"<b>Research Lab · {session}</b> (experiment, not for the main channel)\n"
                       "One-month view versus the KSE-100 for the top 5 index stocks.\n\n" + "\n\n".join(lines)
-                + f"\n\n<i>{record_line(sb)}</i>", False)
+                + f"\n\n<i>{record_line(sb)}</i>"
+                + ("\n\n<b>Underdog radar</b>\n" + "\n".join(ud_lines) if ud_lines else ""), False)
         for sym, png in cards:
             s._photo(chat, png, f"{sym} · Research Lab · {session}", f"lab_{sym}")
     if not dry:

@@ -129,12 +129,21 @@ official_data:
 # admin chat until that is set). news_terms = Google News search words per symbol.
 lab:
   symbols: [FFC, UBL, MEBL, ENGROH, OGDC]
+  underdog:                 # asset-backed small and mid caps (pipeline/underdog.py), daily radar + watch cards
+    enabled: true
+    watch: [STCL]           # your own underdogs: a full one-page card each day
+    max_list: 10
   news_terms:
     FFC: '"Fauji Fertilizer" OR FFC'
     UBL: '"United Bank" OR UBL'
     MEBL: '"Meezan Bank" OR MEBL'
     ENGROH: '"Engro Holdings" OR "Engro Corporation" OR ENGROH'
     OGDC: 'OGDC OR OGDCL OR "Oil and Gas Development"'
+
+# Fair value (pipeline/fairvalue.py): required return = SBP policy rate + erp (points)
+fair_value:
+  erp: 5.0
+  risk_free: 12.0           # used only if the policy rate is not known
 
 # The other workflows, started on time by the loop (their own GitHub schedules run hours late and stay
 # only as a backstop; each of them refuses to do the same work twice). Times in PKT, days 0 = Monday.

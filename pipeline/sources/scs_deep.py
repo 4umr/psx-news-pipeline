@@ -56,6 +56,7 @@ FIELDS = {
     "npm": ("Net profit margin", "%"), "gpm": ("Gross margin", "%"), "ebitdam": ("EBITDA margin", "%"),
     "cr": ("Current ratio", "x"), "etr": ("Effective tax rate", "%"),
     "tde": ("Total debt to equity", "%"), "tda": ("Total debt to assets", "%"),
+    "ear": ("Equity to assets", "%"), "lde": ("Long-term debt to equity", "%"), "qr": ("Quick ratio", "x"),
 }
 DESC = {"leps": "lepsdesc", "epslq": "epslqdesc", "laeps": "laepsdesc", "pe": "pedesc", "epe": "epedesc",
         "eeg": "eegdesc", "bv": "bvdesc", "pbv": "pbvdesc", "roe": "roedesc", "d": "ddesc", "dy": "dydesc",
@@ -193,3 +194,22 @@ def opinions() -> dict[str, list[dict]]:
         out.setdefault(sym, []).append({"date": d, "title": cells[1], "author": m.group(1).strip() if m else "",
                                         "text": cells[3][:1500]})
     return out
+
+
+def book_values(sym: str) -> dict[str, float]:
+    """Book value per share by fiscal year label (latest first on the page, up to 5 years), from the snapshot
+    chart. The newest label can be a part year (e.g. '2027' = up to 2027 1Q)."""
+    try:
+        h = http().get(f"{BASE}stockscreening/SS_CompanySnapShot.aspx?symbol={sym}", timeout=40).text
+    except Exception as e:  # noqa: BLE001
+        log.warning("SCS book values %s failed: %s", sym, e)
+        return {}
+    i = h.find("name: 'Book Value'")
+    if i < 0:
+        return {}
+    cats = re.findall(r"'(\d{4})'", h[h.rfind("categories", 0, i): i])
+    m = re.search(r"data\s*:\s*\[([^\]]*)\]", h[i: i + 400])
+    if not m or not cats:
+        return {}
+    vals = [_val(x) for x in m.group(1).split(",")]
+    return {y: v for y, v in zip(cats, vals) if v is not None and v != 0}

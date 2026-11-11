@@ -131,6 +131,34 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   lab / lab --force). Sends to secret TELEGRAM_RESEARCH_CHAT_ID, else the admin chat. Never the main channel.
   Local test without Gemini: build dossiers + placeholder call (cards render, scoring testable).
 
+## Underdog method + fair value (built 2026-11-12) — Umer's way of buying small caps, tested
+- Umer: big companies on fair value/fundamentals; underdogs on past season, history, all-time high and ASSET value
+  (accumulate in a calculated zone, e.g. STCL below 8.5, then ride the volume when institutions/HNWIs arrive).
+- Data: `data/history_long.csv.gz` (scstrade prices 2008-2026, 482 stocks, local only) and `data/bv.csv` (book
+  value per share by fiscal-year label, 5 years, `scs_deep.book_values` = snapshot highcharts 'Book Value' series,
+  categories latest first; latest label can be a part year). P/B point in time: BV of fiscal year Y counts from
+  that year's latest results announcement (`underdog._pb`), skipped 2 years after a bonus/split (exf < 0.92).
+- TESTED 2010-2026 vs similar stocks (scratch ud_test.py idea; underdog liquidity floor Rs 2m/day, Mid/Small/Micro):
+  3-year price floor -2.2% over 60 sessions (t -3.4, 3/17 years +), floor + volume ignition -2.9%, deep below ATH at
+  floor -1.1%, strong calendar month ~0%, season+floor no, below book alone mixed. Good results + up 3%: +4.5%; the
+  same within 15% of floor +0.9% (floor adds nothing); **good results + up 3% + P/B <= 1.2: +11.3% (n 78, 2022-26,
+  median +0.5%, 51% beat)**; good results + P/B <= 1.2: +5.1% (n 244, 4/5 years). => the underdog edge = ASSET
+  BACKING + RESULTS TURN; floors, ATH discount, seasons are shown as information only.
+- Fair value (`fairvalue.py`): COE = SBP policy rate + `fair_value.erp` (5) -> 17% now. EPV = last 4 quarters' EPS
+  (from snapshot eps_quarters; SCS "expected" EPS annualised one-off quarters: refineries 6x) / COE = headline fair
+  value (tested: big caps' most overvalued fifth -4.8% over 60 sessions all 4 years, small/mid 50%+ gap +4.8% all 5
+  years 2022-26; but cheap P/E did not work before 2023 -> regime, say so). DDM only if payout >= 40%, g <= 8% and
+  <= COE-6. NAV = book. Balance sheet per share: assets = BV / equity-to-assets (snapshot `ear`), liabilities =
+  assets - BV, liab % assets, debt/equity, current/quick ratio, cash; flags skipped for banks/insurance/modarabas.
+- Live (lab.yml, daily after the blue chips): `underdog.radar` scans ~380 snapshots (traded >= Rs 0.5m today, ~5 min),
+  ranks fair-value gaps, lists liquid non-top-30 stocks at P/B <= 1.2 (`underdogcard.radar_card`), flags today's
+  tested trigger (results in the last 2 sessions, earnings.assess GOOD, up 3%+, P/B <= 1.2; logged in calls.json
+  `underdog` and scored at 5/20 sessions vs KSE-100), and a one-page `watch_card` per `lab.underdog.watch` (STCL):
+  asset zone 0.8x-1.2x book (breaks below 0.9 x lower edge), assets vs liabilities tiles, 3-year floor, 52w/3y
+  highs, ATH (adjusted), this/next month season, value traded vs 60-day, red flags (`underdog.trap` + balance
+  sheet), next board meeting, the trigger. Blue-chip cards gain a "Fair value and balance sheet" tile panel and
+  the AI dossier gets the fair value lines.
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,
