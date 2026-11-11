@@ -44,6 +44,7 @@ def main() -> None:
     tp = sub.add_parser("test")
     tp.add_argument("--admin-only", action="store_true", help="only message the private admin chat")
     sub.add_parser("chats")
+    sub.add_parser("whereis", help="which chats the Telegram secrets point to (+ a test message)")
     ab = sub.add_parser("about")
     ab.add_argument("--dry-run", action="store_true")
     sw = sub.add_parser("swing", help="daily swing scanner after the close (admin chat only)")
@@ -160,6 +161,9 @@ def main() -> None:
         sys.exit(0 if ok else 1)
     elif args.cmd == "chats":
         find_chats()
+    elif args.cmd == "whereis":
+        from .telegram import where_is
+        where_is()
     elif args.cmd == "about":
         from .runner import about_text
         ok = Sender(args.dry_run).send(about_text(cfg))

@@ -331,3 +331,32 @@ def find_chats() -> None:
             print(f"{masked}  ->  private chat (full id sent to that person in Telegram)")
         else:
             print(f"{cid}  ->  {kind}: {name}")
+
+
+def where_is() -> None:
+    """Which chats the secrets point to (type and name only; never the full id, logs are public), plus a
+    test message to the admin and research chats so the owner can see where they are."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        print("TELEGRAM_BOT_TOKEN is not set.")
+        return
+    me = http().get(f"https://api.telegram.org/bot{token}/getMe", timeout=20).json()
+    print("Bot:", "@" + me["result"].get("username", "?") if me.get("ok") else me)
+    for name in ("TELEGRAM_CHAT_ID", "TELEGRAM_ADMIN_CHAT_ID", "TELEGRAM_RESEARCH_CHAT_ID"):
+        cid = os.getenv(name, "").split(",")[0].strip()
+        if not cid:
+            print(f"{name}: not set")
+            continue
+        r = http().get(f"https://api.telegram.org/bot{token}/getChat", params={"chat_id": cid}, timeout=20).json()
+        if not r.get("ok"):
+            print(f"{name}: Telegram cannot reach it ({r.get('description')}), id ends ...{cid[-3:]}")
+            continue
+        c = r["result"]
+        what = ("a person's private chat with the bot (look in Telegram under the bot's name)" if c["type"] == "private"
+                else f'{c["type"]} "{c.get("title", "")}"')
+        print(f"{name}: {what}, id ends ...{cid[-3:]}")
+        if name != "TELEGRAM_CHAT_ID":
+            label = "admin messages (warnings, raw news feed, Swing Radar)" if "ADMIN" in name else "Research Lab cards"
+            ok = http().post(f"https://api.telegram.org/bot{token}/sendMessage", timeout=20, json={
+                "chat_id": cid, "text": f"Delivery check: {label} come to THIS chat."}).json().get("ok")
+            print(f"   test message sent: {ok}")

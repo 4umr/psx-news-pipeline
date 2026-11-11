@@ -17,6 +17,8 @@ on:
           - lab
           - lab --force
           - lab --dry-run --force
+          - whereis
+          - chats
 
 concurrency:
   group: psx-lab
