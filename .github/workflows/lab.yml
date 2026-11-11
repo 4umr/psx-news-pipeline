@@ -20,8 +20,9 @@ on:
           - whereis
           - chats
 
+# (renamed 2026-11-12: run #3 got stuck 'queued' in the old group on GitHub's side and could not be cancelled)
 concurrency:
-  group: psx-lab
+  group: psx-lab-2
   cancel-in-progress: false
 
 permissions:
