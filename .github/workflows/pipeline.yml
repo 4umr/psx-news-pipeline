@@ -96,6 +96,15 @@ jobs:
               os.remove(b)
           EOF
 
+      # Research Lab levels (buy zones, fails-below lines, targets from last night's report) for the private
+      # level alerts during the session. Read only: this workflow never saves the Lab's cache.
+      - name: Research Lab levels (read only)
+        uses: actions/cache/restore@v4
+        with:
+          path: state/lab
+          key: psx-lab-v1-${{ github.run_id }}
+          restore-keys: psx-lab-v1-
+
       # The pipeline runs in the background so that, while the fast loop is open, the state can be
       # copied to the backup branch every 10 minutes.
       - name: Run pipeline

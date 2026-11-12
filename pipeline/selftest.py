@@ -188,6 +188,20 @@ def levels_tests() -> list[str]:
     ok("all-stock table updated after the close -> today",
        _scs.activity_is_today([{"company_code": f"S{i}", "trading_close": 101.0} for i in range(20)], v20) is True)
     ok("too few moving stocks to tell -> unknown", _scs.activity_is_today([], v20[:5]) is None)
+    from . import levelwatch as lw
+    buy = {"side": "buy", "zone": (98.0, 100.94), "risk": 93.1, "r1": 104.0, "r2": 110.0}
+    ok("level alert: inside the buy zone at 100", [e for e, _ in lw.events(buy, 100.0)] == ["in_zone"])
+    ok("level alert: above the zone, below target: nothing at 102", lw.events(buy, 102.0) == [])
+    ok("level alert: target 1 at 104.5", [e for e, _ in lw.events(buy, 104.5)] == ["target1"])
+    ok("level alert: target 2 at 111", [e for e, _ in lw.events(buy, 111.0)] == ["target2"])
+    ok("level alert: setup failed at 93", [e for e, _ in lw.events(buy, 93.0)] == ["failed"])
+    sell = {"side": "sell", "sell_zone": (5.63, 5.80), "exit": 4.86}
+    ok("level alert: sell zone at 5.70", [e for e, _ in lw.events(sell, 5.70)] == ["sell_zone"])
+    ok("level alert: support broke at 4.80", [e for e, _ in lw.events(sell, 4.80)] == ["broke"])
+    v = [{"company_code": f"S{i}", "CurrentPrice": 101.0, "LDCP": 100.0} for i in range(20)]
+    ok("PSX screener live when it shows the live index prices",
+       lw.screener_live(v, {f"S{i}": (101.0, 1.0) for i in range(20)}) is True
+       and lw.screener_live(v, {f"S{i}": (100.0, 0.0) for i in range(20)}) is False)
     ln = earnings.eps_line({"annual": True, "eps": 10.0, "eps_ly": 8.0, "eps_q": 3.0, "eps_q_ly": 1.0, "yoy_q": 2.0, "yoy": 0.25})
     ok("annual result line shows the fourth quarter first", ln == "fourth-quarter EPS 3.00 vs 1.00 a year ago (+200%); full year 10.00 vs 8.00")
     return bad

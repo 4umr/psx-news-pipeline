@@ -149,6 +149,11 @@ fair_value:
 
 # The other workflows, started on time by the loop (their own GitHub schedules run hours late and stay
 # only as a backstop; each of them refuses to do the same work twice). Times in PKT, days 0 = Monday.
+# Private level alerts (bot chat) during the session for the stocks of last night's Research Lab report:
+# buy zone reached, fails-below line broken, targets reached; sell zone / support for warnings.
+level_alerts:
+  enabled: true
+
 start_workflows:
   - {workflow: swing.yml, command: "swing", time: "17:40", days: [0, 1, 2, 3, 4]}
   - {workflow: stock.yml, command: "sotd", time: "18:00"}

@@ -611,6 +611,11 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         S("intraday record", lambda: intraday.record(now, scs.live_activity(view_now)[0], view_now))
     S("intraday housekeeping", intraday.housekeeping, now)
     S("PSX screener probe", _screener_probe, now, state, view_now)
+    if not bootstrap:  # private level alerts for the stocks of last night's Research Lab report
+        from . import levelwatch
+        msg = S("level alerts", levelwatch.check, now, state, cfg, view_now)
+        if msg:
+            sender.send_admin(msg)
 
     if not light:
         _health(cfg, state, sender, {

@@ -283,6 +283,17 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   quarter: +1.0% avg to the reaction close, 15/15 years positive, halves +0.55/+1.20, but median -0.1%, 49% beat
   -> under the 0.75% cost bar, information only.
 
+## Level alerts (built 2026-11-13) — private, bot chat, during the session
+- `levelwatch.py`, called by the runner every pass (`level alerts`), weekdays 09:32-16:35, only when >= 20 KSE-100
+  stocks are moving (holidays / pre-open skipped). Levels = `report` in state/lab/calls.json (evening Lab run);
+  pipeline.yml restores the Lab cache READ ONLY (step "Research Lab levels"; never saved by this workflow).
+- Events, once per stock per report (`state.data["level_alerts"]`, 10 days): buy side in_zone, failed (below the
+  fails-below line), target1, target2; sell side sell_zone, broke (below support). One message per pass.
+- Prices: KSE-100 live from the index view; other stocks from `psx.screener()` (memo 180 s) ONLY when
+  `screener_live()` agrees with the live view at that moment; else KSE-100 only (said in the message).
+- Config `level_alerts.enabled`. Tests: selftest levels_tests (7 events + screener check); scratch sim.py
+  simulates a day (09:20 nothing, zone, sell zone, target 1, failed, target 2, broke).
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,
