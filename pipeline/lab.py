@@ -178,10 +178,19 @@ def dossier(sym: str, shared: dict, cfg: dict) -> dict | None:
                     if any(w in b["title"].lower() for w in words)][:4]
     sec = flows.sector_key(snap["sector"])
     d["flows"] = {r["who"]: r["net"] for r in shared["flows"] if r["sector"] == sec}
-    from . import fairvalue
-    d["fv"] = fairvalue.compute(snap, shared.get("coe") or fairvalue.coe(cfg, None))
-    d["text"] = _text(d, shared) + "\nFAIR VALUE AND BALANCE SHEET: " + " ".join(fairvalue.lines(d["fv"])) + (
-        " Flags: " + "; ".join(d["fv"]["flags"]) if d["fv"].get("flags") else "")
+    from . import fairvalue, underdog
+    ver = underdog.verify(sym, snap, ((shared.get("act") or {}).get(sym) or {}).get("trading_close"),
+                          shared.get("coe") or fairvalue.coe(cfg, None))
+    d["fv"], d["ver"] = ver["fv"], ver
+    extra = "\nFAIR VALUE AND BALANCE SHEET: " + " ".join(fairvalue.lines(d["fv"]))
+    if ver["quarters"]:
+        extra += "\nTRAILING 4 QUARTERS EPS (checked against the results announcements): " + ", ".join(
+            f"{k} {x:.2f}" for k, x in ver["quarters"].items())
+    if d["fv"].get("flags"):
+        extra += "\nBALANCE SHEET FLAGS: " + "; ".join(d["fv"]["flags"])
+    if ver["problems"]:
+        extra += "\nDATA CHECK PROBLEMS (do not rely on the affected figures): " + "; ".join(ver["problems"])
+    d["text"] = _text(d, shared) + extra
     return d
 
 
@@ -379,110 +388,213 @@ def record_line(sb: dict) -> str:
 
 
 # ---------------------------------------------------------------- run
-def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | None = None) -> None:
-    from . import context
+def _call_retry(d: dict, cfg: dict) -> dict | None:
+    """Gemini's free tier is shared with the news pipeline: wait and retry when it is busy or a reply fails
+    the number check (a second reading usually passes)."""
+    for attempt in range(3):
+        c = call(d, cfg)
+        if c or not analysis.available(cfg):
+            return c
+        time.sleep(30 * (attempt + 1))
+    return None
+
+
+def _sessions_until(day: str, session: str) -> int:
+    from datetime import date
+    a, b = date.fromisoformat(session), date.fromisoformat(day)
+    return sum(1 for k in range((b - a).days) if (a + timedelta(days=k + 1)).weekday() < 5)
+
+
+def _bluechip_reasons(d: dict, c: dict, prev: dict | None, session: str) -> list[str]:
+    """Why this card is worth sending today ([] = stay quiet)."""
+    why = []
+    if not prev:
+        why.append("first view")
+    elif prev.get("view") != c["view"]:
+        why.append(f"view changed from {prev['view']} to {c['view']}")
+    elif c["confidence"] >= 4 and (prev.get("conf") or 0) < 4:
+        why.append(f"confidence rose to {c['confidence']}/5")
+    sent_ev = set((prev or {}).get("events", []))
+    for m in d.get("meetings") or []:
+        day = m[:10]
+        if 0 <= _sessions_until(day, session) <= 5 and f"bm:{day}" not in sent_ev:
+            why.append(f"board meeting on {day}")
+    for x in d.get("exdates") or []:
+        day = x[:10]
+        if 0 <= _sessions_until(day, session) <= 5 and f"ex:{day}" not in sent_ev:
+            why.append(f"ex-date on {day}")
+    return why
+
+
+def _underdog_reasons(w: dict, prev: dict | None) -> list[str]:
+    from .underdog import zone_state
+    why = []
+    z = zone_state(w)
+    if w.get("trigger"):
+        why.append("tested trigger: good results, up 3%+, at 1.2x book or less")
+    if not prev:
+        why.append("added to the watch list")
+    elif prev.get("zone") != z and z != "none":
+        why.append(f"asset zone: {prev.get('zone')} -> {z}")
+    if (w.get("ignition") or {}).get("on"):
+        why.append(f"volume burst: {w['ignition']['x']:.1f}x normal value traded, price up 3%+")
+    if prev and w.get("ttm") is not None and prev.get("ttm") is not None and abs(w["ttm"] - prev["ttm"]) > 1e-6:
+        why.append("new quarterly results")
+    return why
+
+
+def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | None = None,
+        only: bool = False) -> None:
+    """Daily (after the close): calls for the blue chips and the underdog scan every trading day, logged and
+    scored; a card is SENT only when something matters (see _bluechip_reasons / _underdog_reasons), plus a
+    Friday roundup. only=True with symbols: full analysis of those stocks now, always sent."""
+    import os
+
+    from . import context, fairvalue, flows, selftest, underdog
+    from .labcard import lab_card
     from .sources import brokers
     from .state import State
     from .telegram import Sender
+    from .underdogcard import radar_card, watch_card
     conf = _cfg(cfg)
-    syms = symbols or conf.get("symbols") or ["FFC", "UBL", "MEBL", "ENGROH", "OGDC"]
+    s = Sender(dry)
+    chat = os.environ.get("TELEGRAM_RESEARCH_CHAT_ID", "").strip() or s.admin
+
+    def send(text: str | None, cards: list[tuple[str, bytes, str]]) -> None:
+        if s.dry or not chat:
+            out = ROOT / "out" / "lab"
+            out.mkdir(parents=True, exist_ok=True)
+            for name, png, _ in cards:
+                (out / f"{name}.png").write_bytes(png)
+            if text:
+                (out / "summary.txt").write_text(text, encoding="utf-8")
+            log.info("lab (dry run): %d cards in %s", len(cards), out)
+            return
+        if text:
+            s._post(chat, text, False)
+        for name, png, cap in cards:
+            s._photo(chat, png, cap, f"lab_{name}")
+
+    bad = selftest.run()
+    if bad:
+        log.error("lab: self-test failed, nothing sent")
+        if not dry and s.admin:
+            s.send_admin("<b>Research Lab paused today: self-test failed</b>\n" + "\n".join(esc(b) for b in bad[:8])
+                         + "\nNothing was sent, so no wrong number reached you.")
+        return
     st = _load()
     idx = _index()
     if not idx:
         log.warning("lab: no index data")
         return
     session = max(idx)
-    if st.get("last") == session and not force:
-        log.info("lab: session %s already done", session)
-        return
-    if session < (now_pkt() - timedelta(days=4)).strftime("%Y-%m-%d") and not force:
-        log.info("lab: latest session %s is old (holiday?)", session)
-        return
+    if only:  # on request during the day: today's live figures, dated today
+        session = now_pkt().strftime("%Y-%m-%d")
+    if not only:
+        if st.get("last") == session and not force:
+            log.info("lab: session %s already done", session)
+            return
+        if session < (now_pkt() - timedelta(days=4)).strftime("%Y-%m-%d") and not force:
+            log.info("lab: latest session %s is old (holiday?)", session)
+            return
+    syms = symbols or conf.get("symbols") or ["FFC", "UBL", "MEBL", "ENGROH", "OGDC"]
     view = scs.kse100_view()
     analysis.init(State(), cfg)
-    from . import fairvalue
     policy = (State().snap("sbp") or {}).get("policy_rate")
     end = now_pkt().replace(tzinfo=None)
-    from . import flows
+    act = {r["company_code"].strip(): r for r in scs.daily_activity() if r.get("company_code")}
     shared = {"index": idx, "session": session, "tech": scs_deep.technicals(), "opinions": scs_deep.opinions(),
               "meetings": scs.board_meetings(), "xdates": scs.book_closures(), "brokers": brokers.reports(),
-              "flows": flows.week(end - timedelta(days=28), end),
+              "flows": flows.week(end - timedelta(days=28), end), "act": act,
               "context": context.build(State(), view, (State().snap("mk_last") or {})),
               "coe": fairvalue.coe(cfg, policy)}
     with ThreadPoolExecutor(3) as ex:
-        dossiers = dict(zip(syms, ex.map(lambda s: dossier(s, shared, cfg), syms)))
-    # score the open calls with fresh prices before adding today's
-    score(st, idx, {s: d["px"] for s, d in dossiers.items() if d})
+        dossiers = dict(zip(syms, ex.map(lambda x: dossier(x, shared, cfg), syms)))
+    if not only:
+        score(st, idx, {x: d["px"] for x, d in dossiers.items() if d})
     sb = scoreboard(st)
-    cards, lines, pending = [], [], []
-    from .labcard import lab_card
+    sent = st.setdefault("sent", {})
+    out_cards: list[tuple[str, bytes, str]] = []
+    notes: list[str] = []
+    views: list[str] = []
     for sym in syms:
         d = dossiers.get(sym)
         if not d:
-            lines.append(f"{sym}: data could not be collected today")
+            notes.append(f"{sym}: data could not be collected")
             continue
-        c = call(d, cfg)
-        time.sleep(4)
+        c = _call_retry(d, cfg)
         if not c:
-            lines.append(f"{sym}: no call today (AI unavailable or its text failed the number check)")
+            notes.append(f"{sym}: no view (AI unavailable or its text failed the number check)")
             continue
         entry = {"id": f"{sym}:{session}", "sym": sym, "date": session, "price": d["snap"]["values"].get("price"),
                  "view": c["view"], "conf": c["confidence"], "headline": c["headline"], "base": _baselines(d)}
+        if only:
+            entry["on_demand"] = True
         if not any(x["id"] == entry["id"] for x in st["calls"]):
             st["calls"].append(entry)
-        pending.append((sym, d, c))
-        lines.append(f"<b>{sym}</b>: {c['view']} (confidence {c['confidence']}/5). {esc(c['headline'])}")
-    st["last"] = session
-    # ---- underdog radar (asset-backed small and mid caps) + watch stocks
-    ud_cards, ud_lines = [], []
-    if (conf.get("underdog") or {}).get("enabled", True):
-        from . import underdog
-        from .underdogcard import radar_card, watch_card
+        views.append(f"<b>{sym}</b>: {c['view']} ({c['confidence']}/5). {esc(c['headline'])}")
+        why = ["on request"] if only else _bluechip_reasons(d, c, sent.get(sym), session)
+        if not why:
+            continue
+        d["fv_rank"] = None
         try:
-            r = underdog.radar(cfg, session, policy)
-            ranks = {x["sym"]: x.get("upside_rank") for x in r["rows"]}
-            for sym, d, _ in pending:
-                if ranks.get(sym) is not None:
-                    d["fv_rank"] = ranks[sym]
-            ud_cards.append(("radar", radar_card(cfg, r)))
-            for w in r["watch"]:
-                ud_cards.append((w["sym"], watch_card(cfg, w, session)))
-            for x in r["triggers"]:
-                st.setdefault("underdog", []).append({"id": f"UD:{x['sym']}:{session}", "sym": x["sym"], "date": session,
-                                                      "price": x["price"], "view": "Outperform", "pb": x["pb"]})
-                ud_lines.append(f"<b>{x['sym']}</b>: {esc(x['eps_line'])}, {x['react']:+.1f}% today, P/B {x['pb']:.2f}")
-            ud_lines.append(f"{r['n_backed']} liquid small and mid caps trade at 1.2x book or less; "
-                            f"{len(r['triggers'])} met the tested trigger today.")
-        except Exception:  # noqa: BLE001  the blue-chip part must still go out
-            log.exception("lab: underdog radar failed")
-            ud_lines.append("Underdog radar could not be built today.")
-        # score earlier underdog triggers too
-        open_ud = [c for c in st.get("underdog", []) if not all(f"r{h}" in c for h in HORIZONS)]
-        if open_ud:
-            score({"calls": open_ud}, idx, {c["sym"]: _history(c["sym"]) for c in open_ud})
-    for sym, d, c in pending:
-        try:
-            cards.append((sym, lab_card(cfg, d, c, sb, session)))
+            out_cards.append((sym, lab_card(cfg, d, c, sb, session), f"{sym} · {'; '.join(why)}"))
         except Exception:  # noqa: BLE001
             log.exception("lab card %s failed", sym)
-    cards += ud_cards
-    s = Sender(dry)
-    chat = __import__("os").environ.get("TELEGRAM_RESEARCH_CHAT_ID", "").strip() or s.admin
-    if s.dry or not chat:
-        from .common import ROOT as _R
-        out = _R / "out" / "lab"
-        out.mkdir(parents=True, exist_ok=True)
-        for sym, png in cards:
-            (out / f"{sym}.png").write_bytes(png)
-        (out / "summary.txt").write_text("\n".join(lines) + "\n" + record_line(sb), encoding="utf-8")
-        log.info("lab (dry run): %d cards in %s", len(cards), out)
-    else:
-        s._post(chat, f"<b>Research Lab · {session}</b> (experiment, not for the main channel)\n"
-                      "One-month view versus the KSE-100 for the top 5 index stocks.\n\n" + "\n\n".join(lines)
+            continue
+        if not only:
+            prev = sent.get(sym) or {}
+            evs = set(prev.get("events", [])) | {f"bm:{w.split()[-1]}" for w in why if w.startswith("board meeting")} | {
+                f"ex:{w.split()[-1]}" for w in why if w.startswith("ex-date")}
+            sent[sym] = {"view": c["view"], "conf": c["confidence"], "date": session, "events": sorted(evs)[-10:]}
+        notes.append(f"<b>{sym}</b>: {c['view']} ({c['confidence']}/5), {'; '.join(why)}")
+    # ---- underdogs: scan every day, send only on a trigger or a change in a watched stock
+    ud_conf = conf.get("underdog") or {}
+    friday = now_pkt().weekday() == 4
+    if ud_conf.get("enabled", True):
+        try:
+            if only:
+                r = {"watch": underdog.details_for(cfg, session, policy, syms), "skipped": {}}
+            else:
+                r = underdog.radar(cfg, session, policy)
+            ud = st.setdefault("ud_state", {})
+            for w in r["watch"]:
+                why = ["on request"] if only else _underdog_reasons(w, ud.get(w["sym"]))
+                if w.get("trigger"):
+                    st.setdefault("underdog", []).append({"id": f"UD:{w['sym']}:{session}", "sym": w["sym"], "date": session,
+                                                          "price": w["price"], "view": "Outperform", "pb": w["fv"].get("pb")})
+                if not only:
+                    ud[w["sym"]] = {"zone": underdog.zone_state(w), "ttm": w.get("ttm"), "date": session}
+                if why:
+                    out_cards.append((f"ud_{w['sym']}", watch_card(cfg, w, session), f"{w['sym']} · {'; '.join(why)}"))
+                    notes.append(f"<b>{w['sym']}</b> (underdog): {'; '.join(why)}")
+            if (friday or force) and not only:
+                out_cards.append(("radar", radar_card(cfg, r), "Underdog radar · weekly"))
+            open_ud = [x for x in st.get("underdog", []) if not all(f"r{h}" in x for h in HORIZONS)]
+            if open_ud and not only:
+                score({"calls": open_ud}, idx, {x["sym"]: _history(x["sym"]) for x in open_ud})
+            if r["skipped"]:
+                log.info("lab: %d stocks not shown because a data check failed", len(r["skipped"]))
+        except Exception:  # noqa: BLE001  the blue-chip part must still go out
+            log.exception("lab: underdog radar failed")
+            notes.append("Underdog scan could not be completed today.")
+    if not only:
+        st["last"] = session
+    # ---- what goes out: only the cards that matter; Friday adds the roundup
+    head = f"<b>Research Lab · {session}</b>" + (" · on request" if only else "")
+    if (friday or force) and not only:
+        text = (head + " · weekly roundup\nOne-month views versus the KSE-100 (made every day, sent when they change):\n\n"
+                + ("\n\n".join(views) or "No views could be made today (the AI was unavailable).")
                 + f"\n\n<i>{record_line(sb)}</i>"
-                + ("\n\n<b>Underdog radar</b>\n" + "\n".join(ud_lines) if ud_lines else ""), False)
-        for sym, png in cards:
-            s._photo(chat, png, f"{sym} · Research Lab · {session}", f"lab_{sym}")
+                + ("\n\nToday: " + "\n".join(notes) if notes else ""))
+    elif out_cards or only:
+        text = head + "\n" + "\n".join(notes) if notes else head
+    else:
+        text = None
+    if text or out_cards:
+        send(text, out_cards)
+        log.info("lab: sent %d cards", len(out_cards))
+    else:
+        log.info("lab: nothing changed today, nothing sent (views logged for scoring)")
     if not dry:
         _save(st)
-    log.info("lab: %d calls today, %d cards, record: %s", len(lines), len(cards), record_line(sb))

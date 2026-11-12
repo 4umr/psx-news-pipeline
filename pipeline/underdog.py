@@ -213,67 +213,135 @@ def _history_detail(sym: str) -> dict:
     df = prices.adjust(raw)
     me = df.groupby(df["date"].dt.to_period("M"))["ac"].last()
     return {"closes": df["ac"].tolist(), "values": df["val"].tolist(), "chg": float(df["chg"].iloc[-1]),
-            "monthly": {str(k): float(v) for k, v in me.items()}, "first": f"{df['date'].iloc[0]:%Y}"}
+            "monthly": {str(k): float(v) for k, v in me.items()}, "first": f"{df['date'].iloc[0]:%Y}",
+            "last_date": f"{df['date'].iloc[-1]:%Y-%m-%d}", "last_close": float(df["c"].iloc[-1])}
 
 
-def watch_detail(sym: str, snap: dict, fv: dict, meetings: list[dict], session: str) -> dict:
+def verify(sym: str, snap: dict, close: float | None, cost: float) -> dict:
+    """Every check for a stock we are about to show (checks.py). Fair value only from verified EPS."""
+    from . import checks, fairvalue
     from .sources import scs_deep
+    probs = checks.basic(snap, close)
+    t = checks.trailing(sym, snap)
+    bvh = scs_deep.book_values(sym)
+    if bvh and snap["values"].get("bv") and abs(bvh[max(bvh)] / snap["values"]["bv"] - 1) > 0.01:
+        probs.append(f"book value {snap['values']['bv']:,.2f} differs from the latest in its history {bvh[max(bvh)]:,.2f}")
+    # book value brought up to date when the snapshot misses the latest results:
+    # + earnings of those quarters - cash dividends declared with them (dividend % x face value)
+    v = snap["values"]
+    bv_now, bv_note = v.get("bv"), None
+    if t.get("added") and v.get("bv"):
+        face = v.get("facevalue") or 10.0
+        change = sum(a["eps"] - a["div_pct"] / 100 * face for a in t["added"])
+        bv_now = v["bv"] + change
+        bv_note = (f"book value updated for {', '.join(a['key'] for a in t['added'])}: Rs {v['bv']:,.2f} "
+                   f"{'+' if change >= 0 else '-'} Rs {abs(change):,.2f} = Rs {bv_now:,.2f} (estimate until the next balance sheet)")
+    snap_now = {**snap, "values": {**v, "bv": bv_now}} if bv_now != v.get("bv") else snap
+    fv = fairvalue.compute(snap_now, cost, None if (t["problems"] or probs) else t["ttm"], bvh)
+    if bv_now is not None and bv_now <= 0:
+        probs.append(f"book value is negative after the latest results (Rs {bv_now:,.2f})")
+    return {"fv": fv, "problems": probs + t["problems"], "notes": t["notes"] + ([bv_note] if bv_note else []),
+            "quarters": dict(t["quarters"]), "ttm": t["ttm"], "bv_hist": bvh, "bv_now": bv_now}
+
+
+def watch_detail(sym: str, snap: dict, ver: dict, meetings: list[dict], session: str) -> dict:
     h = _history_detail(sym)
     v = snap["values"]
-    bvh = scs_deep.book_values(sym)
-    lv = levels(h.get("closes") or [v.get("price")], v.get("bv"))
+    probs = list(ver["problems"])
+    if h.get("last_close") and v.get("price") and abs(h["last_close"] / v["price"] - 1) > 0.01:
+        probs.append(f"price history ends at {h['last_close']:,.2f} on {h['last_date']}, snapshot shows {v['price']:,.2f}")
+    lv = levels(h.get("closes") or [v.get("price")], ver.get("bv_now", v.get("bv")))
     nxt = int(session[5:7]) % 12 + 1
     ss = season(h.get("monthly") or {})
     ign = ignition(h.get("values") or [], h.get("chg"))
     bm = sorted(f"{b['date']:%d %b %Y}" for b in meetings
                 if (b.get("company_code") or "").strip() == sym and b.get("date") and f"{b['date']:%Y-%m-%d}" >= session)
-    bv = v.get("bv")
+    bv = ver.get("bv_now", v.get("bv"))
+    fv = ver["fv"]
+    flags = trap(ver["bv_hist"], ver["quarters"] or (snap.get("eps_quarters") or {}), v.get("tde"))
+    has_losses = any("losses" in f for f in flags)
+    for f in fv.get("flags", []):
+        if "debt" in f:                      # trap() already reports debt to equity
+            continue
+        if "loss-making" in f and has_losses:  # trap() already reports the losses
+            continue
+        flags.append(f)
     return {"sym": sym, "name": snap["name"], "sector": snap["sector"], "price": v.get("price"), "bv": bv,
+            "bv_period": snap.get("period", {}).get("bv"),
             "asset_zone": (bv * 0.8, bv * 1.2) if bv and bv > 0 else None, "levels": lv, "fv": fv,
             "season_next": ss.get(nxt), "season_month": nxt, "season_now": ss.get(int(session[5:7])),
-            "ignition": ign, "bv_hist": bvh, "flags": trap(bvh, snap.get("eps_quarters") or {}, v.get("tde")) + [
-                f for f in fv.get("flags", []) if "debt" not in f], "meeting": bm[0] if bm else None,
-            "since": h.get("first")}
+            "ignition": ign, "bv_hist": ver["bv_hist"], "flags": list(dict.fromkeys(flags)),
+            "meeting": bm[0] if bm else None, "since": h.get("first"), "problems": probs, "notes": ver["notes"],
+            "ttm": ver["ttm"]}
 
 
-def radar(cfg: dict, session: str, policy_rate: float | None) -> dict:
-    """All stocks: fair value + balance sheet; asset-backed small/mid caps; today's tested triggers; watch list."""
+def zone_state(w: dict) -> str:
+    """inside / above / below / broken (below the break level) / none."""
+    az, p = w.get("asset_zone"), w.get("price")
+    if not az or not p:
+        return "none"
+    if p < az[0] * 0.9:
+        return "broken"
+    return "inside" if az[0] <= p <= az[1] else ("above" if p > az[1] else "below")
+
+
+def radar(cfg: dict, session: str, policy_rate: float | None, watch: list[str] | None = None) -> dict:
+    """All liquid stocks screened quickly; everything that will be SHOWN is fully verified first.
+    Returns the asset-backed list, today's tested triggers and the watch-stock details."""
     from concurrent.futures import ThreadPoolExecutor
 
-    from . import earnings, fairvalue
+    from . import checks, earnings, fairvalue
     from .common import log
     from .sources import scs, scs_deep
     conf = ((cfg.get("lab") or {}).get("underdog") or {})
-    watch = [s.upper() for s in conf.get("watch", ["STCL"])]
+    watch = [s.upper() for s in (watch if watch is not None else conf.get("watch", ["STCL"]))]
     act = {r["company_code"].strip(): r for r in scs.daily_activity() if r.get("company_code")}
     cand = sorted({c for c, r in act.items() if (r.get("trading_close") or 0) * (r.get("trading_vol") or 0) >= 0.5e6} | set(watch))
     with ThreadPoolExecutor(4) as ex:
         snaps = {s: sn for s, sn in zip(cand, ex.map(scs_deep.snapshot, cand)) if sn}
-    log.info("underdog radar: %d snapshots of %d candidates", len(snaps), len(cand))
     cost = fairvalue.coe(cfg, policy_rate)
-    rows = []
+    rows, skipped = [], {}
     for s, sn in snaps.items():
         v = sn["values"]
-        fv = fairvalue.compute(sn, cost)
+        close = (act.get(s) or {}).get("trading_close")
+        probs = checks.basic(sn, close)
+        if probs:
+            skipped[s] = probs[0]
+            continue
+        keys, ok = checks.last4(sn.get("eps_quarters") or {})
+        quick_ttm = sum(sn["eps_quarters"][k] for k in keys) if ok and len(keys) == 4 else None
+        fv = fairvalue.compute(sn, cost, quick_ttm, None)
         rows.append({"sym": s, "name": sn["name"], "sector": sn["sector"], "price": v.get("price"), "mcap": v.get("mktcap") or 0,
                      "adtv": (v.get("avgvol") or 0) * (v.get("price") or 0), "pb": fv.get("pb"), "fv": fv,
-                     "chg": (act.get(s) or {}).get("trading_change")})
+                     "chg": (act.get(s) or {}).get("trading_change"), "close": close})
+    log.info("underdog radar: %d snapshots of %d candidates, %d passed the basic checks", len(snaps), len(cand), len(rows))
     rows.sort(key=lambda r: -r["mcap"])
     for i, r in enumerate(rows):
         r["large"] = i < 30
-    ups = sorted(r["fv"]["upside"] for r in rows if r["fv"].get("upside") is not None)
+    gaps = sorted(r["fv"]["epv_gap"] for r in rows if r["fv"].get("epv_gap") is not None)
     for r in rows:
-        u = r["fv"].get("upside")
-        r["upside_rank"] = (sum(x <= u for x in ups) / len(ups) * 100) if u is not None and ups else None
+        u = r["fv"].get("epv_gap")
+        r["upside_rank"] = (sum(x <= u for x in gaps) / len(gaps) * 100) if u is not None and gaps else None
     small = [r for r in rows if not r["large"] and r["adtv"] >= UD_ADTV]
-    backed = [r for r in small if r["pb"] and 0 < r["pb"] <= 1.2]
-    backed.sort(key=lambda r: -(r["fv"].get("upside") if r["fv"].get("upside") is not None else -999))
+    cands = sorted([r for r in small if r["pb"] and 0 < r["pb"] <= 1.2],
+                   key=lambda r: -(r["fv"].get("epv_gap") if r["fv"].get("epv_gap") is not None else -999))
+    want = int(conf.get("max_list", 10))
+    backed = []
+    for r in cands[: want * 3]:
+        if len(backed) >= want:
+            break
+        ver = verify(r["sym"], snaps[r["sym"]], r["close"], cost)
+        if ver["problems"]:
+            skipped[r["sym"]] = ver["problems"][0]
+            continue
+        backed.append({**r, "fv": ver["fv"], "notes": ver["notes"]})
     # today's tested trigger: good results + up 3% + P/B <= 1.2 (results announced today or the session before)
-    days = sorted({f"{r['date']:%Y-%m-%d}" for r in scs.results() if r.get("date")})
+    res = scs.results()
+    days = sorted({f"{x['date']:%Y-%m-%d}" for x in res if x.get("date")})
     recent = days[-2:] if days and days[-1] == session else days[-1:]
     by_sym = {r["sym"]: r for r in small}
-    triggers, good_any = [], []
-    for a in scs.results():
+    triggers = []
+    for a in res:
         sym = (a.get("company_code") or "").strip()
         if not a.get("date") or f"{a['date']:%Y-%m-%d}" not in recent or sym not in by_sym:
             continue
@@ -283,19 +351,52 @@ def radar(cfg: dict, session: str, policy_rate: float | None) -> dict:
         r = by_sym[sym]
         px, chg = r["price"], r["chg"]
         react = chg / (px - chg) * 100 if px and chg is not None and px - chg else None
-        item = {**r, "label": ass["label"], "eps_line": earnings.eps_line(ass), "react": react}
-        if react is not None and react >= 3 and r["pb"] and r["pb"] <= 1.2:
-            triggers.append(item)
-        else:
-            good_any.append(item)
+        if react is None or react < 3 or not r["pb"] or r["pb"] > 1.2:
+            continue
+        ver = verify(sym, snaps[sym], r["close"], cost)
+        if ver["problems"]:
+            skipped[sym] = ver["problems"][0]
+            continue
+        triggers.append({**r, "fv": ver["fv"], "label": ass["label"], "eps_line": earnings.eps_line(ass), "react": react,
+                         "ver": ver})
     meetings = scs.board_meetings()
     details = []
-    for w in watch:
-        if w in snaps:
-            try:
-                details.append(watch_detail(w, snaps[w], next(r["fv"] for r in rows if r["sym"] == w), meetings, session))
-            except Exception:  # noqa: BLE001
-                log.exception("underdog watch %s failed", w)
+    for w in watch + [t["sym"] for t in triggers if t["sym"] not in watch]:
+        if w not in snaps:
+            continue
+        try:
+            row = next((r for r in rows if r["sym"] == w), None)
+            ver = next((t["ver"] for t in triggers if t["sym"] == w), None) or verify(
+                w, snaps[w], (act.get(w) or {}).get("trading_close"), cost)
+            det = watch_detail(w, snaps[w], ver, meetings, session)
+            det["rank"] = row.get("upside_rank") if row else None
+            det["trigger"] = any(t["sym"] == w for t in triggers)
+            details.append(det)
+        except Exception:  # noqa: BLE001
+            log.exception("underdog detail %s failed", w)
+    for s, why in skipped.items():
+        log.info("not shown, data check: %s: %s", s, why)
     return {"session": session, "coe": cost, "n": len(rows), "n_small": len(small), "triggers": triggers,
-            "good_any": good_any[:6], "backed": backed[: int(conf.get("max_list", 10))], "n_backed": len(backed),
-            "watch": details, "rows": rows}
+            "backed": backed, "n_backed": len(cands), "watch": details, "rows": rows, "skipped": skipped,
+            "snaps": snaps, "act": act}
+
+
+def details_for(cfg: dict, session: str, policy_rate: float | None, syms: list[str]) -> list[dict]:
+    """On-demand: verified one-page details for the given stocks only (no market-wide scan)."""
+    from . import fairvalue
+    from .common import log
+    from .sources import scs, scs_deep
+    act = {r["company_code"].strip(): r for r in scs.daily_activity() if r.get("company_code")}
+    cost = fairvalue.coe(cfg, policy_rate)
+    meetings = scs.board_meetings()
+    out = []
+    for s in syms:
+        sn = scs_deep.snapshot(s)
+        if not sn:
+            log.warning("on-demand: no snapshot for %s", s)
+            continue
+        ver = verify(s, sn, (act.get(s) or {}).get("trading_close"), cost)
+        det = watch_detail(s, sn, ver, meetings, session)
+        det["rank"], det["trigger"] = None, False
+        out.append(det)
+    return out

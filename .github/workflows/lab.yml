@@ -19,6 +19,11 @@ on:
           - lab --dry-run --force
           - whereis
           - chats
+          - selftest
+      symbol:
+        description: "Any stock(s) to analyse now, e.g. STCL or STCL,LUCK (leave empty for the daily run)"
+        required: false
+        default: ""
 
 # (renamed 2026-11-12: run #3 got stuck 'queued' in the old group on GitHub's side and could not be cancelled)
 concurrency:
@@ -78,7 +83,14 @@ jobs:
           TELEGRAM_RESEARCH_CHAT_ID: ${{ secrets.TELEGRAM_RESEARCH_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TZ: Asia/Karachi
-        run: python -m pipeline ${{ inputs.command || 'lab' }}
+          SYMBOL: ${{ inputs.symbol }}
+        run: |
+          SYMBOL=$(printf '%s' "$SYMBOL" | tr -cd 'A-Za-z0-9,')
+          if [ -n "$SYMBOL" ]; then
+            python -m pipeline lab --analyse "$SYMBOL"
+          else
+            python -m pipeline ${{ inputs.command || 'lab' }}
+          fi
 
       - name: Keep the news pipeline's state out of this workflow
         if: always()

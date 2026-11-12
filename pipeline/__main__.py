@@ -56,6 +56,8 @@ def main() -> None:
     lb.add_argument("--dry-run", action="store_true")
     lb.add_argument("--force", action="store_true")
     lb.add_argument("--symbols", default="", help="comma-separated; default config lab.symbols")
+    lb.add_argument("--analyse", default="", help="any stock(s), comma-separated: full analysis now, always sent")
+    sub.add_parser("selftest", help="check every Research Lab formula and the data sources")
     rv = sub.add_parser("review", help="replay recent important headlines through the main-channel editor")
     rv.add_argument("--hours", type=float, default=36)
     so = sub.add_parser("sotd", help="Stock of the Day: pick today's company, build the report, post it")
@@ -70,9 +72,13 @@ def main() -> None:
 
     if args.cmd == "lab":
         from .lab import run as lab
-        syms = [x.strip().upper() for x in args.symbols.split(",") if x.strip()]
-        lab(load_config(), args.dry_run, args.force, syms or None)
+        on_demand = [x.strip().upper() for x in args.analyse.replace(" ", ",").split(",") if x.strip()]
+        syms = on_demand or [x.strip().upper() for x in args.symbols.split(",") if x.strip()]
+        lab(load_config(), args.dry_run, args.force, syms or None, only=bool(on_demand))
         return
+    if args.cmd == "selftest":
+        from .selftest import run as selftest
+        sys.exit(1 if selftest() else 0)
     if args.cmd == "review":
         from .review import run as review
         review(load_config(), args.hours)

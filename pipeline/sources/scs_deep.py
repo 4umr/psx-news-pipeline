@@ -60,7 +60,8 @@ FIELDS = {
 }
 DESC = {"leps": "lepsdesc", "epslq": "epslqdesc", "laeps": "laepsdesc", "pe": "pedesc", "epe": "epedesc",
         "eeg": "eegdesc", "bv": "bvdesc", "pbv": "pbvdesc", "roe": "roedesc", "d": "ddesc", "dy": "dydesc",
-        "ed": "eddesc", "edy": "edydesc"}
+        "ed": "eddesc", "edy": "edydesc", "ear": "eardesc", "pr": "prdesc", "cr": "crdesc", "qr": "qrdesc",
+        "cps": "cpsdesc", "tda": "tdadesc"}
 
 
 def snapshot(sym: str) -> dict | None:

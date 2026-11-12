@@ -11,15 +11,22 @@ MONTHS = ["", "January", "February", "March", "April", "May", "June", "July", "A
 
 def fv_items(fv: dict, rank: float | None) -> list:
     """Tiles for the blue-chip cards: fair value, gap, rank, and assets against liabilities."""
-    items = [("Fair value (earnings power)", "loss-making" if not fv.get("fair") else f"Rs {fv['fair']:,.2f}", None),
+    fair = fv.get("fair")
+    items = [("Fair value (3 methods)", "not given" if not fair else f"Rs {fair:,.2f}", None),
              ("Gap to price", "n/a" if fv.get("upside") is None else f"{fv['upside']:+.0f}%", None),
-             ("Cheaper than", "n/a" if rank is None else f"{rank:.0f}% of stocks", None),
-             ("Asset value (book)", "n/a" if fv.get("nav") is None else f"Rs {fv['nav']:,.2f}", None)]
+             ("Range of methods", "n/a" if not fair else f"{fv['low']:,.0f} to {fv['high']:,.0f}", None),
+             ("Book value", "n/a" if fv.get("nav") is None else f"Rs {fv['nav']:,.2f}", None)]
     if fv.get("assets") and not fv.get("financial"):
-        items += [("Assets per share", f"Rs {fv['assets']:,.2f}", None),
-                  ("Liabilities per share", f"Rs {fv['liabilities']:,.2f}", None),
+        y = fv.get("bs_year", "")
+        items += [(f"Assets / share, FY{y[2:]}", f"Rs {fv['assets']:,.2f}", None),
+                  (f"Liabilities / share, FY{y[2:]}", f"Rs {fv['liabilities']:,.2f}", None),
                   ("Liabilities / assets", f"{fv['liab_pct']:.0f}%", None),
-                  ("Current ratio", "n/a" if fv.get("cr") is None else f"{fv['cr']:.2f}x", None)]
+                  ("Cheaper than", "n/a" if rank is None else f"{rank:.0f}% of stocks", None)]
+    else:
+        items += [("Earnings value gap", "n/a" if fv.get("epv_gap") is None else f"{fv['epv_gap']:+.0f}%", None),
+                  ("Required return", f"{fv['coe'] * 100:.0f}%", None),
+                  ("Growth used", "n/a" if fv.get("g") is None else f"{fv['g'] * 100:.1f}%", None),
+                  ("Cheaper than", "n/a" if rank is None else f"{rank:.0f}% of stocks", None)]
     return items
 
 
@@ -62,23 +69,24 @@ def _radar(c: Card, r: dict) -> int:
     rows = []
     for b in r["backed"]:
         fv = b["fv"]
-        gap = fv.get("upside")
+        gap = fv.get("epv_gap")
         bad = any(k in f for f in fv.get("flags") or [] for k in ("debt", "current", "liabilities"))
         rows.append([b["sym"], f"{b['price']:,.2f}", f"{b['pb']:.2f}x",
                      "loss" if gap is None else (f"{gap:+.0f}%", UP if gap > 0 else DOWN),
                      "financial" if fv.get("financial") else ("n/a" if fv.get("liab_pct") is None else f"{fv['liab_pct']:.0f}%"),
                      ("flag", DOWN) if bad else ("clean", UP)])
     y = c.grid(y, "Asset-backed list (P/B 1.2x or less)",
-               ["Stock", "Price", "P/B", "Fair value gap", "Liab./assets", "Debt, liquidity"], rows,
+               ["Stock", "Price", "P/B", "Earnings value gap", "Liab./assets", "Debt, liquidity"], rows,
                [30, 250, 390, 580, 760, 970], ["left", "right", "right", "right", "right", "right"],
-               right_title="largest gap first", row_h=40, max_rows=10)
+               right_title="every figure cross-checked", row_h=40, max_rows=10)
     y = c.highlights(y, [
         TRIGGER_TEXT,
         "Not enough on their own (2010-2026, versus similar stocks over 3 months): buying at a 3-year price floor "
         "-2.2%, floor plus a volume burst -2.9%, far below the all-time high -1.1%, strong season months about 0%.",
-        f"Fair value gap: the last 4 quarters' profit valued at a {r['coe'] * 100:.0f}% yearly return with no growth, "
-        "against the price. Small and mid caps with a 50%+ gap beat similar stocks by 4.8% over 3 months in 2022-2026; "
-        "cheap P/E did not work before 2023. Refineries and other cyclicals often look cheap on this measure."],
+        f"Earnings value gap: the last 4 quarters' profit (checked against the company's own results) valued at a "
+        f"{r['coe'] * 100:.0f}% yearly return with no growth, against the price. Small and mid caps with a 50%+ gap beat "
+        "similar stocks by 4.8% over 3 months in 2022-2026; cheap P/E did not work before 2023. Refineries and other "
+        "cyclicals often look cheap on this measure."],
         title="What the history says", max_lines=14)
     c.text(c.L, y + 8, "Experiment: public data screened by fixed formulas and scored against the market. Not investment advice.",
            10.5, t["muted"], italic=True)
@@ -116,14 +124,23 @@ def _watch(c: Card, w: dict, session: str) -> int:
     def rs(x):
         return "n/a" if x is None else f"Rs {x:,.2f}"
 
+    if w.get("problems"):
+        y = c.highlights(y, [f"{x}" for x in w["problems"]] + ["Figures that depend on it are not shown."],
+                         title="Data check did not pass", max_lines=6)
+
     y = c.tiles(y, [("Book value / share", rs(w["bv"]), None), ("Assets / share", rs(fv.get("assets")), None),
                     ("Liabilities / share", rs(fv.get("liabilities")), None),
                     ("Liabilities / assets", "n/a" if fv.get("liab_pct") is None else f"{fv['liab_pct']:.0f}%", None),
                     ("Debt to equity", "n/a" if fv.get("tde") is None else f"{fv['tde'] / 100:.1f}x", None),
                     ("Current ratio", "n/a" if fv.get("cr") is None else f"{fv['cr']:.2f}x", None),
                     ("Cash / share", rs(fv.get("cash")), None),
-                    ("Fair value (earnings)", "loss-making" if not fv.get("fair") else rs(fv["fair"]), None)],
-                title="Assets against liabilities", cols=4, tile_h=88)
+                    ("Fair value (3 methods)", ("loss-making" if (w.get("ttm") or 0) <= 0 else "not verified")
+                     if not fv.get("fair") else rs(fv["fair"]), None)],
+                title=f"Assets against liabilities (FY{str(fv.get('bs_year', ''))[2:]} year end)" if fv.get("bs_year")
+                else "Assets against liabilities", cols=4, tile_h=88)
+    if fv.get("fair"):
+        from .fairvalue import lines as fv_lines
+        y = c.highlights(y, fv_lines(fv)[:1], title="Fair value", max_lines=5)
     hist = []
     if lv.get("hf"):
         hist.append(f"3-year floor (10% of closes were lower): Rs {lv['hf']:,.2f}; price is {(p / lv['hf'] - 1) * 100:+.0f}% from it")
@@ -144,6 +161,8 @@ def _watch(c: Card, w: dict, session: str) -> int:
     if w.get("flags"):
         y = c.highlights(y, w["flags"], title="Red flags", max_lines=7)
     wait = ([f"Next board meeting: {w['meeting']}"] if w.get("meeting") else []) + [TRIGGER_TEXT]
+    if w.get("notes"):
+        wait.append("Data note: " + "; ".join(w["notes"]))
     y = c.highlights(y, wait, title="What to wait for", max_lines=7)
     c.text(c.L, y + 8, "Experiment: public data screened by fixed formulas. Not investment advice.", 10.5, t["muted"], italic=True)
     return y + 30

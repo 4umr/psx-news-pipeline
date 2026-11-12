@@ -159,6 +159,35 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   sheet), next board meeting, the trigger. Blue-chip cards gain a "Fair value and balance sheet" tile panel and
   the AI dossier gets the fair value lines.
 
+## Lab v2 (2026-11-12): send only when it matters, verified data, any stock on request
+- Umer: "don't need everything in a day, give a call when the opportunity is there; self-sufficient, error free,
+  any stock; underdog, fair value, assets vs liabilities 100% correct; most dependable fair value formula".
+- SENDING (`lab.run`): calls for the 5 blue chips are made and LOGGED every trading day (scoring continues), but a
+  card is sent only for `_bluechip_reasons`: first view, view changed, confidence rose to 4+, board meeting or
+  ex-date within 5 sessions (once per event; state `calls.json` -> `sent`). Underdogs (`_underdog_reasons`, state
+  `ud_state`): tested trigger, added to watch list, asset-zone state change (inside/above/below/broken), volume
+  burst (3x + up 3%), new quarterly results. Friday (or --force): roundup text with all views + record + weekly
+  radar card. Quiet day = nothing sent. Gemini busy -> `_call_retry` waits 30/60 s (free quota shared with news).
+- ON REQUEST: lab.yml input `symbol` (e.g. STCL or STCL,LUCK) -> `lab --analyse X` -> AI view card + underdog card
+  for any stock now, always sent, dated today (live prices), no market scan (`underdog.details_for`, ~20 s).
+- CHECKS (`checks.py`, before anything is shown): snapshot price vs exchange close (1%, 5% in market hours),
+  4 consecutive quarters, BV > 0, 0 < equity/assets <= 100, P/B vs SCS (rounding + intraday allowed),
+  `trailing()`: TTM EPS from snapshot quarters + RESULTS ANNOUNCEMENTS (snapshot can be a quarter behind: STCL,
+  TATM missed 1Q27), the 4 used quarters cross-checked (>10% apart = problem, 2-10% = note; older quarters differ
+  where SCS restated for splits, LUCK/SYS ~80%, not checked), bonus issue in 12 months = problem. Book value
+  brought up to date for missing quarters (`underdog.verify`: + EPS - dividend% x face value), labelled estimate
+  (STCL 7.72 -> 6.10, P/B 1.17 -> 1.49: outside its asset zone). Stocks failing a check are not shown (logged).
+- FAIR VALUE v2 (`fairvalue.compute(snap, coe, ttm, bv_hist)`): median of EPV (ttm/COE), residual income
+  (BV x (ROE-g)/(COE-g), ROE = ttm/BV, g = ROE x retention capped 8% and COE-4) and DDM (payout >= 40%, last
+  full-year DPS); range + "methods agree" (range <= 50% of fair). Screens/radar still rank by the tested EPV gap.
+  Balance sheet at the last YEAR END (BV of the equity/assets period from book_values) so all figures share one
+  date. Liquidation / net-net value NOT computed (no current assets / current liabilities in the data).
+- SELF-TEST (`python -m pipeline selftest`, also run at the start of every Lab run; failure -> nothing sent +
+  admin note): hand-computed fair value (EPV 58.82, RI 66.67, DDM 72, median 66.67, assets 120, liabilities 72),
+  growth cap, quarter gaps, floor 324.9 on closes 1..1000, zone/break, season, ignition, trap flags, scoring
+  (entry next open: +3.92% at 5 sessions), plus live source checks on FFC and OGDC.
+- Delivery facts: main channel "News Feed" = Umer's (3 members, private); admin = his bot chat (confirmed).
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,
