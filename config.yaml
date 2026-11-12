@@ -299,7 +299,8 @@ topics:
     score: 9
     pk: true
     all:
-      - ['reserves', 'current account', 'balance of payments', 'external debt', 'external financing', 'rollover', 'roll over']
+      # 'reserves' only when the headline is not about oil and gas finds ("OGDCL discovers hydrocarbon reserves")
+      - ['^(?!.*\b(discover\w*|hydrocarbon|condensate|gas field|oil field|exploratory|well)\b).*\breserves\b', 'current account', 'balance of payments', 'external debt', 'external financing', 'rollover', 'roll over']
     why: "Reserves and the current account drive PKR stability and the country's ability to service debt."
 
   - name: fuel_prices

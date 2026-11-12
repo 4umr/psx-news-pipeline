@@ -1071,14 +1071,16 @@ def unusual_volume(now, state: State, cfg: dict, kse100: set[str]) -> list[Alert
             pct = f" · price {chg / (close - chg) * 100:+.1f}%"
         lines.append(f"🔎 <b>{esc(code)}</b> {vol / 1e6:,.2f}m shares — <b>{x:.1f}×</b> its 10-day average{pct}")
     text = (header("🔎", "Unusual volume", f"KSE-100 / watchlist · {now:%H:%M} PKT") + "\n" + "\n".join(lines) +
-            "\n\n💡 Volume spikes often come before or with news — check filings and headlines.")
+            "\n\n💡 Volume spikes often come with news: check filings and headlines. On PSX a volume burst on its own "
+            "has not predicted further gains (2010-2026 test), and after weak results it was followed by underperformance.")
     card = {"theme": "psx", "kicker": f"Unusual volume · {now:%H:%M} PKT",
             "title": f"{len(hits)} stock(s) trading far above normal volume",
             "rows_title": "Stock · volume vs 10-day average · price", "rows": [
                 (code, f"{vol / 1e6:,.2f}m shares · {x:.1f}x average",
                  f"{chg / (close - chg) * 100:+.1f}%" if close and chg is not None and close - chg else "",
                  chg if chg else None) for code, vol, x, close, chg in hits[:12]],
-            "why": "Volume spikes often come before or with news — check filings and headlines.",
+            "why": "Volume spikes often come with news: check filings and headlines. On PSX a volume burst on its own has "
+                   "not predicted further gains (2010-2026 test), and after weak results it was followed by underperformance.",
             "source": "PSX via SCS Trade"}
     return [Alert(text, 8, "volume", tags=["UnusualVolume", "KSE100"], extra={"card": card})]
 

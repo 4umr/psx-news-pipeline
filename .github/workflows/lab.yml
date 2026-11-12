@@ -48,6 +48,16 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt || (sleep 20 && pip install -r requirements.txt)
 
+      # Price database and company facts kept by the swing workflow (read only; updated at 17:40) for the daily scan
+      - name: Restore market data
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            state
+            data
+          key: psx-swing-v1-${{ github.run_id }}
+          restore-keys: psx-swing-v1-
+
       - name: Restore the call log
         id: cache
         uses: actions/cache/restore@v4
@@ -118,3 +128,15 @@ jobs:
           git commit -qm "lab backup $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" lab-data \
             && echo "Backed up" || echo "Backup push failed (will retry next time)"
+
+      # A failed run is reported privately (the self-test already reports data problems itself)
+      - name: Notify owner on failure
+        if: failure()
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ADMIN: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+        run: |
+          TOKEN=$(printf '%s' "$TOKEN" | tr -d '[:space:]'); ADMIN=$(printf '%s' "$ADMIN" | tr -d '[:space:]')
+          if [ -n "$ADMIN" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" -d chat_id="${ADMIN}"               --data-urlencode text="Research Lab: today's run failed; it retries tomorrow, or start it from the Actions page. Details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > /dev/null || true
+          fi

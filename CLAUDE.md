@@ -188,6 +188,25 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   (entry next open: +3.92% at 5 sessions), plus live source checks on FFC and OGDC.
 - Delivery facts: main channel "News Feed" = Umer's (3 members, private); admin = his bot chat (confirmed).
 
+## Daily stock scan + volume tests (2026-11-12) — Umer: "I expect some stocks daily", track volume / big investors
+- VOLUME TESTED 2010-2026 vs similar stocks (scratch vol_test.py, liquid >= Rs 2m, Mid/Small/Micro): burst (3x value,
+  up 3%) -1.3% over 60 sessions, 0/19 years (reliably negative); + near 3-month high -0.4%; quiet accumulation -0.7%;
+  burst AFTER BAD RESULTS (last 90 days) -3.9%, 2/16 years = strong warning; burst + good results + breakout +1.5%
+  (11/16, weak); burst + P/B <= 1.2 + good results +4.7% at 20 sessions (small sample). => volume is never shown alone.
+- `scan.py` (in lab.run every trading day, SENT DAILY, first card; config lab.underdog.daily_scan): sections
+  breakouts (results GOOD + up 3% today/yesterday, small/mid; + P/B <= 1.2 = breakout_backed), backed (radar's
+  verified P/B <= 1.2 list with EPV gap >= 50% and GOOD results in the last 90 days; cyclicals with a loss-making
+  5-year average marked), volume (burst + GOOD results + within 2% of the 60-session high), warnings (burst + BAD
+  results), following (flags of the last 10 sessions: move since flag vs KSE-100, still within 5% of the high).
+  Needs today's rows in state/prices.csv.gz: lab.yml restores the swing cache (state + data, read only) BEFORE
+  the lab cache. `_last_result` judges on the QUARTER EPS vs the same quarter a year earlier (annual label = 4th
+  quarter) and says so in the line. Flags logged in calls.json `scan_flags` / `calls_scan`, scored at 5/20.
+- Main-channel unusual-volume card text now states the test result (no chasing). Topic fix: 'reserves' no longer
+  matches oil/gas discoveries (OGDCL discovery was filed as forex reserves). lab.yml: failure alert to admin.
+- Fair value adds NORMALISED EARNINGS (5-year average EPS / COE) only when the year is abnormal (losses now, or
+  TTM outside 0.5-1.5x the average); RI only counted when g > 0 (else identical to EPV). STCL: losses now and on
+  average (-0.11): no fair value at all, book value Rs 6.10 is the only anchor (said on the card).
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,

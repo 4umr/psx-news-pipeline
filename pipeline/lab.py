@@ -550,6 +550,7 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
         notes.append(f"<b>{sym}</b>: {c['view']} ({c['confidence']}/5), {'; '.join(why)}")
     # ---- underdogs: scan every day, send only on a trigger or a change in a watched stock
     ud_conf = conf.get("underdog") or {}
+    scan_text = None
     friday = now_pkt().weekday() == 4
     if ud_conf.get("enabled", True):
         try:
@@ -570,6 +571,15 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
                     notes.append(f"<b>{w['sym']}</b> (underdog): {'; '.join(why)}")
             if (friday or force) and not only:
                 out_cards.append(("radar", radar_card(cfg, r), "Underdog radar · weekly"))
+            if not only and ud_conf.get("daily_scan", True):
+                from . import scan
+                from .underdogcard import scan_card
+                sc = scan.build(cfg, session, r, st, idx)
+                out_cards.insert(0, ("scan", scan_card(cfg, sc), f"Daily stock scan · {session}"))
+                scan_text = scan.text(sc)
+                open_sc = [x for x in st.get("calls_scan", []) if not all(f"r{h}" in x for h in HORIZONS)]
+                if open_sc:
+                    score({"calls": open_sc}, idx, {x["sym"]: _history(x["sym"]) for x in open_sc[-30:]})
             open_ud = [x for x in st.get("underdog", []) if not all(f"r{h}" in x for h in HORIZONS)]
             if open_ud and not only:
                 score({"calls": open_ud}, idx, {x["sym"]: _history(x["sym"]) for x in open_ud})
@@ -591,6 +601,8 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
         text = head + "\n" + "\n".join(notes) if notes else head
     else:
         text = None
+    if scan_text:  # the daily scan goes out every trading day; other cards only when something matters
+        text = scan_text + ("\n\n" + text if text and text != head else "")
     if text or out_cards:
         send(text, out_cards)
         log.info("lab: sent %d cards", len(out_cards))

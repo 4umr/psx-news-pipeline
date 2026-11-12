@@ -170,3 +170,47 @@ def _watch(c: Card, w: dict, session: str) -> int:
 
 def watch_card(cfg: dict, w: dict, session: str) -> bytes:
     return _two_pass(cfg, _watch, w, session)
+
+
+# ---------------------------------------------------------------- daily stock scan (one page)
+def _scan(c: Card, sc: dict) -> int:
+    from .scan import TESTED
+    t = c.t
+    y = _head(c, "Research Lab · daily stock scan", sc["session"])
+    c.text(c.L, y + 40, "DAILY STOCK SCAN", 48, CREAM, bold=True, serif=True)
+    c.text(c.L + 2, y + 90, "Stocks that met a tested condition today", 22, t["title2"], bold=True, serif=True)
+    y += 120
+    sections = (("breakouts", "Results breakouts"), ("backed", "Asset-backed and improving"),
+                ("volume", "Volume with good results"), ("warnings", "Warnings: volume after weak results"))
+    shown = False
+    for key, title in sections:
+        items = sc.get(key) or []
+        if not items:
+            continue
+        shown = True
+        y = c.entries(y, title, [(x["sym"], f"Rs {x['price']:,.2f}" + (f"  ({x['move']:+.1f}% today)" if x.get("move") is not None else ""),
+                                  x["why"], TESTED[x["kind"]].split(":")[0], -1 if x["kind"] == "warning" else 1)
+                                 for x in items], right_title="")
+    if not shown:
+        y = c.highlights(y, ["No stock met any of the tested conditions today. Quiet days are normal: the conditions "
+                             "are strict on purpose."], title="Today", max_lines=4)
+    fol = sc.get("following") or []
+    if fol:
+        rows = [[f["sym"], f["since"][5:], {"warning": "warning"}.get(f["kind"], f["kind"].replace("_", " ")),
+                 (f"{f['move']:+.1f}%", UP if f["move"] > 0 else DOWN), (f"{f['vs_kse']:+.1f}", UP if f["vs_kse"] > 0 else DOWN),
+                 "n/a" if f["held"] is None else ("yes", UP) if f["held"] else ("no", DOWN)] for f in fol]
+        y = c.grid(y, "Following: flagged in the last 10 sessions", ["Stock", "Flagged", "Why", "Since", "Vs KSE-100", "Near high"],
+                   rows, [30, 200, 330, 640, 820, 970], ["left", "left", "left", "right", "right", "right"], row_h=40, max_rows=10)
+    y = c.highlights(y, [TESTED["breakout"].replace("tested", "Results breakouts, tested"),
+                         TESTED["backed"].replace("tested", "Asset-backed and improving, tested"),
+                         TESTED["warning"].replace("tested", "Warnings, tested"),
+                         "A volume burst on its own lagged similar stocks (-1.3% over 3 months, 0 of 19 years), so it is "
+                         "only shown together with results."] + [n for n in sc.get("notes", [])],
+                     title="How to read this", max_lines=10)
+    c.text(c.L, y + 8, "Experiment: fixed, tested formulas on public data, scored against the market. Not investment advice.",
+           10.5, t["muted"], italic=True)
+    return y + 30
+
+
+def scan_card(cfg: dict, sc: dict) -> bytes:
+    return _two_pass(cfg, _scan, sc)
