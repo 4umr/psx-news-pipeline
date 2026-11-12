@@ -40,6 +40,11 @@ def formulas() -> list[str]:
     ann = {"2022": 3.0, "2023": 3.0, "2024": 3.0, "2025": 3.0, "2026": 3.0}
     f4 = fairvalue.compute({**snap, "eps_annual": ann}, 0.17, -2.0, {})
     ok("loss now, 5-year average 3: fair = 17.65", _close(f4.get("fair"), 17.647))
+    try:
+        fairvalue.lines(f4)
+        ok("loss now: the fair value sentence is written", True)
+    except Exception as e:  # noqa: BLE001
+        ok(f"loss now: the fair value sentence is written ({e})", False)
     # a spike: trailing 30 vs average 10 -> normalised 58.82 joins EPV 176.47, RI 288.89, DDM 72 -> median 124.24
     f5 = fairvalue.compute({**snap, "eps_annual": {k: 10.0 for k in ann}}, 0.17, 30.0, {})
     ok("spike year: median of 4 methods = 124.24", _close(f5.get("fair"), 124.235))

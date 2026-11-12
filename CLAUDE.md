@@ -207,6 +207,21 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   TTM outside 0.5-1.5x the average); RI only counted when g > 0 (else identical to EPV). STCL: losses now and on
   average (-0.11): no fair value at all, book value Rs 6.10 is the only anchor (said on the card).
 
+## Scan research + buy/sell levels (2026-11-12) — Umer: "add all the Research Lab stuff to the daily stocks"
+- Every daily-scan stock (up to `lab.underdog.research_max` 6, sections take turns: breakouts, backed, volume,
+  warnings; not repeated within 5 sessions for the same reason) gets the full blue-chip card: dossier, AI view
+  (logged in calls.json `calls_scan_ai`, scored at 5/20), fair value + balance sheet, technicals, chart, quarters.
+  Kicker "Research Lab · daily scan"; text lines under "Full research on today's scan stocks". No AI -> NO_CALL card.
+- `levels.py` on every Lab card: SETUP from three independent families, one vote each (results/scan section,
+  value: P/B <= 1.2 with good results or fair value gap 30%+, AI view conf >= 3); scan warning = -2.
+  BUY SIDE >= 3, LEANING BUY 1-2, MIXED 0, LEANING SELL, SELL SIDE <= -3. Technicals never vote (price patterns
+  had no edge); they give the LEVELS: swing lows/highs of 5-120 sessions -> buy zone S1..S1x1.03, fails below
+  (next support within 8%, else S1 x 0.95), targets R1/R2, reward to risk; sell side: sell zone R1x0.97..R1,
+  support breaks below S1. `levels.technicals(px)` fills MACD/RSI/SMA for stocks SCS does not cover (74 only).
+- `lab._history` now has high/low and `adjust_jumps` (a move beyond 10% / Rs 1 = bonus or split; BNL 10:1 Dec 2025).
+  Quarter chart merges the verified quarters (snapshot lags). fairvalue.lines crashed for normalised-only fair
+  values (no 'g'): fixed + self-test.
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,

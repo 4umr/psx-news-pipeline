@@ -18,7 +18,7 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
     from .lab import record_line
     v, t = d["snap"]["values"], c.t
     y = 160
-    c.chip(c.L, y, "Research Lab · experiment", "#55665b")
+    c.chip(c.L, y, d.get("kicker") or "Research Lab · experiment", "#55665b")
     c.text(c.R, y, sp(datetime.strptime(session, "%Y-%m-%d").strftime("%a %d %b %Y")), 11, t["muted"], ha="right")
     y += 40
     c.text(c.L, y + 44, d["sym"], 64, CREAM, bold=True, serif=True)
@@ -46,10 +46,35 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
         c.text(c.L + 360, y + 46 + j * 32, ln, 15.5, CREAM)
     y += h + 16
 
+    # buy and sell levels: direction from the tested signals, levels from the chart
+    su = d.get("setup")
+    if su:
+        scol = UP if su["score"] >= 1 else DOWN if su["score"] <= -1 else "#b8862a"
+        z, rr = su.get("zone"), su.get("rr")
+        if su.get("side") == "sell":
+            sz = su.get("sell_zone")
+            y = c.strip(y, [("Setup, tested signals", su["label"], scol),
+                            ("Sell zone (resistance), Rs", f"{sz[0]:,.2f} to {sz[1]:,.2f}" if sz else "at a high", DOWN),
+                            ("Support breaks below, Rs", f"{su['exit']:,.2f}" if su.get("exit") else "n/a", DOWN)], h=104)
+        else:
+            y = c.strip(y, [("Setup, tested signals", su["label"], scol),
+                            ("Buy zone, Rs", f"{z[0]:,.2f} to {z[1]:,.2f}" if z else "n/a", None),
+                            ("Reward to risk", f"{rr:.1f} to 1" if rr is not None and rr > 0 else "n/a", None)], h=104)
+            y = c.strip(y, [("Setup fails below, Rs", f"{su['risk']:,.2f}" if su.get("risk") else "n/a", DOWN),
+                            ("Target 1, Rs", f"{su['r1']:,.2f}" if su.get("r1") else "at a high", UP),
+                            ("Target 2, Rs", f"{su['r2']:,.2f}" if su.get("r2") else "n/a", UP)], h=104)
+        from .levels import lines as su_lines
+        extra = []
+        if su.get("asset_zone"):
+            extra.append(f"Asset zone (0.8x to 1.2x book value): Rs {su['asset_zone'][0]:,.2f} to {su['asset_zone'][1]:,.2f}")
+        extra.append("Technicals set the levels only: chart patterns had no edge on PSX in the 2010-2026 tests, "
+                     "results and value did.")
+        y = c.highlights(y, su_lines(su) + extra, title="Buy or sell: how the setup is built", max_lines=11)
+
     # key numbers
     a20, b20 = d["rel"].get(20) or (None, None)
     rel20 = a20 - b20 if a20 is not None and b20 is not None else None
-    hi52 = v.get("52high")
+    hi52 = max((p[2] for p in d["px"][-250:]), default=None) or v.get("52high")  # adjusted for bonus / split
     off_hi = (v["price"] / hi52 - 1) * 100 if hi52 and v.get("price") else None
     y = c.tiles(y, [("Expected P/E (SCS)", _f(v.get("epe")), None), ("Price to book", _f(v.get("pbv"), "x", 2), None),
                     ("Expected dividend yield", _f(v.get("edy"), "%"), None), ("Return on equity", _f(v.get("roe"), "%"), None),
@@ -95,7 +120,8 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
         y += ph + 16
 
     # quarterly EPS vs the same quarter a year earlier
-    q = d["snap"].get("eps_quarters") or {}
+    # the snapshot can be a quarter behind: add the quarters checked against the results announcements
+    q = {**(d["snap"].get("eps_quarters") or {}), **((d.get("ver") or {}).get("quarters") or {})}
     keys = sorted(q, key=lambda k: (k[:4], k[-1]))[-5:]
     pairs = [(k, q[k], q.get(f"{int(k[:4]) - 1} {k[-2:]}")) for k in keys]
     pairs = [p for p in pairs if p[2] is not None]
@@ -114,8 +140,9 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
         for i, (k, now_, ly) in enumerate(pairs):
             fx = c.L + 40 + 920 * (i + 0.6) / (len(pairs) + 0.2)
             g = (now_ / ly - 1) * 100 if ly and ly > 0 else None
-            c.text(fx, y + 76, f"{now_:.2f}" + (f" ({g:+.0f}%)" if g is not None else ""), 11.5,
-                   _col(g) if g is not None else CREAM, bold=True, ha="center")
+            tag = f" ({g:+.0f}%)" if g is not None else (" (to profit)" if now_ > 0 > ly else "")
+            c.text(fx, y + 76, f"{now_:.2f}" + tag, 11.5, _col(g) if g is not None else (UP if tag else CREAM),
+                   bold=True, ha="center")
             c.text(fx, y + ph - 26, f"FY{k[2:4]} {k[-2:]}", 10.5, t["muted"], ha="center")
         y += ph + 16
 
@@ -145,6 +172,12 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
                       UP if sg["signal"] == "Buy" else DOWN))
     if rc:
         items.append(("SCS record here, 3y", f"{rc['win']}% right", None))
+    if tech.get("sma50") and v.get("price") and len(items) < 4:
+        gap = (v["price"] / tech["sma50"] - 1) * 100
+        items.append(("Price vs 50-day avg", f"{gap:+.1f}%", _col(gap)))
+    if tech.get("sma200") and v.get("price") and len(items) < 4:
+        gap = (v["price"] / tech["sma200"] - 1) * 100
+        items.append(("Price vs 200-day avg", f"{gap:+.1f}%", _col(gap)))
     y = c.strip(y, items[:4], h=100)
     lines = _wrap("Lab record: " + record_line(sb), 930, 12.5)[:3]
     ph = 40 + 26 * len(lines)

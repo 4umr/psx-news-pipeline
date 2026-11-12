@@ -27,7 +27,7 @@ from urllib.parse import quote_plus
 
 import numpy as np
 
-from . import analysis, earnings
+from . import analysis, earnings, levels
 from .common import ROOT, clean_ws, esc, log, now_pkt
 from .sources import scs, scs_deep
 
@@ -86,9 +86,25 @@ def _f(v, d=2):
 def _history(sym: str, days: int = 420) -> list[tuple]:
     end = datetime.now()
     rows = scs.price_history(sym, end - timedelta(days=days), end)
-    out = [(r["date"].strftime("%Y-%m-%d"), r.get("trading_open"), r.get("trading_close"), r.get("trading_vol") or 0)
+    out = [(r["date"].strftime("%Y-%m-%d"), r.get("trading_open"), r.get("trading_close"), r.get("trading_vol") or 0,
+            r.get("trading_high"), r.get("trading_low"))
            for r in rows if r.get("date") and r.get("trading_close")]
-    return sorted(out)
+    return adjust_jumps(sorted(out))
+
+
+def adjust_jumps(px: list[tuple]) -> list[tuple]:
+    """scstrade prices are not adjusted for bonus issues and splits. PSX limits a day's move to 10% (or Rs 1), so a
+    bigger jump between two sessions is a corporate action: earlier prices are scaled by it (BNL fell 96% in a day)."""
+    out = list(px)
+    for i in range(len(out) - 1, 0, -1):
+        c0, c1 = out[i - 1][2], out[i][2]
+        if not c0 or not c1 or abs(c1 - c0) <= max(0.105 * c0, 1.05):
+            continue
+        f = (out[i][1] or c1) / c0  # the first open after the action is the cleanest ratio
+        sc = lambda x: x * f if x else x  # noqa: E731
+        out[:i] = [(p[0], sc(p[1]), sc(p[2]), (p[3] / f if p[3] else p[3]), *(sc(x) for x in p[4:])) for p in out[:i]]
+        log.info("lab: price history adjusted by %.4f before %s (corporate action)", f, out[i][0])
+    return out
 
 
 def _index(days: int = 420) -> dict[str, float]:
@@ -135,7 +151,7 @@ def dossier(sym: str, shared: dict, cfg: dict) -> dict | None:
     px = _history(sym)
     idx = shared["index"]
     d = {"sym": sym, "name": snap["name"], "sector": snap["sector"], "snap": snap, "px": px,
-         "tech": shared["tech"].get(sym) or {}, "signal": scs_deep.signal(sym), "record": scs_deep.signal_record(sym),
+         "tech": shared["tech"].get(sym) or levels.technicals(px), "signal": scs_deep.signal(sym), "record": scs_deep.signal_record(sym),
          "reports": scs_deep.research(sym)[:4], "opinions": shared["opinions"].get(sym, [])[:2]}
     d["rel"] = {n: _rel(px, idx, n) for n in (5, 20, 60, 120, 250)}
     d["index_map"] = idx
@@ -239,7 +255,7 @@ def _text(d: dict, shared: dict) -> str:
             L.append("RESULTS ANNOUNCED: " + "; ".join(parts))
     t = d["tech"]
     if t:
-        L.append(f"TECHNICALS (SCS): MACD daily {t.get('macddaily')}, weekly {t.get('macdweekly')}; RSI {_f(t.get('rsidaily'), 0)}; "
+        L.append(f"TECHNICALS ({t.get('src', 'SCS')}): MACD daily {t.get('macddaily')}, weekly {t.get('macdweekly')}; RSI {_f(t.get('rsidaily'), 0)}; "
                  f"support {_f(t.get('support1'))} and {_f(t.get('support2'))}; resistance {_f(t.get('resistance1'))} and "
                  f"{_f(t.get('resistance2'))}; 50-day average {_f(t.get('sma50'))}; 100-day average {_f(t.get('sma100'))}")
     if sg := d["signal"]:
@@ -443,6 +459,58 @@ def _underdog_reasons(w: dict, prev: dict | None) -> list[str]:
     return why
 
 
+NO_CALL = {"view": "No view", "confidence": 0, "thesis": [], "risks": [], "catalysts": [],
+           "headline": "AI view not available today; the levels and the tested checks on this card are rule-based."}
+
+
+def _scan_picks(sc: dict, st: dict, sessions: list[str], skip: list[str], n: int) -> list[dict]:
+    """Stocks of today's scan that get the full research card: best-tested sections first, warnings last;
+    a stock researched in the last 5 sessions for the same reason is not repeated (it stays in Following)."""
+    from .scan import TESTED
+    done = st.setdefault("scan_research", {})
+    recent = set(sessions[-6:-1])
+    queues = []
+    for key in ("breakouts", "backed", "volume", "warnings"):
+        q = [x for x in sorted(sc.get(key) or [], key=lambda x: x["kind"] != "breakout_backed")
+             if x["sym"] not in skip and not ((done.get(x["sym"]) or {}).get("date") in recent
+                                               and (done.get(x["sym"]) or {}).get("kind") == x["kind"])]
+        queues.append(q)
+    out: list[dict] = []
+    while len(out) < n and any(queues):  # take turns, so every section is researched, breakouts first
+        for q in queues:
+            while q and any(o["sym"] == q[0]["sym"] for o in out):
+                q.pop(0)
+            if q and len(out) < n:
+                x = q.pop(0)
+                out.append({**x, "tested": TESTED.get(x["kind"], "")})
+    return out
+
+
+def _try(fn, *a):
+    try:
+        return fn(*a)
+    except Exception:  # noqa: BLE001
+        log.exception("lab: %s(%s) failed", fn.__name__, a[0])
+        return None
+
+
+def _levels_line(su: dict) -> str:
+    parts = [f"setup {su['label']} ({su['score']:+d})"]
+    if su.get("side") == "sell":
+        if su.get("sell_zone"):
+            parts.append(f"sell zone Rs {su['sell_zone'][0]:,.2f} to {su['sell_zone'][1]:,.2f}")
+        if su.get("exit"):
+            parts.append(f"support breaks below {su['exit']:,.2f}")
+        return ", ".join(parts)
+    if su.get("zone"):
+        parts.append(f"buy zone Rs {su['zone'][0]:,.2f} to {su['zone'][1]:,.2f}")
+    if su.get("risk"):
+        parts.append(f"fails below {su['risk']:,.2f}")
+    if su.get("r1"):
+        parts.append(f"target {su['r1']:,.2f}" + (f" / {su['r2']:,.2f}" if su.get("r2") else ""))
+    return ", ".join(parts)
+
+
 def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | None = None,
         only: bool = False) -> None:
     """Daily (after the close): calls for the blue chips and the underdog scan every trading day, logged and
@@ -509,7 +577,7 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
               "context": context.build(State(), view, (State().snap("mk_last") or {})),
               "coe": fairvalue.coe(cfg, policy)}
     with ThreadPoolExecutor(3) as ex:
-        dossiers = dict(zip(syms, ex.map(lambda x: dossier(x, shared, cfg), syms)))
+        dossiers = dict(zip(syms, ex.map(lambda x: _try(dossier, x, shared, cfg), syms)))
     if not only:
         score(st, idx, {x: d["px"] for x, d in dossiers.items() if d})
     sb = scoreboard(st)
@@ -538,6 +606,8 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
             continue
         d["fv_rank"] = None
         try:
+            from .scan import _last_result
+            d["setup"] = levels.setup(d, c, None, _last_result(sym, session))
             out_cards.append((sym, lab_card(cfg, d, c, sb, session), f"{sym} · {'; '.join(why)}"))
         except Exception:  # noqa: BLE001
             log.exception("lab card %s failed", sym)
@@ -547,7 +617,8 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
             evs = set(prev.get("events", [])) | {f"bm:{w.split()[-1]}" for w in why if w.startswith("board meeting")} | {
                 f"ex:{w.split()[-1]}" for w in why if w.startswith("ex-date")}
             sent[sym] = {"view": c["view"], "conf": c["confidence"], "date": session, "events": sorted(evs)[-10:]}
-        notes.append(f"<b>{sym}</b>: {c['view']} ({c['confidence']}/5), {'; '.join(why)}")
+        notes.append(f"<b>{sym}</b>: {c['view']} ({c['confidence']}/5), {'; '.join(why)}"
+                     + (f". {_levels_line(d['setup'])}" if d.get("setup") else ""))
     # ---- underdogs: scan every day, send only on a trigger or a change in a watched stock
     ud_conf = conf.get("underdog") or {}
     scan_text = None
@@ -577,7 +648,45 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
                 sc = scan.build(cfg, session, r, st, idx)
                 out_cards.insert(0, ("scan", scan_card(cfg, sc), f"Daily stock scan · {session}"))
                 scan_text = scan.text(sc)
-                open_sc = [x for x in st.get("calls_scan", []) if not all(f"r{h}" in x for h in HORIZONS)]
+                picks = _scan_picks(sc, st, sorted(idx), syms, int(ud_conf.get("research_max", 6)))
+                if picks:
+                    def _safe_dossier(x):  # one stock's bad data must not stop the others
+                        try:
+                            return dossier(x["sym"], shared, cfg)
+                        except Exception:  # noqa: BLE001
+                            log.exception("scan research dossier %s failed", x["sym"])
+                            return None
+                    with ThreadPoolExecutor(3) as ex:
+                        sd = dict(zip([x["sym"] for x in picks], ex.map(_safe_dossier, picks)))
+                    rlines, pos = [], 1
+                    for it in picks:
+                        sym, d = it["sym"], sd.get(it["sym"])
+                        if not d:
+                            rlines.append(f"{sym}: data could not be collected")
+                            continue
+                        c = _call_retry(d, cfg)
+                        d["kicker"], d["fv_rank"] = "Research Lab · daily scan", None
+                        d["setup"] = levels.setup(d, c, it, scan._last_result(sym, session))
+                        try:
+                            card = lab_card(cfg, d, c or NO_CALL, sb, session)
+                        except Exception:  # noqa: BLE001
+                            log.exception("scan research card %s failed", sym)
+                            continue
+                        out_cards.insert(pos, (f"scan_{sym}", card, f"{sym} · {levels.SECTION.get(it['kind'])}"))
+                        pos += 1
+                        st["scan_research"][sym] = {"date": session, "kind": it["kind"]}
+                        if c:
+                            st.setdefault("calls_scan_ai", []).append(
+                                {"id": f"SA:{sym}:{session}", "sym": sym, "date": session, "price": d["snap"]["values"].get("price"),
+                                 "view": c["view"], "conf": c["confidence"], "kind": it["kind"], "setup": d["setup"]["score"],
+                                 "base": _baselines(d)})
+                        rlines.append(f"<b>{sym}</b> ({levels.SECTION.get(it['kind'])}): "
+                                      + (f"AI {c['view']} {c['confidence']}/5; " if c else "no AI view; ")
+                                      + _levels_line(d["setup"]))
+                    if rlines:
+                        scan_text += "\n\n<b>Full research on today's scan stocks</b> (one card each)\n" + "\n".join(rlines)
+                open_sc = [x for x in st.get("calls_scan", []) + st.get("calls_scan_ai", [])
+                           if not all(f"r{h}" in x for h in HORIZONS)]
                 if open_sc:
                     score({"calls": open_sc}, idx, {x["sym"]: _history(x["sym"]) for x in open_sc[-30:]})
             open_ud = [x for x in st.get("underdog", []) if not all(f"r{h}" in x for h in HORIZONS)]

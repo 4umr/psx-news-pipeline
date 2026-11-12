@@ -133,6 +133,8 @@ lab:
     enabled: true
     watch: [STCL]           # your own underdogs: a full one-page card each day
     max_list: 10
+    daily_scan: true        # daily stock scan card every trading day
+    research_max: 6         # full research card (AI view, technicals, fair value, buy/sell levels) per scan stock
   news_terms:
     FFC: '"Fauji Fertilizer" OR FFC'
     UBL: '"United Bank" OR UBL'

@@ -120,7 +120,8 @@ def lines(fv: dict) -> list[str]:
     if fv.get("fair"):
         meth = "; ".join(f"{k} Rs {x:,.2f}" for k, x in fv["methods"].items())
         L.append(f"Fair value Rs {fv['fair']:,.2f} ({fv['upside']:+.0f}% from Rs {fv['price']:,.2f}), median of {meth}; "
-                 f"required return {fv['coe'] * 100:.0f}%, growth used {fv['g'] * 100:.1f}%"
+                 f"required return {fv['coe'] * 100:.0f}%"
+                 + (f", growth used {fv['g'] * 100:.1f}%" if fv.get("g") is not None else "")
                  + ("" if fv["agree"] else "; the methods disagree, so treat the range, not the point"))
     elif fv.get("nav"):
         why = ("losses over the last 4 quarters" + (f" and over 5 years on average (EPS {fv['avg5']:.2f})"

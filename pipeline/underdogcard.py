@@ -15,7 +15,8 @@ def fv_items(fv: dict, rank: float | None) -> list:
     items = [("Fair value", "none (losses)" if not fair and (fv.get("eps_used") or 0) <= 0 else
               ("not verified" if not fair else f"Rs {fair:,.2f}"), None),
              ("Gap to price", "n/a" if fv.get("upside") is None else f"{fv['upside']:+.0f}%", None),
-             ("Range of methods", "n/a" if not fair else f"{fv['low']:,.0f} to {fv['high']:,.0f}", None),
+             ("Range of methods", "n/a" if not fair else (f"{fv['low']:,.0f} to {fv['high']:,.0f}" if fv["high"] >= 100
+                                                          else f"{fv['low']:,.2f} to {fv['high']:,.2f}"), None),
              ("Book value", "n/a" if fv.get("nav") is None else f"Rs {fv['nav']:,.2f}", None)]
     if fv.get("assets") and not fv.get("financial"):
         y = fv.get("bs_year", "")
