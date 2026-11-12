@@ -1,22 +1,33 @@
 """Fair value and balance sheet for one company (all per share). Inputs are cross-checked first (checks.py).
 
-REQUIRED RETURN
-  COE = SBP policy rate + equity risk premium (config fair_value.erp, default 5 points)      e.g. 12% + 5% = 17%
+REQUIRED RETURN (cost of equity)
+  COE = 10-year PIB yield (the long-term risk-free rate in rupees; SBP policy rate if not known)
+        + equity risk premium (config fair_value.erp, default 5 points)            e.g. 12.85% + 5% = 17.85%
+  A share is a long-lived asset, so it is discounted at a long-term rate, not the overnight policy rate.
 
-THREE STANDARD METHODS (the ones sell-side analysts use when only reported figures are available)
-  1. Earnings power value     EPV = trailing 12-month EPS / COE
-       what today's profit is worth if it simply continued (no growth); conservative
-  2. Residual income          RI  = BV x (ROE - g) / (COE - g)          (the "justified price to book")
-       ROE = trailing EPS / book value per share; g = ROE x share of profit kept, capped at 8% and at COE - 4
-       points (never above long-run nominal growth). Standard for banks and asset-heavy companies.
-  3. Dividend discount        DDM = DPS x (1 + g) / (COE - g)
-       only when the company pays out 40%+ of profit (otherwise dividends say little about value)
-  4. Normalised earnings      NORM = average EPS of the last 5 years / COE
-       used only when this year is abnormal: losses now (then it is the only method), or trailing EPS more
-       than 50% above or below the 5-year average (cyclicals at a peak or trough). If the 5-year average is
-       itself a loss while the company earns now, the card warns that current profit may not last.
-  FAIR VALUE = median of the methods available; RANGE = lowest to highest.
-  The methods "agree" when the range is within 50% of the fair value; otherwise the card says they disagree.
+GROWTH (one assumption, used the same way by every method)
+  ROE      = trailing 12-month EPS / book value per share
+  g        = ROE x share of profit kept (1 - payout), capped at 8% (long-run nominal growth: inflation target
+             5-7% plus real growth) and at COE - 4 points. Unknown payout: g = 0. The formula itself makes growth
+             add value only when ROE is above COE (below it, growth lowers the value), so there is no jump.
+  NEXT YEAR: E1 = trailing EPS x (1 + g). The growth formulas value NEXT year's earnings and dividends
+             (Gordon); using last year's figures understates every growing company.
+
+METHODS
+  1. Residual income (justified P/B), the main method:  RI = BV x (ROE1 - g) / (COE - g),  ROE1 = E1 / BV
+       standard for banks and asset-heavy companies; with g = 0 it equals the no-growth value.
+  2. Dividend discount:  DDM = E1 x payout / (COE - g)
+       only when the company pays out 40%+ AND its natural growth (ROE x retention) is not capped: if it keeps
+       more profit than 8% growth needs, its dividends understate what the extra retained profit is worth.
+  3. Normalised earnings (cycles):  NORM = normal EPS / COE (no growth), normal EPS = 5-year average ROE x
+       today's book (the 5-year average EPS when book history is missing). Used only when this year is
+       abnormal: losses now, or ROE outside 0.5x-1.5x its 5-year average. ROE, not EPS, so a company that has
+       simply grown (UBL, MEBL) is not marked down to its old, smaller profits. If the 5-year average ROE is
+       a loss while the company earns now (refiners in a boom year), book value joins as the normal anchor.
+  NO-GROWTH VALUE (earnings power, EPV = trailing EPS / COE) is shown for reference (and is what the screens
+  rank on, as tested). It is not averaged in: that mixed "no growth" with
+  "growth" in one number (FFC came out at Rs 444 that way, against Rs 538 consistently valued).
+  FAIR VALUE = median of the methods used; RANGE = lowest to highest; "agree" = range within 50% of fair.
 
   Tested measure (screens, backtest): the EPV gap. 2022-2026: big companies priced well above it lagged similar
   stocks by 4.8% over 60 sessions (every year); small and mid caps 50%+ below it beat them by 4.8% (every year).
@@ -40,9 +51,19 @@ FINANCIAL = ("BANK", "INSURANCE", "MODARABA", "INV. BANKS", "LEASING")
 G_CAP = 0.08
 
 
-def coe(cfg: dict, policy_rate: float | None) -> float:
+def risk_free(sbp: dict | None) -> float | None:
+    """Long-term rupee risk-free rate in %: the 10-year PIB yield, else the policy rate."""
+    sbp = sbp or {}
+    y10 = ((sbp.get("pib") or {}).get("yields") or {}).get("10-Y")
+    if y10 and 3 < y10 < 40:
+        return float(y10)
+    pr = sbp.get("policy_rate")
+    return float(pr) if pr and 3 < pr < 40 else None
+
+
+def coe(cfg: dict, rf: float | None) -> float:
     fv = cfg.get("fair_value") or {}
-    rf = policy_rate if policy_rate else float(fv.get("risk_free", 12.0))
+    rf = rf if rf else float(fv.get("risk_free", 12.0))
     return (rf + float(fv.get("erp", 5.0))) / 100
 
 
@@ -50,6 +71,12 @@ def _year_of(period: str | None) -> str | None:
     """'to 2026 4Q' -> '2026'."""
     m = re.search(r"(\d{4})", period or "")
     return m.group(1) if m else None
+
+
+def _norm_roe(ann: dict, bv_hist: dict | None) -> float | None:
+    """Average ROE of the last 5 complete years that have both EPS and year-end book value (3+ needed)."""
+    yrs = [y for y in sorted(ann) if (bv_hist or {}).get(y) and bv_hist[y] > 0][-5:]
+    return sum(ann[y] / bv_hist[y] for y in yrs) / len(yrs) if len(yrs) >= 3 else None
 
 
 def compute(snap: dict, cost: float, ttm: float | None = None, bv_hist: dict | None = None) -> dict:
@@ -64,30 +91,38 @@ def compute(snap: dict, cost: float, ttm: float | None = None, bv_hist: dict | N
     last5 = [ann[k] for k in sorted(ann)[-5:]]
     avg5 = sum(last5) / len(last5) if len(last5) >= 3 else None
     out["avg5"] = avg5
-    if ttm is not None and ttm <= 0 and avg5 and avg5 > 0:
-        out["methods"]["Normalised earnings"] = avg5 / cost
+    nroe = _norm_roe(ann, bv_hist)
+    norm_eps = nroe * bv if nroe is not None and bv and bv > 0 else avg5
+    out["norm_eps"], out["norm_roe"] = norm_eps, nroe
+    if ttm is not None and ttm <= 0 and norm_eps and norm_eps > 0:
+        out["methods"]["Normalised earnings"] = norm_eps / cost
     if ttm is not None and ttm > 0 and bv and bv > 0:
         roe = ttm / bv
         pr = v.get("pr")
-        keep = (1 - pr / 100) if pr is not None and 0 <= pr <= 100 else 0.0   # unknown payout: assume no growth
-        g = max(0.0, min(roe * keep, G_CAP, cost - 0.04))
-        out.update(roe=roe, g=g)
-        out["methods"]["Earnings power"] = ttm / cost
-        if roe > g and g > 0.001:  # with no growth residual income equals earnings power: count it once
-            out["methods"]["Residual income"] = bv * (roe - g) / (cost - g)
-        dps = v.get("d")
-        if dps and dps > 0 and pr is not None and pr >= 40:
-            out["methods"]["Dividend discount"] = dps * (1 + g) / (cost - g)
-        if avg5 is not None and avg5 > 0 and not 0.5 <= ttm / avg5 <= 1.5:
-            out["methods"]["Normalised earnings"] = avg5 / cost
+        keep = (1 - pr / 100) if pr is not None and 0 <= pr <= 100 else None
+        natural = roe * keep if keep is not None else None
+        g = max(0.0, min(natural, G_CAP, cost - 0.04)) if natural is not None else 0.0
+        e1 = ttm * (1 + g)
+        out.update(roe=roe, g=g, e1=e1, roe1=e1 / bv, g_natural=natural)
+        out["epv"] = ttm / cost
+        out["methods"]["Residual income"] = bv * (e1 / bv - g) / (cost - g)  # equals the no-growth value when g = 0
+        if pr is not None and pr >= 40 and natural is not None and natural <= G_CAP and g > 0:
+            out["methods"]["Dividend discount"] = e1 * pr / 100 / (cost - g)
+        if nroe is not None and nroe <= 0 and roe > cost:
+            # no normal profit over 5 years but earning above its cost now (a cyclical in a boom year):
+            # book value is the normal-profit anchor (below its cost, value is under book anyway)
+            out["methods"]["Book value (5-year ROE is a loss)"] = bv
+        elif norm_eps and norm_eps > 0:
+            ratio = (roe / nroe) if nroe and nroe > 0 else (ttm / avg5 if avg5 and avg5 > 0 else None)
+            if ratio is not None and not 0.5 <= ratio <= 1.5:
+                out["methods"]["Normalised earnings"] = norm_eps / cost
     vals = list(out["methods"].values())
     if vals:
         out["fair"] = median(vals)
         out["low"], out["high"] = min(vals), max(vals)
         out["agree"] = (out["high"] - out["low"]) <= 0.5 * out["fair"]
         out["upside"] = (out["fair"] / p - 1) * 100 if p else None
-        out["epv"] = out["methods"].get("Earnings power")
-        out["epv_gap"] = (out["epv"] / p - 1) * 100 if p and out["epv"] else None
+    out["epv_gap"] = (out["epv"] / p - 1) * 100 if p and out.get("epv") else None
     # balance sheet at the last year end
     ear = v.get("ear")
     yr = _year_of(snap.get("period", {}).get("ear"))
@@ -119,9 +154,11 @@ def lines(fv: dict) -> list[str]:
     L = []
     if fv.get("fair"):
         meth = "; ".join(f"{k} Rs {x:,.2f}" for k, x in fv["methods"].items())
-        L.append(f"Fair value Rs {fv['fair']:,.2f} ({fv['upside']:+.0f}% from Rs {fv['price']:,.2f}), median of {meth}; "
-                 f"required return {fv['coe'] * 100:.0f}%"
+        L.append(f"Fair value Rs {fv['fair']:,.2f} ({fv['upside']:+.0f}% from Rs {fv['price']:,.2f}), "
+                 + ("median of " if len(fv["methods"]) > 1 else "from ") + f"{meth}; "
+                 + f"required return {fv['coe'] * 100:.1f}%"
                  + (f", growth used {fv['g'] * 100:.1f}%" if fv.get("g") is not None else "")
+                 + (f"; no-growth value (floor) Rs {fv['epv']:,.2f}" if fv.get("epv") and fv["epv"] < fv["fair"] * 0.98 else "")
                  + ("" if fv["agree"] else "; the methods disagree, so treat the range, not the point"))
     elif fv.get("nav"):
         why = ("losses over the last 4 quarters" + (f" and over 5 years on average (EPS {fv['avg5']:.2f})"

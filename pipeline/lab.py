@@ -568,7 +568,7 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
     syms = symbols or conf.get("symbols") or ["FFC", "UBL", "MEBL", "ENGROH", "OGDC"]
     view = scs.kse100_view()
     analysis.init(State(), cfg)
-    policy = (State().snap("sbp") or {}).get("policy_rate")
+    policy = fairvalue.risk_free(State().snap("sbp"))  # 10-year PIB yield, else the policy rate
     end = now_pkt().replace(tzinfo=None)
     act = {r["company_code"].strip(): r for r in scs.daily_activity() if r.get("company_code")}
     shared = {"index": idx, "session": session, "tech": scs_deep.technicals(), "opinions": scs_deep.opinions(),

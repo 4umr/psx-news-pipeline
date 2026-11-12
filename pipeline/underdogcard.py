@@ -15,8 +15,10 @@ def fv_items(fv: dict, rank: float | None) -> list:
     items = [("Fair value", "none (losses)" if not fair and (fv.get("eps_used") or 0) <= 0 else
               ("not verified" if not fair else f"Rs {fair:,.2f}"), None),
              ("Gap to price", "n/a" if fv.get("upside") is None else f"{fv['upside']:+.0f}%", None),
-             ("Range of methods", "n/a" if not fair else (f"{fv['low']:,.0f} to {fv['high']:,.0f}" if fv["high"] >= 100
-                                                          else f"{fv['low']:,.2f} to {fv['high']:,.2f}"), None),
+             (("Range of methods", "n/a" if not fair else (f"{fv['low']:,.0f} to {fv['high']:,.0f}" if fv["high"] >= 100
+                                                           else f"{fv['low']:,.2f} to {fv['high']:,.2f}"), None)
+              if len(fv.get("methods") or {}) > 1 else
+              ("No-growth value", "n/a" if not fv.get("epv") else f"Rs {fv['epv']:,.2f}", None)),
              ("Book value", "n/a" if fv.get("nav") is None else f"Rs {fv['nav']:,.2f}", None)]
     if fv.get("assets") and not fv.get("financial"):
         y = fv.get("bs_year", "")
@@ -26,7 +28,7 @@ def fv_items(fv: dict, rank: float | None) -> list:
                   ("Cheaper than", "n/a" if rank is None else f"{rank:.0f}% of stocks", None)]
     else:
         items += [("Earnings value gap", "n/a" if fv.get("epv_gap") is None else f"{fv['epv_gap']:+.0f}%", None),
-                  ("Required return", f"{fv['coe'] * 100:.0f}%", None),
+                  ("Required return", f"{fv['coe'] * 100:.1f}%", None),
                   ("Growth used", "n/a" if fv.get("g") is None else f"{fv['g'] * 100:.1f}%", None),
                   ("Cheaper than", "n/a" if rank is None else f"{rank:.0f}% of stocks", None)]
     return items
@@ -86,7 +88,7 @@ def _radar(c: Card, r: dict) -> int:
         "Not enough on their own (2010-2026, versus similar stocks over 3 months): buying at a 3-year price floor "
         "-2.2%, floor plus a volume burst -2.9%, far below the all-time high -1.1%, strong season months about 0%.",
         f"Earnings value gap: the last 4 quarters' profit (checked against the company's own results) valued at a "
-        f"{r['coe'] * 100:.0f}% yearly return with no growth, against the price. Small and mid caps with a 50%+ gap beat "
+        f"{r['coe'] * 100:.1f}% yearly return with no growth, against the price. Small and mid caps with a 50%+ gap beat "
         "similar stocks by 4.8% over 3 months in 2022-2026; cheap P/E did not work before 2023. Refineries and other "
         "cyclicals often look cheap on this measure."],
         title="What the history says", max_lines=14)

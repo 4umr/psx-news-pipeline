@@ -230,6 +230,19 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   votes, risk line 93.10, reward to risk, split adjustment, result wording. Known by design: Lab scoring
   measures the stock from the next open but the KSE-100 from the call day's close (no index open in the data).
 
+## Fair value v3 (2026-11-13) — Umer: "FFC fair value seems inaccurate, maybe 540-545; adjust it (on principle)"
+- Old: median(EPV no growth, RI, DDM on last year's DPS) at COE = policy 12 + 5 -> FFC Rs 444. Three flaws: a
+  no-growth value averaged with growth values; DDM on a stale dividend (FY25 Rs 37); Gordon formulas fed THIS
+  year's EPS instead of next year's; plus the overnight policy rate as the long-term rate.
+- Now (`fairvalue.py` docstring): COE = 10-year PIB yield (`risk_free(sbp snap)`, 12.85% on 4 Nov 2026) + 5 = 17.85%;
+  g = ROE x retention capped 8% / COE-4 (no switch at ROE = COE: the formula lowers value when ROE < COE);
+  E1 = ttm x (1+g); main method RI = BV x (E1/BV - g)/(COE - g); DDM = E1 x payout/(COE - g) only if payout >= 40%
+  and natural growth is not capped; normalised = 5-year average ROE x book / COE when ROE is outside 0.5-1.5x its
+  average (ROE, so grown companies like UBL are not marked down); 5-year ROE a loss but ROE > COE now -> book value
+  joins (refiners). EPV kept as "No-growth value" (tile when one method) and for the tested EPV-gap screens.
+- Results 13 Nov: FFC 538 (price 570), UBL 465, OGDC 371, LUCK 393, MEBL 455, HUBC 261, POL 837, MARI 633,
+  MCB 267, EFERT 167, SYS 46 (growth stocks above 8% are a known limit of a one-stage model). 13 hand-worked tests.
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,

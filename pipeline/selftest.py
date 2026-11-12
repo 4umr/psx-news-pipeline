@@ -18,40 +18,64 @@ def formulas() -> list[str]:
         if not cond:
             bad.append(name)
 
-    # fair value: price 100, book 50, trailing EPS 10 -> ROE 20%; payout 50% -> g = min(10%, 8% cap, 17%-4%) = 8%
+    # fair value: price 100, book 50, trailing EPS 10 -> ROE 20%; payout 50% -> natural growth 10% -> capped at 8%
+    # next year's EPS 10.8 -> ROE1 21.6%; RI = 50 x (0.216 - 0.08) / (0.17 - 0.08) = 75.56; no DDM (growth capped)
     snap = {"sector": "CEMENT", "values": {"price": 100.0, "bv": 50.0, "ear": 40.0, "pr": 50.0, "d": 6.0},
             "period": {"ear": "to 2026 4Q", "bv": "to 2027 1Q"}}
     f = fairvalue.compute(snap, 0.17, 10.0, {"2026": 48.0})
-    ok("EPV = 10 / 0.17 = 58.82", _close(f["methods"]["Earnings power"], 58.8235))
-    ok("RI = 50 x (0.20 - 0.08) / (0.17 - 0.08) = 66.67", _close(f["methods"]["Residual income"], 66.6667))
-    ok("DDM = 6 x 1.08 / 0.09 = 72", _close(f["methods"]["Dividend discount"], 72.0))
-    ok("fair = median(58.82, 66.67, 72) = 66.67", _close(f["fair"], 66.6667))
-    ok("gap = 66.67 / 100 - 1 = -33.3%", _close(f["upside"], -33.333))
+    ok("no-growth value = 10 / 0.17 = 58.82 (shown, not averaged)", _close(f["epv"], 58.8235) and "Earnings power" not in f["methods"])
+    ok("RI = 50 x (0.216 - 0.08) / 0.09 = 75.56", _close(f["methods"]["Residual income"], 75.5556))
+    ok("no DDM when natural growth (10%) is above the cap", "Dividend discount" not in f["methods"])
+    ok("fair = 75.56, gap -24.4%", _close(f["fair"], 75.5556) and _close(f["upside"], -24.4444))
     ok("assets = 48 / 0.40 = 120", _close(f["assets"], 120.0))
     ok("liabilities = 120 - 48 = 72", _close(f["liabilities"], 72.0))
     ok("liabilities % = 60", _close(f["liab_pct"], 60.0))
     ok("growth = 8%", _close(f["g"], 0.08))
+    # payout 70%: natural growth 6% (not capped) -> E1 10.6, ROE1 21.2%; RI = 50 x 0.152 / 0.11 = 69.09;
+    # DDM = 10.6 x 0.7 / 0.11 = 67.45; fair = median = 68.27
+    fd = fairvalue.compute({**snap, "values": {**snap["values"], "pr": 70.0}}, 0.17, 10.0, {})
+    ok("DDM 67.45 and RI 69.09 -> fair 68.27", _close(fd["methods"].get("Dividend discount"), 67.4545)
+       and _close(fd["methods"]["Residual income"], 69.0909) and _close(fd["fair"], 68.2727))
     f2 = fairvalue.compute({**snap, "values": {**snap["values"], "pr": 20.0}}, 0.17, 10.0, {})
     ok("no DDM when payout < 40%", "Dividend discount" not in f2["methods"])
+    # ROE 10% below the 17% required: growth 5% LOWERS value: RI = 50 x (0.105 - 0.05) / 0.12 = 22.92,
+    # DDM = 5.25 x 0.5 / 0.12 = 21.88, fair 22.40, under the no-growth 29.41
+    fl = fairvalue.compute(snap, 0.17, 5.0, {})
+    ok("growth below the required return lowers value (22.40 < 29.41)", _close(fl["fair"], 22.3958) and fl["fair"] < fl["epv"])
     f3 = fairvalue.compute(snap, 0.17, -2.0, {})
     ok("loss-maker: no fair value", f3.get("fair") is None)
     ok("cost of equity = 12 + 5 = 17%", _close(fairvalue.coe({}, 12.0), 0.17))
+    ok("risk-free = 10-year PIB yield", fairvalue.risk_free({"policy_rate": 12.0, "pib": {"yields": {"10-Y": 12.85}}}) == 12.85)
+    ok("risk-free = policy rate without PIB", fairvalue.risk_free({"policy_rate": 11.0}) == 11.0)
     # normalised earnings: a loss now with a 5-year average of 3 -> 3 / 0.17 = 17.65 is the only method
     ann = {"2022": 3.0, "2023": 3.0, "2024": 3.0, "2025": 3.0, "2026": 3.0}
     f4 = fairvalue.compute({**snap, "eps_annual": ann}, 0.17, -2.0, {})
     ok("loss now, 5-year average 3: fair = 17.65", _close(f4.get("fair"), 17.647))
     try:
         fairvalue.lines(f4)
-        ok("loss now: the fair value sentence is written", True)
+        fairvalue.lines(f)
+        ok("the fair value sentences are written", True)
     except Exception as e:  # noqa: BLE001
-        ok(f"loss now: the fair value sentence is written ({e})", False)
-    # a spike: trailing 30 vs average 10 -> normalised 58.82 joins EPV 176.47, RI 288.89, DDM 72 -> median 124.24
+        ok(f"the fair value sentences are written ({e})", False)
+    # a spike: trailing 30 vs average 10 -> normalised 58.82 joins RI 50 x (0.648 - 0.08) / 0.09 = 315.56 -> 187.19
     f5 = fairvalue.compute({**snap, "eps_annual": {k: 10.0 for k in ann}}, 0.17, 30.0, {})
-    ok("spike year: median of 4 methods = 124.24", _close(f5.get("fair"), 124.235))
+    ok("spike year: median(315.56, 58.82) = 187.19", _close(f5.get("fair"), 187.19))
     f6 = fairvalue.compute({**snap, "eps_annual": {k: 9.0 for k in ann}}, 0.17, 10.0, {"2026": 48.0})
-    ok("normal year: normalised not used", "Normalised earnings" not in f6["methods"] and _close(f6["fair"], 66.6667))
+    ok("normal year: normalised not used", "Normalised earnings" not in f6["methods"] and _close(f6["fair"], 75.5556))
+    # normalised by ROE: 3 years of EPS 5 on book 50 -> 10% ROE; now 20% (2x) -> normal EPS 0.10 x 50 = 5 -> 29.41
+    bvh = {"2022": 50.0, "2023": 50.0, "2024": 50.0}
+    f9 = fairvalue.compute({**snap, "eps_annual": {"2022": 5.0, "2023": 5.0, "2024": 5.0}}, 0.17, 10.0, bvh)
+    ok("normalised by ROE = 29.41", _close(f9["methods"].get("Normalised earnings"), 29.4118))
+    # grown, not abnormal: EPS 4 -> 10 while book grew 20 -> 50 (ROE 20% throughout): no normalisation
+    f10 = fairvalue.compute({**snap, "eps_annual": {"2022": 4.0, "2023": 6.0, "2024": 8.0}},
+                            0.17, 10.0, {"2022": 20.0, "2023": 30.0, "2024": 40.0})
+    ok("a company that grew is not normalised down", "Normalised earnings" not in f10["methods"])
+    # 5-year ROE a loss, profit now: book 50 joins RI 75.56 -> 62.78
+    f11 = fairvalue.compute({**snap, "eps_annual": {"2022": -1.0, "2023": -1.0, "2024": -1.0}}, 0.17, 10.0, bvh)
+    ok("boom year of a loss-maker: book value anchor, fair 62.78", _close(f11["fair"], 62.7778))
     f8 = fairvalue.compute({**snap, "values": {**snap["values"], "pr": None, "d": None}}, 0.17, 10.0, {})
-    ok("no growth: residual income not double-counted", list(f8["methods"]) == ["Earnings power"])
+    ok("unknown payout: no growth, RI = no-growth value", list(f8["methods"]) == ["Residual income"]
+       and _close(f8["fair"], 58.8235))
     f7 = fairvalue.compute({**snap, "eps_annual": {k: -1.0 for k in ann}}, 0.17, -2.0, {})
     ok("losses now and on average: no fair value", f7.get("fair") is None)
     # quarters must be consecutive
