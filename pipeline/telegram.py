@@ -354,7 +354,12 @@ def where_is() -> None:
         c = r["result"]
         what = ("a person's private chat with the bot (look in Telegram under the bot's name)" if c["type"] == "private"
                 else f'{c["type"]} "{c.get("title", "")}"')
-        print(f"{name}: {what}, id ends ...{cid[-3:]}")
+        extra = ""
+        if c["type"] != "private":
+            n = http().get(f"https://api.telegram.org/bot{token}/getChatMemberCount", params={"chat_id": cid},
+                           timeout=20).json().get("result")
+            extra = f", {n} members" + (f", public link t.me/{c['username']}" if c.get("username") else ", private (no public link)")
+        print(f"{name}: {what}{extra}, id ends ...{cid[-3:]}")
         if name != "TELEGRAM_CHAT_ID":
             label = "admin messages (warnings, raw news feed, Swing Radar)" if "ADMIN" in name else "Research Lab cards"
             ok = http().post(f"https://api.telegram.org/bot{token}/sendMessage", timeout=20, json={
