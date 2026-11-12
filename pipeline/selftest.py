@@ -233,6 +233,11 @@ def levels_tests() -> list[str]:
     ok("Hurst of a random walk is near 0.5", hh is not None and 0.35 < hh < 0.65)
     vp = pt.volume_profile(_np.array([10.0] * 60 + [12.0] * 60), _np.array([1e6] * 60 + [1e5] * 60))
     ok("volume profile: most value traded at 10", abs(vp["poc"] - 10.0) < 0.1)
+    from . import levels as _lv
+    dz = {"snap": {"values": {"price": 100.0}}, "px": [(f"2026-01-{i:02d}", 100.0, 100.0, 0, 104.0, 98.0) for i in range(1, 31)] * 2,
+          "fv": {}, "patterns": {"recent": [("2026-01-30", "pt_hs_top")]}, "chart": {}}
+    sz = _lv.setup(dz, None, None, None)
+    ok("one chart-only warning reads as MIXED, CAUTION with buy-side levels", sz["label"] == "MIXED, CAUTION" and sz["side"] == "buy")
     ln = earnings.eps_line({"annual": True, "eps": 10.0, "eps_ly": 8.0, "eps_q": 3.0, "eps_q_ly": 1.0, "yoy_q": 2.0, "yoy": 0.25})
     ok("annual result line shows the fourth quarter first", ln == "fourth-quarter EPS 3.00 vs 1.00 a year ago (+200%); full year 10.00 vs 8.00")
     return bad

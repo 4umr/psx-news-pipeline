@@ -53,7 +53,7 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
     # buy and sell levels: direction from the tested signals, levels from the chart
     su = d.get("setup")
     if su:
-        scol = UP if su["score"] >= 1 else DOWN if su["score"] <= -1 else "#b8862a"
+        scol = "#b8862a" if su["label"].startswith("MIXED") else UP if su["score"] >= 1 else DOWN if su["score"] <= -1 else "#b8862a"
         z, rr = su.get("zone"), su.get("rr")
         if su.get("side") == "sell":
             sz = su.get("sell_zone")

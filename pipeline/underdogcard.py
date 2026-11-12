@@ -239,7 +239,8 @@ def _preopen(c: Card, rep: dict, today: str) -> int:
     rows = []
     for it in rep["items"]:
         sell = it.get("side") == "sell"
-        col = UP if (it.get("score") or 0) >= 1 else DOWN if (it.get("score") or 0) <= -1 else "#b8862a"
+        col = ("#b8862a" if (it.get("label") or "").startswith("MIXED") else UP if (it.get("score") or 0) >= 1
+               else DOWN if (it.get("score") or 0) <= -1 else "#b8862a")
         if sell:
             z = it.get("sell_zone")
             zone = (f"sell {z[0]:,.2f}-{z[1]:,.2f}", DOWN) if z else ("at a high", DOWN)

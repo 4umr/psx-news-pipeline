@@ -660,7 +660,8 @@ def _tech_page(p: Page, d: dict, t: dict, reserve: bool = False) -> None:
                      ["Setup fails below", f"{su['risk']:,.2f}" if su.get("risk") else "-"],
                      ["Target 1 / 2", " / ".join(f"{x:,.2f}" for x in (su.get("r1"), su.get("r2")) if x) or "at a high"],
                      ["Reward to risk", f"{su['rr']:.1f} to 1" if su.get("rr") and su["rr"] > 0 else "-"]]
-        cols = [[None, UP if su.get("score", 0) >= 1 else DOWN if su.get("score", 0) <= -1 else GOLD]] + [[None, None]] * (len(rows) - 1)
+        cols = [[None, GOLD if su.get("label", "").startswith("MIXED") else UP if su.get("score", 0) >= 1
+                 else DOWN if su.get("score", 0) <= -1 else GOLD]] + [[None, None]] * (len(rows) - 1)
         ly = p.table(M, ly, [half * 0.55, half * 0.45], rows, size=8.4, colors=cols)
         from .levels import lines as su_lines
         ly, _ = p.bullets(M, ly, [clean(x) for x in su_lines(su)][:5], half, size=7.8, gap=4, max_y=ly + 330)

@@ -129,6 +129,14 @@ def setup(d: dict, call: dict | None, scan_item: dict | None, result: dict | Non
     # BUY SIDE / SELL SIDE: results, value and the AI agree (or a tested warning plus one more against)
     label = ("BUY SIDE" if score >= 3 else "LEANING BUY" if score >= 1 else "SELL SIDE" if score <= -3
              else "LEANING SELL" if score <= -1 else "MIXED, WAIT")
+    # one chart or pattern warning on its own (nothing from results, value or the AI) is a caution, not a sell:
+    # those warnings are worth about -1% to -1.5% over a month, too little to turn a stock into a sell by themselves
+    chart_only = all(t.startswith(("chart ", "stage 4", "recent Wyckoff", "pattern warning")) for s_, t in votes if s_ < 0)
+    if score == -1 and chart_only and not any(s_ > 0 for s_, _ in votes):
+        label = "MIXED, CAUTION"
+        score_side = 0
+    else:
+        score_side = score
     lv = swing_levels(d.get("px") or [], price)
     out = {"score": score, "label": label, "votes": votes, "price": price, **lv}
     if price and lv.get("s1"):
@@ -154,7 +162,7 @@ def setup(d: dict, call: dict | None, scan_item: dict | None, result: dict | Non
     if out.get("risk") and price and price < out["risk"]:
         out["now"] = f"Price is below the risk line Rs {out['risk']:,.2f}: the chart setup is broken."
     # sell side: the same levels read the other way round (where holders can lighten, where support breaks)
-    out["side"] = "sell" if score <= -1 else "buy"
+    out["side"] = "sell" if score_side <= -1 else "buy"
     if out["side"] == "sell" and price:
         if lv.get("r1"):
             out["sell_zone"] = (round(lv["r1"] * 0.97, 2), lv["r1"])

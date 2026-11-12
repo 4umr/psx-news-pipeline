@@ -790,6 +790,14 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
         c = _call_retry(d, cfg)
         if not c:
             notes.append(f"{sym}: no view (AI unavailable or its text failed the number check)")
+            if only:  # on request the card still goes out, with every rule-based part
+                try:
+                    from .scan import _last_result
+                    d["fv_rank"], d["kicker"] = None, "Research Lab · on request"
+                    d["setup"] = levels.setup(d, None, None, _last_result(sym, session))
+                    out_cards.append((sym, lab_card(cfg, d, NO_CALL, sb, session), f"{sym} · on request (no AI view)"))
+                except Exception:  # noqa: BLE001
+                    log.exception("lab card %s failed", sym)
             continue
         entry = {"id": f"{sym}:{session}", "sym": sym, "date": session, "price": d["snap"]["values"].get("price"),
                  "view": c["view"], "conf": c["confidence"], "headline": c["headline"], "base": _baselines(d)}
