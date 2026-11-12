@@ -315,7 +315,7 @@ def _text(d: dict, shared: dict) -> str:
 def call(d: dict, cfg: dict) -> dict | None:
     if not analysis.available(cfg):
         return None
-    out = analysis._call(cfg, PROMPT.format(sym=d["sym"], dossier=d["text"]), timeout=120)
+    out = analysis._call(cfg, PROMPT.format(sym=d["sym"], dossier=d["text"]), timeout=120, research=True)
     if not out:
         return None
     src = d["text"]

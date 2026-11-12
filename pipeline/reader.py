@@ -187,7 +187,8 @@ def read(sym: str, name: str, cfg: dict, force: bool = False) -> dict | None:
     if not analysis.available(cfg):
         log.warning("annual report for %s not read: Gemini key not available", sym)
         return None
-    raw = analysis._call(cfg, PROMPT.format(name=name, sym=sym, period=rep["period"], pages=text), timeout=240)
+    raw = analysis._call(cfg, PROMPT.format(name=name, sym=sym, period=rep["period"], pages=text), timeout=240,
+                         research=True)
     if not raw:
         return None
     out = validate(raw, source)

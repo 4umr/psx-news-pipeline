@@ -205,6 +205,9 @@ def _assess_all(rows: list[dict]) -> dict[str, dict]:
         return {r["company_code"]: a for r, a in zip(todo, ex.map(one, todo)) if a}
 
 
+RESULTS_FILING = re.compile(r"financial results|results for the (quarter|year|half|period|nine)", re.I)
+
+
 def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dict | None = None) -> list[Alert]:
     from . import earnings, expectations
     cutoff = now_pkt() - timedelta(days=4)
@@ -950,8 +953,11 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
     with ThreadPoolExecutor(max_workers=8) as ex:
         pages = [p for p in ex.map(psx.company, symbols) if p]
     known = set(state.data.setdefault("psx_known", []))
-    px = {c: {"CurrentPrice": r["trading_close"], "LDCP": r["trading_close"] - r["trading_change"]}
-          for c, r in act.items() if r.get("trading_close") and r.get("trading_change") is not None}
+    # prices for the card: the all-stock table is yesterday's until about 16:15, so during the session only
+    # live KSE-100 prices are shown (every stock once the table is today's)
+    live_rows, _ = scs.live_activity(view)
+    px = {r["company_code"]: {"CurrentPrice": r["trading_close"], "LDCP": r["trading_close"] - r["trading_change"]}
+          for r in live_rows if r.get("company_code") and r.get("trading_close") and r.get("trading_change") is not None}
     px.update({r["company_code"]: r for r in view})
     fresh = []
     since = f"{now - timedelta(days=2):%Y-%m-%d}"
@@ -988,7 +994,8 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
     # every psx_filings_batch_minutes (or at 8 filings); material information goes out at once.
     pend = state.data.setdefault("filings_pending", [])
     pend += [{"sym": sym, "f": f, "t": int(time.time())} for sym, f in fresh]
-    urgent = any("material" in x["f"]["title"].lower() for x in pend)
+    # material information and company RESULTS go out at once (results are the tested edge: minutes matter)
+    urgent = any("material" in x["f"]["title"].lower() or RESULTS_FILING.search(x["f"]["title"]) for x in pend)
     wait = float(cfg.get("psx_filings_batch_minutes", 30)) * 60
     if not pend or (not urgent and len(pend) < 8 and time.time() - min(x["t"] for x in pend) < wait):
         return []

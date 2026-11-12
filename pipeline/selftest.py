@@ -238,6 +238,16 @@ def levels_tests() -> list[str]:
           "fv": {}, "patterns": {"recent": [("2026-01-30", "pt_hs_top")]}, "chart": {}}
     sz = _lv.setup(dz, None, None, None)
     ok("one chart-only warning reads as MIXED, CAUTION with buy-side levels", sz["label"] == "MIXED, CAUTION" and sz["side"] == "buy")
+    from . import watchers as _w
+    ok("results filing sent at once", bool(_w.RESULTS_FILING.search("Financial Results for the Quarter Ended 30 Sep 2026")))
+    ok("report transmission waits for the batch", not _w.RESULTS_FILING.search("Transmission of Quarterly Report for the Period"))
+    from . import analysis as _an
+    _keep = _an._model
+    _an._model = "main-model"
+    _cf = {"ai": {"fallback_model": "lite", "research_model": "lite"}}
+    ok("news tries the main model first, research the other one",
+       _an.models_for(_cf) == ["main-model", "lite"] and _an.models_for(_cf, True) == ["lite", "main-model"])
+    _an._model = _keep
     ln = earnings.eps_line({"annual": True, "eps": 10.0, "eps_ly": 8.0, "eps_q": 3.0, "eps_q_ly": 1.0, "yoy_q": 2.0, "yoy": 0.25})
     ok("annual result line shows the fourth quarter first", ln == "fourth-quarter EPS 3.00 vs 1.00 a year ago (+200%); full year 10.00 vs 8.00")
     return bad

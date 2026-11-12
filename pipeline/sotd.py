@@ -18,7 +18,7 @@ from datetime import timedelta
 import pandas as pd
 
 from . import earnings, prices, reader, research  # noqa: F401
-from .common import ROOT, esc, log, now_pkt
+from .common import ROOT, esc, in_window, log, now_pkt
 from .signals import features
 from .sources import psx, scs
 
@@ -330,6 +330,14 @@ def run(cfg: dict, dry: bool = False, force: str | None = None, preview: bool = 
     from .note import build
     from .telegram import Sender
     now = now_pkt()
+    import os
+    # GitHub's own schedule (the backstop) often fires hours late, after midnight: it then counted as a new day
+    # and published at 01:00-03:00 (11-13 Nov 2026). Scheduled runs may publish only in the evening window; the
+    # loop's on-time start (18:00, 20:00) and manual runs are not affected.
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule" and not force and not preview \
+            and not in_window(now, "17:30", "23:00"):
+        log.info("stock of the day: scheduled run at %s is outside 17:30-23:00, nothing published", now.strftime("%H:%M"))
+        return
     st = _load()
     today = f"{now:%Y-%m-%d}"
     if not force and any(c["date"] == today for c in st["covered"]):

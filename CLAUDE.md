@@ -330,6 +330,21 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   fair value table; chart read; patterns; evidence). Pages: summary, financials, technical, business (if the annual
   report was read; disclosures on the last page). Caption adds the setup and model fair value lines.
 
+## System review fixes (2026-11-13) — evidence: 100 runs, state, 59 editor decisions, 60 channel posts
+- Stock of the Day was published at 01:00-03:00 (11-13 Nov): stock.yml's backstop cron fires hours late, after
+  midnight = a new day. `sotd.run` now refuses a SCHEDULED run (GITHUB_EVENT_NAME=schedule) outside 17:30-23:00;
+  the loop's 18:00 / 20:00 dispatch and manual runs are unaffected.
+- Results filings ("Financial Results for the ...", `watchers.RESULTS_FILING`) skip the 30-minute filings batch.
+- Filing cards price from `scs.live_activity` (the all-stock table is yesterday's during the session).
+- Gemini: `analysis.models_for(cfg, research)` + `_call(..., research=)`: news = ai.model then ai.fallback_model
+  (gemini-2.5-flash-lite); Research Lab + annual-report reader = ai.research_model (flash-lite) then the main model,
+  so they no longer use the news quota (12 Nov: two news items fell back to "AI unavailable"). 429 / 5xx / 404 /
+  time-out -> next model; counts once against ai.daily_limit.
+- Open from the review (not built): read results from the PSX filing image with Gemini vision (fastest results),
+  chart filter on swing results signals, score level alerts, "strong quarters repeat" (41% vs 23%) in the results
+  week card, monthly Lab auto switch-off, corroborate untrusted-source news (missed: Saudi $3bn rollover 12 Nov),
+  one petrol post a day, bot-chat digest (~200-300 msgs/day), 17:00 reality check of posted numbers, audience.
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,

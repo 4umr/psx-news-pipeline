@@ -170,28 +170,46 @@ def _pick_model(cfg: dict) -> str:
     return _model
 
 
-def _call(cfg: dict, prompt: str, timeout: int = 60) -> dict | None:
+def models_for(cfg: dict, research: bool = False) -> list[str]:
+    """Which Gemini models to try, in order. News: the main model, then the backup. Research (Research Lab, the
+    annual-report reader) runs on the backup first, so the free quota of the main model stays with the news;
+    each model has its own free-tier limits. Both lists fall back to the other model when one is busy."""
+    ai = cfg.get("ai") or {}
+    main, backup = _pick_model(cfg), ai.get("fallback_model", "gemini-2.5-flash-lite")
+    order = [ai.get("research_model", backup), main] if research else [main, backup]
+    return list(dict.fromkeys(m for m in order if m))
+
+
+def _call(cfg: dict, prompt: str, timeout: int = 60, research: bool = False) -> dict | None:
+    """One request; on a rate limit (429), an overloaded model (5xx), an unknown model (404) or a time-out the
+    next model in models_for() is tried. Counts once against the daily budget."""
     global _disabled
     if not available(cfg) or not _budget_ok():
         return None
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
-    try:
-        r = http().post(f"{API}/models/{_pick_model(cfg)}:generateContent", json=body, timeout=timeout,
-                        headers={"x-goog-api-key": _key(), "Content-Type": "application/json"})
-        if r.status_code in (401, 403):
-            _disabled = True  # bad key: stop trying this run
-            log.error("Gemini refused the API key (HTTP %s)", r.status_code)
+    for model in models_for(cfg, research):
+        try:
+            r = http().post(f"{API}/models/{model}:generateContent", json=body, timeout=timeout,
+                            headers={"x-goog-api-key": _key(), "Content-Type": "application/json"})
+            if r.status_code in (401, 403):
+                _disabled = True  # bad key: stop trying this run
+                log.error("Gemini refused the API key (HTTP %s)", r.status_code)
+                return None
+            if r.status_code in (404, 429) or r.status_code >= 500:
+                log.warning("Gemini %s busy or unavailable (HTTP %s); trying the next model", model, r.status_code)
+                continue
+            r.raise_for_status()
+            raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return json.loads(re.sub(r"^```(json)?|```$", "", raw.strip()))
+        except (TimeoutError, OSError) as e:
+            log.warning("Gemini %s request failed (%s); trying the next model", model, type(e).__name__)
+            continue
+        except Exception as e:  # noqa: BLE001  bad JSON etc.: the next model will not fix the prompt
+            log.warning("Gemini request failed: %s", e)
             return None
-        if r.status_code == 429:
-            log.warning("Gemini rate limit reached; using rule-based fallback for now")
-            return None
-        r.raise_for_status()
-        raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-        return json.loads(re.sub(r"^```(json)?|```$", "", raw.strip()))
-    except Exception as e:  # noqa: BLE001
-        log.warning("Gemini request failed: %s", e)
-        return None
+    log.warning("Gemini: every model busy; using the rule-based fallback for now")
+    return None
 
 
 def health(cfg: dict) -> str:
