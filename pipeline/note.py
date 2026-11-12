@@ -2,7 +2,10 @@
 
 Layout follows the usual sell-side company note: a firm header band, title block with a factual headline,
 a left sidebar of key data and price performance, a main column of short written sections and the financial
-summary, a second page of business tables, and a disclosures block. No rating or target price.
+summary, a second page of business tables, and a disclosures block. Since 13 Nov 2026 (owner's decision) a
+"Technical analysis and valuation" page follows the financials: price chart with averages, support and
+resistance, Fibonacci levels, the pattern line to watch and volume at price; the tested setup with its levels;
+the fair value methods; the chart read, patterns and maths, each with what the PSX evidence says.
 """
 from __future__ import annotations
 
@@ -339,7 +342,9 @@ def _kse_ret(d: dict, n: int):
 
 DISCLOSURE = ("This note is prepared by PAKISTAN INVESTORS from the company's filings with the Pakistan Stock Exchange, "
               "its latest annual report and exchange price data. It is for information and education only. It is not "
-              "a recommendation or an offer to buy or sell any security, and it carries no rating or target price. "
+              "a recommendation or an offer to buy or sell any security. The setup label, zones, targets and fair "
+              "value on the technical page come from fixed, rule-based formulas on public data (explained on that page); "
+              "zones and targets are chart levels that have not been tested, and the fair value is a model estimate. "
               "Financial figures are as filed by the company with PSX (standalone); statements about the business, "
               "plans and risks are the company's own, taken from its annual report. Past performance does not "
               "indicate future results. Readers should check the official filings and seek independent advice "
@@ -394,8 +399,11 @@ def build(d: dict) -> tuple[list[bytes], bytes]:
     price_day = datetime.strptime(str(d["date"])[:10], "%Y-%m-%d")
     meta = {"date_long": f"{pub.day} {pub:%B %Y}",
             "tag": f"{d['sector']}  |  {'KMI-30  |  ' if d.get('kmi') else ''}PSX: {d['sym']}"}
-    total = 3 if rp else 2
-    pages = [Page(i, total, meta) for i in range(1, total + 1)]
+    tech = d.get("ta") or {}
+    total = 2 + (1 if tech else 0) + (1 if rp else 0)
+    pages = [Page(i, total, meta) for i in range(1, total + 1)]   # summary, financials, technical, business
+    tech_page = pages[2] if tech else None
+    biz_page = pages[-1] if rp else None
     SP = 18  # space between blocks
 
     # ================= page 1: summary (sidebar of key data, main column of the story)
@@ -514,12 +522,17 @@ def build(d: dict) -> tuple[list[bytes], bytes]:
         ry = p.section(rx, ry, half, "Coming up")
         ry, _ = p.bullets(rx, ry, ev[:4], half, size=8.6, gap=6, max_y=BOTTOM)
 
+    if tech:
+        _tech_page(tech_page, d, tech, reserve=not rp)
     if not rp:
-        _disclosures(p, rp, max(ly, ry) + SP)
+        if tech:
+            _disclosures(tech_page, rp, BOTTOM - 150)
+        else:
+            _disclosures(p, rp, max(ly, ry) + SP)
         return _finish(pages, f"{d['name']} ({d['sym']}) research note")
 
-    # ================= page 3: business and outlook
-    p = pages[2]
+    # ================= business and outlook (last page)
+    p = biz_page
     y = _page_title(p, d, "Business, outlook and risks")
     disc_top = BOTTOM - 150
     ly = ry = y
@@ -560,6 +573,134 @@ def build(d: dict) -> tuple[list[bytes], bytes]:
         y, _ = p.bullets(M, y, risks[:5], full, size=8.8, gap=6, max_y=disc_top - 10)
     _disclosures(p, rp, disc_top)
     return _finish(pages, f"{d['name']} ({d['sym']}) research note")
+
+
+def _tech_page(p: Page, d: dict, t: dict, reserve: bool = False) -> None:
+    """Technical analysis and valuation: chart, setup and levels, fair value, chart read, patterns, evidence."""
+    full = W - 2 * M
+    half = (full - GAP) / 2
+    end = BOTTOM - 160 if reserve else BOTTOM   # room for the disclosures when this is the last page
+    y = _page_title(p, d, "Technical analysis and valuation")
+    px_ = t.get("px") or []
+    su, fv, ch, pt = t.get("setup") or {}, t.get("fv") or {}, t.get("chart") or {}, t.get("patterns") or {}
+    if len(px_) > 60:
+        y = p.section(M, y, full, "Price, 12 months (Rs): averages, support and resistance, volume at price")
+        prof = pt.get("profile") or {}
+        cw, chh, vw = full - 190, 380, 150
+        ax = p.fig.add_axes([(M + 40) / W, 1 - (y + chh) / H, (cw - 40) / W, chh / H])
+        c = np.array([r[2] for r in px_][-250:], dtype=float)
+        xs = np.arange(len(c))
+        ax.plot(xs, c, color=GREEN, lw=1.6)
+        for n_, col, lw in ((50, GOLD, 1.1), (150, "#7a8a80", 0.9), (200, "#3d5a80", 1.0)):
+            full_c = np.array([r[2] for r in px_], dtype=float)
+            if len(full_c) >= n_:
+                ma = np.convolve(full_c, np.ones(n_) / n_, mode="valid")[-len(c):]
+                ax.plot(xs[len(c) - len(ma):], ma, color=col, lw=lw)
+        lo, hi = c.min(), c.max()
+        marks = []
+        for key, lab, col in (("s1", "support", UP), ("r1", "resistance", DOWN), ("risk", "fails below", DOWN)):
+            v = su.get(key)
+            if v and lo * 0.85 < v < hi * 1.15:
+                ax.axhline(v, color=col, lw=0.9, ls=(0, (3, 3)))
+                marks.append((v, f"{lab} {v:,.2f}", col))
+        for f_ in (pt.get("forming") or [])[:1]:
+            v = f_["line"]
+            if lo * 0.85 < v < hi * 1.15:
+                ax.axhline(v, color=GOLD, lw=1.0, ls=(0, (6, 3)))
+                marks.append((v, f"pattern line {v:,.2f}", GOLD))
+        fb = (pt.get("fib") or {}).get("levels") or {}
+        for k_ in ("50%", "61.8%"):
+            v = fb.get(k_)
+            if v and lo * 0.85 < v < hi * 1.15:
+                ax.axhline(v, color="#9aa59e", lw=0.6, ls=":")
+        ymin = min([lo] + [m_[0] for m_ in marks]) * 0.97
+        ymax = max([hi] + [m_[0] for m_ in marks]) * 1.03
+        ax.set_ylim(ymin, ymax)
+        ax.set_xlim(0, len(c) - 1)
+        ax.tick_params(labelsize=7, colors=MUTED, length=2)
+        ax.set_xticks([0, len(c) - 1])
+        ax.set_xticklabels([px_[-len(c)][0][:7], px_[-1][0][:7]], fontsize=7, color=MUTED)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        for sp in ("left", "bottom"):
+            ax.spines[sp].set_color(RULE)
+        # volume at price, same price axis
+        if prof.get("bins"):
+            ax2 = p.fig.add_axes([(M + cw + 10) / W, 1 - (y + chh) / H, (vw - 10) / W, chh / H])
+            bins, val = np.array(prof["bins"]), np.array(prof["val"])
+            hgt = (bins[1] - bins[0]) * 0.9 if len(bins) > 1 else 1
+            ax2.barh(bins, val, height=hgt, color=[GOLD if abs(b - prof["poc"]) < hgt else "#c9d3cb" for b in bins])
+            ax2.set_ylim(ymin, ymax)
+            ax2.axis("off")
+            p.text(M + cw + 10, y + chh + 40, f"most traded {prof['poc']:,.2f}", 7, MUTED)
+        # legend under the chart (below the date labels)
+        lx = M + 40
+        for lab, col in (("price", GREEN), ("50-day", GOLD), ("150-day", "#7a8a80"), ("200-day", "#3d5a80"),
+                         ("Fibonacci 50 / 61.8%", "#9aa59e")):
+            p.rect(lx, y + chh + 34, 16, 3, col)
+            p.text(lx + 22, y + chh + 40, lab, 7, MUTED)
+            lx += 40 + text_w(lab, 7)
+        y += chh + 50
+        mk = "   ".join(m_[1] for m_ in sorted(marks, key=lambda m_: -m_[0]))
+        if mk:
+            p.text(M + 40, y + 12, mk, 7.5, INK)
+            y += 22
+    # two columns: setup and levels | fair value
+    ly = p.section(M, y + 12, half, "Setup and levels")
+    if su:
+        sell = su.get("side") == "sell"
+        rows = [["Setup (tested signals)", su.get("label", "-").title()]]
+        if sell:
+            z = su.get("sell_zone")
+            rows += [["Sell zone (resistance)", f"{z[0]:,.2f} to {z[1]:,.2f}" if z else "at a high"],
+                     ["Support breaks below", f"{su['exit']:,.2f}" if su.get("exit") else "-"]]
+        else:
+            z = su.get("zone")
+            rows += [["Buy zone (near support)", f"{z[0]:,.2f} to {z[1]:,.2f}" if z else "-"],
+                     ["Setup fails below", f"{su['risk']:,.2f}" if su.get("risk") else "-"],
+                     ["Target 1 / 2", " / ".join(f"{x:,.2f}" for x in (su.get("r1"), su.get("r2")) if x) or "at a high"],
+                     ["Reward to risk", f"{su['rr']:.1f} to 1" if su.get("rr") and su["rr"] > 0 else "-"]]
+        cols = [[None, UP if su.get("score", 0) >= 1 else DOWN if su.get("score", 0) <= -1 else GOLD]] + [[None, None]] * (len(rows) - 1)
+        ly = p.table(M, ly, [half * 0.55, half * 0.45], rows, size=8.4, colors=cols)
+        from .levels import lines as su_lines
+        ly, _ = p.bullets(M, ly, [clean(x) for x in su_lines(su)][:5], half, size=7.8, gap=4, max_y=ly + 330)
+    ry = p.section(M + half + GAP, y + 12, half, "Fair value (per share)")
+    if fv:
+        rows = [[k_, f"{x:,.2f}"] for k_, x in (fv.get("methods") or {}).items()]
+        if fv.get("fair"):
+            rows.append(["Fair value (median)", f"{fv['fair']:,.2f} ({fv['upside']:+.0f}%)"])
+            rows.append(["Range of methods", f"{fv['low']:,.2f} to {fv['high']:,.2f}"])
+        if fv.get("epv"):
+            rows.append(["No-growth value", f"{fv['epv']:,.2f}"])
+        rows.append(["Required return", f"{fv['coe'] * 100:.1f}%" + (f", growth {fv['g1'] * 100:.0f}% fading to {fv['g'] * 100:.0f}%"
+                                                                     if fv.get("g1") else (f", growth {fv['g'] * 100:.1f}%" if fv.get("g") is not None else ""))])
+        if fv.get("nav"):
+            rows.append(["Book value", f"{fv['nav']:,.2f} (price {fv.get('pb', 0):.2f}x)"])
+        if fv.get("assets") and not fv.get("financial"):
+            rows.append([f"Assets / liabilities, FY{str(fv.get('bs_year', ''))[2:]}", f"{fv['assets']:,.2f} / {fv['liabilities']:,.2f}"])
+        ry = p.table(M + half + GAP, ry, [half * 0.5, half * 0.5], rows, size=8.2)
+        notes = [clean(f_) for f_ in (fv.get("flags") or [])][:2]
+        if not fv.get("agree", True):
+            notes.append("The methods disagree: treat the range, not the point.")
+        if notes:
+            ry, _ = p.bullets(M + half + GAP, ry, notes, half, size=7.8, gap=4, max_y=ry + 120)
+    y = max(ly, ry) + 6
+    from .ta import TESTED as TT, lines as ch_lines
+    from .patterns import lines as pt_lines
+    rd = [clean(x) for x in ch_lines(ch)]
+    if rd:
+        y = p.section(M, y, full, "Chart read")
+        y, _ = p.bullets(M, y, rd, full, size=8.2, gap=4, max_y=end - 260)
+    pl = [clean(x) for x in pt_lines(pt)]
+    if pl:
+        y = p.section(M, y + 6, full, "Patterns and price mathematics")
+        y, _ = p.bullets(M, y, pl, full, size=8.2, gap=4, max_y=end - 120)
+    ev = ("What PSX data 2012-2026 says (against similar stocks, after costs): chart patterns alone had no reliable edge; "
+          "good results with a strong chart (stage 2 or top-30% relative strength) beat similar stocks by 6.5-8.1% over "
+          "3 months, with a weak chart by about 0%; stage 4 downtrends, Wyckoff springs, head and shoulders tops and "
+          "bullish RSI divergences were followed by underperformance. Zones and targets are chart levels (not tested); "
+          "the fair value is a model estimate. Information only, not investment advice.")
+    p.para(M, max(y + 8, end - 120), ev, full, size=7.2, color=MUTED, lead=1.35, max_y=end)
 
 
 def _disclosures(p: Page, rp: dict, y: float) -> None:

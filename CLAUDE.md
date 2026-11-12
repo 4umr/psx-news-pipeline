@@ -310,6 +310,26 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   (+1 confirm / -1 cancel when results are good or the stock is in a positive scan section; -1 stage 4; -1 spring).
   Self-test: verdict logic + a synthetic uptrend read as stage 2.
 
+## Patterns + Stock of the Day upgrade (2026-11-13) — `patterns.py`, `note._tech_page`, `lab.note_analysis`
+- Umer: "advanced analysis, 10-year technical analyst, deep mathematics, every pattern"; and the daily research
+  (Stock of the Day AND the daily scan) on the improved engine. He chose to show EVERYTHING publicly (setup label,
+  buy zone, targets, fair value) after being told about SECP research-analyst rules; disclosure text updated.
+- `patterns.py`: zigzag pivots (confirmed when price moves thr = 2.5 x 20-day vol x sqrt5, clipped 5-15%; point in
+  time), double bottom/top, (inverse) head and shoulders, ascending/descending triangles, bull flag, cup and handle,
+  RSI divergences, Bollinger squeeze, Fibonacci bounce; maths: volume at price (POC, value area), regression
+  channel (slope, R2, z), Fibonacci levels, Hurst, beta/correlation, volatility, max drawdown. `read(px, idx)`:
+  completed in last 15 sessions + forming (with the line to watch).
+- TESTED 2012-2026 (scratch pat_test.py): bullish patterns alone no edge (double bottom ~0, inv H&S +0.9 weak,
+  asc triangle -1.4, cup -0.5); WARNINGS: head and shoulders top -3.8%/60 (2/12 yrs), bullish RSI divergence
+  -1.4%/20 (2/15), bull flag outside stage 2 -1.8%/20, squeeze outside stage 2 -1.0%/20, Fibonacci bounce -1.3%/20;
+  squeeze inside stage 2 +1.3%/20 (promising, info only). `patterns.verdicts`: one -1 vote max (in levels.setup).
+- Lab cards: "Patterns and price mathematics" panel; AI dossier gets pattern lines + evidence.
+- Stock of the Day: `lab.note_analysis(sym, cfg)` (dossier without AI, fair value with the 10-year PIB from SBP if no
+  state, setup, chart, patterns, 460 sessions of prices) -> d["ta"]; note page 3 "Technical analysis and valuation"
+  (chart with 50/150/200-day, support/resistance/fails-below, pattern line, Fibonacci, volume at price; setup table;
+  fair value table; chart read; patterns; evidence). Pages: summary, financials, technical, business (if the annual
+  report was read; disclosures on the last page). Caption adds the setup and model fair value lines.
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,

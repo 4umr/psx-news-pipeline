@@ -164,6 +164,12 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
                                                      + "; it counts only as confirmation of results, or as a warning."],
                          title="Chart read", max_lines=12)
 
+    if d.get("patterns"):
+        from .patterns import lines as pat_lines
+        pl = pat_lines(d["patterns"])
+        if pl:
+            y = c.highlights(y, pl, title="Patterns and price mathematics", max_lines=12)
+
     # quarterly EPS vs the same quarter a year earlier
     # the snapshot can be a quarter behind: add the quarters checked against the results announcements
     q = {**(d["snap"].get("eps_quarters") or {}), **((d.get("ver") or {}).get("quarters") or {})}

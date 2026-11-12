@@ -287,6 +287,25 @@ def _result_lines(prof: dict) -> tuple[list[str], str]:
 
 
 # ---------------------------------------------------------------- text
+def _ta_caption(d: dict) -> list[str]:
+    """One line each for the setup and the fair value (owner's decision, 13 Nov 2026: shown publicly)."""
+    t = d.get("ta") or {}
+    su, fv = t.get("setup") or {}, t.get("fv") or {}
+    out = []
+    if su.get("label"):
+        if su.get("side") == "sell" and su.get("sell_zone"):
+            lv = f"sell zone {su['sell_zone'][0]:,.2f} to {su['sell_zone'][1]:,.2f}"
+        elif su.get("zone") and su.get("risk"):
+            lv = (f"buy zone {su['zone'][0]:,.2f} to {su['zone'][1]:,.2f}, fails below {su['risk']:,.2f}"
+                  + (f", target {su['r1']:,.2f}" if su.get("r1") else ""))
+        else:
+            lv = ""
+        out.append(f"Setup: {su['label'].title()}" + (f" ({lv})" if lv else ""))
+    if fv.get("fair"):
+        out.append(f"Fair value (model): Rs {fv['fair']:,.2f}, range {fv['low']:,.2f} to {fv['high']:,.2f}")
+    return out + ([""] if out else [])
+
+
 def caption(d: dict) -> str:
     what = ""
     rp = d.get("report") or {}
@@ -298,8 +317,9 @@ def caption(d: dict) -> str:
              f"{esc(d['sector'])} · Rs {d['price']:,.2f}" + (f" · P/E {d['pe']:.1f}" if d.get("pe") else ""),
              "", esc(what), "",
              # no links (owner's choice): everything is in the note itself
+             *(_ta_caption(d)),
              "Full research note in the pages above (PDF below): key data, the business, latest results, "
-             "four years of financials, outlook and risks.",
+             "four years of financials, technical analysis and valuation, outlook and risks.",
              "Research from official filings, not investment advice."]
     return "\n".join(lines)
 
@@ -348,6 +368,12 @@ def run(cfg: dict, dry: bool = False, force: str | None = None, preview: bool = 
             _save(st)
             return
         d["published"] = today
+        try:  # technical analysis and valuation page (Lab engine: fair value, chart read, patterns, setup)
+            from .lab import note_analysis
+            d["ta"] = note_analysis(sym, cfg)
+        except Exception:  # noqa: BLE001  the note still goes out without that page
+            log.exception("stock of the day: technical analysis for %s failed", sym)
+            d["ta"] = {}
         pages, pdf = build(d)  # brokerage-style research note: page images + the same note as a PDF
         dest = (DIR / "preview") if preview else PUBLISHED  # a preview never reaches the public website
         dest.mkdir(parents=True, exist_ok=True)

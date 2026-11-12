@@ -209,6 +209,17 @@ def dossier(sym: str, shared: dict, cfg: dict) -> dict | None:
     try:
         from . import ta
         d["chart"] = ta.read(px, idx, (shared.get("rs") or {}).get(sym))
+        from . import patterns
+        try:  # a pattern problem must not take the chart read with it
+            d["patterns"] = patterns.read(px, idx)
+        except Exception:  # noqa: BLE001
+            log.exception("patterns %s failed", sym)
+            d["patterns"] = {}
+        pl = patterns.lines(d["patterns"])
+        if pl:
+            extra += ("\nCHART PATTERNS AND PRICE MATHEMATICS: " + " | ".join(pl)
+                      + "\nPATTERN EVIDENCE ON PSX 2012-2026: bullish patterns alone had no edge; head and shoulders tops, "
+                        "bullish RSI divergences and bull flags or squeezes outside a stage 2 uptrend were followed by underperformance.")
         cl = ta.lines(d["chart"])
         if cl:
             extra += ("\nCHART READ (computed from adjusted daily prices): " + " | ".join(cl)
@@ -525,6 +536,39 @@ def _levels_line(su: dict) -> str:
     if su.get("r1"):
         parts.append(f"target {su['r1']:,.2f}" + (f" / {su['r2']:,.2f}" if su.get("r2") else ""))
     return ", ".join(parts)
+
+
+def note_analysis(sym: str, cfg: dict) -> dict:
+    """The Lab engine for one stock, for the Stock of the Day note: verified fair value, chart read, patterns and the
+    setup with its levels (rule-based; no AI view). Same formulas and evidence as the Lab cards."""
+    from . import fairvalue, patterns
+    from .scan import _last_result
+    from .state import State
+    sbp_snap = State().snap("sbp")
+    if not (sbp_snap or {}).get("pib"):
+        try:  # the Stock of the Day workflow has no news-pipeline state: read the 10-year PIB yield from SBP
+            from .sources import sbp
+            sbp_snap = sbp.fetch()[0] or sbp_snap
+        except Exception:  # noqa: BLE001
+            pass
+    idx = _index(500)
+    act = {r["company_code"].strip(): r for r in scs.daily_activity() if r.get("company_code")}
+    shared = {"index": idx, "session": max(idx) if idx else now_pkt().strftime("%Y-%m-%d"), "tech": scs_deep.technicals(),
+              "opinions": {}, "meetings": scs.board_meetings(), "xdates": scs.book_closures(), "brokers": [], "flows": [],
+              "act": act, "context": "", "coe": fairvalue.coe(cfg, fairvalue.risk_free(sbp_snap)), "rs": _try(_rs_ranks) or {}}
+    d = dossier(sym, shared, cfg)
+    if not d:
+        return {}
+    if not d.get("patterns"):
+        d["patterns"] = patterns.read(d["px"], idx)
+    su = levels.setup(d, None, None, _last_result(sym, shared["session"]))
+    fv = d.get("fv") or {}
+    if (d.get("ver") or {}).get("problems"):
+        fv = {k: v for k, v in fv.items() if k not in ("fair", "methods", "low", "high", "upside")}
+    pt = dict(d.get("patterns") or {})
+    long_px = _history(sym, 720) or d["px"]   # enough sessions for the 150 / 200-day averages over the whole chart
+    return {"setup": su, "fv": fv, "chart": d.get("chart") or {}, "patterns": pt, "px": long_px[-460:],
+            "problems": (d.get("ver") or {}).get("problems", [])}
 
 
 def chunks(text: str, limit: int = 3900) -> list[str]:

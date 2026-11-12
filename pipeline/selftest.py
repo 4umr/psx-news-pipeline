@@ -216,6 +216,23 @@ def levels_tests() -> list[str]:
     pxs = [(d, 100 * 1.003 ** i, 100 * 1.003 ** i, 100000, 100 * 1.003 ** i * 1.01, 100 * 1.003 ** i * 0.99) for i, d in enumerate(days)]
     rd = ta.read(pxs, {d: 1000.0 for d in days}, 0.9)
     ok("steady uptrend with strong RS reads as stage 2", rd.get("stage2") is True and rd.get("stage4") is False)
+    from . import patterns as pt
+    import numpy as _np
+    base_ = [100 * (1 + 0.002 * ((-1) ** i)) for i in range(150)]
+    leg = (list(_np.linspace(100, 80, 20)) + list(_np.linspace(80, 90, 10)) + list(_np.linspace(90, 80.5, 10))
+           + list(_np.linspace(80.5, 95, 15)))
+    cc = _np.array(base_ + leg)
+    evs = pt.events(cc, cc * 1.003, cc * 0.997, _np.full(len(cc), 1e5))
+    ok("double bottom 80 / 80.5 with a peak at 90 completes on the close above 90",
+       any(n == "pt_double_bottom" and cc[i] > 90 >= cc[i - 1] for i, n in evs))
+    ok("pattern warnings vote once: head and shoulders top",
+       [v for v, _ in pt.verdicts({"recent": [("2026-11-10", "pt_hs_top"), ("2026-11-11", "pt_bull_div")]}, True)] == [-1])
+    ok("bull flag inside stage 2 is not a warning", pt.verdicts({"recent": [("d", "pt_bull_flag")]}, True) == [])
+    ok("bull flag outside stage 2 is a warning", [v for v, _ in pt.verdicts({"recent": [("d", "pt_bull_flag")]}, False)] == [-1])
+    hh = pt.hurst(_np.cumprod(1 + _np.random.default_rng(1).normal(0, 0.01, 400)) * 100)
+    ok("Hurst of a random walk is near 0.5", hh is not None and 0.35 < hh < 0.65)
+    vp = pt.volume_profile(_np.array([10.0] * 60 + [12.0] * 60), _np.array([1e6] * 60 + [1e5] * 60))
+    ok("volume profile: most value traded at 10", abs(vp["poc"] - 10.0) < 0.1)
     ln = earnings.eps_line({"annual": True, "eps": 10.0, "eps_ly": 8.0, "eps_q": 3.0, "eps_q_ly": 1.0, "yoy_q": 2.0, "yoy": 0.25})
     ok("annual result line shows the fourth quarter first", ln == "fourth-quarter EPS 3.00 vs 1.00 a year ago (+200%); full year 10.00 vs 8.00")
     return bad

@@ -120,6 +120,8 @@ def setup(d: dict, call: dict | None, scan_item: dict | None, result: dict | Non
     from .ta import verdicts
     good_now = good or bool(scan_item and scan_item["kind"] != "warning")
     votes += verdicts(d.get("chart") or {}, good_now)
+    from .patterns import verdicts as pat_verdicts
+    votes += pat_verdicts(d.get("patterns") or {}, bool((d.get("chart") or {}).get("stage2")))
     if call and call.get("view") in ("Outperform", "Underperform") and call.get("confidence", 0) >= 3:
         votes.append((1 if call["view"] == "Outperform" else -1,
                       f"AI view {call['view']} {call['confidence']}/5 (still being scored)"))
