@@ -14,6 +14,10 @@ def _f(x, u="x", d=1) -> str:
     return "n/a" if x is None else f"{x:,.{d}f}{u}"
 
 
+def idx_now(d: dict, px: list) -> float | None:
+    return (d.get("index_map") or {}).get(px[-1][0]) if px else None
+
+
 def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
     from .lab import record_line
     v, t = d["snap"]["values"], c.t
@@ -89,14 +93,16 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
     # 12-month chart: price, 50-day average, support / resistance, KSE-100 rebased
     px = d["px"][-250:]
     if len(px) > 30:
-        ph = 330
+        ph, aw, top = 390, 760, y + 70
+        ah = ph - 110
         c.panel(c.L, y, 1000, ph)
         c.label(c.L + 30, y + 38, "12 months: price vs KSE-100", 14)
-        ax = c.axes(c.L + 30, y + 70, 800, ph - 110)
+        ax = c.axes(c.L + 30, top, aw, ah)
         closes = np.array([p[2] for p in px], dtype=float)
         xs = np.arange(len(px))
         ax.plot(xs, closes, color=t["accent"], lw=2.4)
         ax.fill_between(xs, closes, closes.min() * 0.97, color=t["accent"], alpha=0.07, lw=0)
+        sma = None
         if len(closes) >= 50:
             sma = np.convolve(closes, np.ones(50) / 50, mode="valid")
             ax.plot(xs[49:], sma, color=GOLD, lw=1.6, alpha=0.9)
@@ -105,18 +111,50 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
         if reb is not None and len(reb) == len(px):
             ax.plot(xs, reb, color=FLAT, lw=1.4, ls=(0, (4, 3)))
             lo, hi = min(lo, reb.min()), max(hi, reb.max())
-        tech = d.get("tech") or {}
-        for key, colr in (("support1", UP), ("resistance1", DOWN)):
-            lv = tech.get(key)
+        # support / resistance: the same levels as the buy and sell panel (else SCS / computed technicals)
+        su, tech = d.get("setup") or {}, d.get("tech") or {}
+        sup = su.get("s1") if su else tech.get("support1")
+        res = su.get("r1") if su else tech.get("resistance1")
+        shown = {}
+        for name, lv, colr in (("support", sup, UP), ("resistance", res, DOWN)):
             if lv and lo * 0.9 < lv < hi * 1.1:
-                ax.axhline(lv, color=colr, lw=1, ls=(0, (2, 3)), alpha=0.7)
+                ax.axhline(lv, color=colr, lw=1.1, ls=(0, (2, 3)), alpha=0.8)
+                lo, hi = min(lo, lv), max(hi, lv)
+                shown[name] = (lv, colr)
+        y0, y1 = lo * 0.96, hi * 1.03
         ax.set_xlim(0, len(px) - 1)
-        ax.set_ylim(lo * 0.96, hi * 1.03)
+        ax.set_ylim(y0, y1)
+        tags = []  # the number at the end of each line, just right of the plot, where no price line can cover it
+        for name, (lv, colr) in shown.items():
+            tags.append([top + (1 - (lv - y0) / (y1 - y0)) * ah, f"{lv:,.2f}", colr])
+        if reb is not None and len(reb) == len(px) and idx_now(d, px):
+            tags.append([top + (1 - (reb[-1] - y0) / (y1 - y0)) * ah, f"{idx_now(d, px):,.0f}", FLAT])
+        tags.sort()
+        for i in range(1, len(tags)):  # keep tags at least 20 px apart
+            tags[i][0] = max(tags[i][0], tags[i - 1][0] + 20)
+        for py, txt, colr in tags:
+            c.text(c.L + 36 + aw, py + 5, txt, 10, colr, bold=True)
         c.text(c.L + 30, y + ph - 22, px[0][0][:7], 10, t["muted"])
-        c.text(c.L + 830, y + ph - 22, px[-1][0][:7], 10, t["muted"], ha="right")
-        for k, (lab, colr) in enumerate((("price", t["accent"]), ("50-day avg", GOLD), ("KSE-100", FLAT),
-                                         ("support", UP), ("resistance", DOWN))):
-            c.text(c.R - 24, y + 90 + k * 24, lab, 10.5, colr, bold=True, ha="right")
+        c.text(c.L + 30 + aw, y + ph - 22, px[-1][0][:7], 10, t["muted"], ha="right")
+        # legend with today's numbers
+        ch12 = (closes[-1] / closes[0] - 1) * 100
+        idx = d.get("index_map") or {}
+        kse_now, kse_then = idx.get(px[-1][0]), idx.get(px[0][0])
+        legend = [("price", f"Rs {closes[-1]:,.2f}", f"{ch12:+.1f}% in 12m", t["accent"]),
+                  ("50-day avg", f"Rs {sma[-1]:,.2f}" if sma is not None else "n/a",
+                   f"price {(closes[-1] / sma[-1] - 1) * 100:+.1f}% vs it" if sma is not None else "", GOLD),
+                  ("KSE-100", f"{kse_now:,.0f}" if kse_now else "n/a",
+                   f"{(kse_now / kse_then - 1) * 100:+.1f}% in 12m" if kse_now and kse_then else "", FLAT),
+                  ("support", f"Rs {sup:,.2f}" if sup else "none below",
+                   f"{(sup / closes[-1] - 1) * 100:+.1f}% from price" if sup else "", UP),
+                  ("resistance", f"Rs {res:,.2f}" if res else "at a high",
+                   f"{(res / closes[-1] - 1) * 100:+.1f}% from price" if res else "", DOWN)]
+        for k, (lab, val, sub, colr) in enumerate(legend):
+            yy = y + 74 + k * 60
+            c.text(c.R - 24, yy, lab, 10, colr, bold=True, ha="right")
+            c.text(c.R - 24, yy + 22, val, 13, CREAM, bold=True, ha="right")
+            if sub:
+                c.text(c.R - 24, yy + 40, sub, 9, t["muted"], ha="right")
         y += ph + 16
 
     # quarterly EPS vs the same quarter a year earlier
