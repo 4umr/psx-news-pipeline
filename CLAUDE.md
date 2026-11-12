@@ -261,6 +261,28 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   scored BEFORE the card is drawn. Scan lines show the tested number ("tested +5.1%"). Stock cards end with a
   data-check line (passed / problem + notes like book value updated).
 
+## Intraday data fix (2026-11-13) — scstrade's all-stock table is NOT live
+- Found from the intraday archive: MS_DailyActivity (daily_activity) changes ONCE a day, ~16:13-16:26 PKT; from
+  then until the next afternoon it shows that session. So during market hours it is YESTERDAY. Victims: the
+  10:30 "unusual volume" card on 12 Nov (11 Nov volumes), big moves of non-KSE-100 stocks, the results post's
+  "stock x% so far today", opening/midday breadth and volume leaders, and the intraday recorder (stored nothing).
+- Fix: `scs.activity_is_today(act, view)` (KSE-100 movers: table price == live CurrentPrice?) and
+  `scs.live_activity(view)` -> (rows, full): full table once today's, else KSE-100 rows from the LIVE index view
+  (price, change; volume None). unusual_volume now runs 15:30-18:00 only on the full table ("Unusual volume
+  today"); stock_moves adds mid/small caps only when full; briefs show KSE-100 breadth and no volume figures until
+  full; recorder stores live KSE-100 prices every pass. `kse100_view_cached()` 30 s memo.
+- Live price for EVERY stock: PSX screener (`psx.screener()`, dps.psx.com.pk/screener, 754 stocks, price + change %,
+  no volume). dps market-watch / timeseries URLs now 404. `runner._screener_probe` (11:00-13:00 once a trading
+  day) compares it with the live view and stores snap `screener_probe` [{compared, same_as_live,
+  same_as_prev_close}] in the public state branch: if same_as_live ~ compared, use it for live mid/small moves.
+- Early-edge study (scratch early.py, 2012-2026, mid/small/micro, Rs 2m+/day, vs same-tier liquid stocks):
+  live rule GOOD + up 3%: reaction day +6.2%, next-open gap +2.1%, from reaction close +8.1% vs next open +5.7%
+  over 60 sessions; but 47% are locked at the upper limit (cannot buy that day). Not locked: gap +0.6%,
+  close->60 +6.6 vs open->60 +5.8. GOOD stocks drift +2.7% in the 10 sessions BEFORE results. Previous result
+  GOOD -> next GOOD 41% (base 23%); previous BAD -> next BAD 36%. Buying 5 sessions before results after a GOOD
+  quarter: +1.0% avg to the reaction close, 15/15 years positive, halves +0.55/+1.20, but median -0.1%, 49% beat
+  -> under the 0.75% cost bar, information only.
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,

@@ -85,6 +85,55 @@ def daily_activity(max_age: float = 30.0) -> list[dict]:
     return rows
 
 
+_VIEW: dict = {"at": 0.0, "rows": []}
+
+
+def kse100_view_cached(max_age: float = 30.0) -> list[dict]:
+    import time
+    if _VIEW["rows"] and time.time() - _VIEW["at"] < max_age:
+        return _VIEW["rows"]
+    rows = kse100_view()
+    if rows:
+        _VIEW.update(at=time.time(), rows=rows)
+    return rows
+
+
+def activity_is_today(act: list[dict], view: list[dict]) -> bool | None:
+    """The all-stock daily-activity table is updated ONCE a day, about 16:10-16:30 PKT (found 13 Nov 2026 from
+    the intraday recorder: no change between 09:15 and 16:13). Until then it holds the PREVIOUS session.
+    Test: for KSE-100 stocks that moved today (live index view: price != previous close), does the table
+    show today's price (True) or yesterday's close (False)? None = cannot tell."""
+    a = {(r.get("company_code") or "").strip(): r.get("trading_close") for r in act}
+    n = cur = 0
+    for r in view or []:
+        c, p, ld = (r.get("company_code") or "").strip(), r.get("CurrentPrice"), r.get("LDCP")
+        if not c or not p or not ld or abs(p - ld) < 0.006 or a.get(c) is None:
+            continue
+        n += 1
+        cur += abs(a[c] - p) < 0.006
+    return None if n < 15 else cur >= 0.6 * n
+
+
+def live_activity(view: list[dict] | None = None) -> tuple[list[dict], bool]:
+    """Rows shaped like daily_activity() that are about TODAY: the full table once it has been updated after
+    the close; before that, the KSE-100 stocks from the live index view (price and change; no volume).
+    Returns (rows, full) where full=True means every stock with today's volume."""
+    view = view if view is not None else kse100_view_cached()
+    act = daily_activity()
+    if activity_is_today(act, view):
+        return act, True
+    sec = {(r.get("company_code") or "").strip(): r for r in act}
+    rows = []
+    for r in view or []:
+        c, p, ld = (r.get("company_code") or "").strip(), r.get("CurrentPrice"), r.get("LDCP")
+        if c and p and ld:
+            o = sec.get(c) or {}
+            rows.append({"company_code": c, "company_name": r.get("company_name") or o.get("company_name", ""),
+                         "sector_name": o.get("sector_name", ""), "trading_close": p, "trading_change": round(p - ld, 4),
+                         "trading_vol": None})
+    return rows, False
+
+
 def price_history(symbol: str, start: datetime, end: datetime) -> list[dict]:
     """Daily OHLC + volume for one stock (available back to 2018).
 

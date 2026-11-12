@@ -1,8 +1,10 @@
 """Intraday price snapshots, recorded by the fast loop about once a minute during the session.
 
 Nobody offers free intraday PSX history, so the pipeline builds its own: every pass in market hours
-writes the last price, cumulative volume, high and low of every stock whose price or volume changed
-since the previous pass (plus the KSE-100 level). One file per trading day in state/intraday/,
+writes the last price of every KSE-100 stock whose price changed since the previous pass (live index view;
+volume is empty), plus the KSE-100 level. The all-stock table (with volume, high, low) is only updated once,
+after the close, so it adds one full end-of-day snapshot. (Until 13 Nov 2026 the recorder read only that
+table and so stored nothing new during the session.) One file per trading day in state/intraday/,
 gzipped once the session is over, kept 10 days in the Actions cache and archived for good as an
 asset of the GitHub release "intraday" (public data, about 0.5 MB a day).
 
@@ -59,9 +61,9 @@ def record(now: datetime, rows: list[dict], view: list[dict] | None = None) -> i
     for r in rows:
         sym = (r.get("company_code") or "").strip()
         c, v = r.get("trading_close"), r.get("trading_vol")
-        if not sym or not c or v is None:
+        if not sym or not c:
             continue
-        key = (f"{c:g}", f"{int(v)}")
+        key = (f"{c:g}", f"{int(v)}" if v is not None else "")
         if _last.get(sym) == key:
             continue
         _last[sym] = key

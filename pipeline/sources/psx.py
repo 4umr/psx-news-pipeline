@@ -169,3 +169,23 @@ def index_members(index: str, known: set[str] | None = None) -> list[str]:
         if sym and sym not in out:
             out.append(sym)
     return out
+
+
+def screener() -> dict[str, tuple[float, float]]:
+    """PSX screener page (dps.psx.com.pk/screener): every listed stock with price and change % (no volume).
+    {sym: (price, change %)}. Whether it is live during the session is checked by runner._screener_probe."""
+    try:
+        t = http().get("https://dps.psx.com.pk/screener", timeout=40).text
+    except Exception as e:  # noqa: BLE001
+        log.warning("PSX screener failed: %s", e)
+        return {}
+    out = {}
+    for row in re.findall(r"<tr><td data-order=\"([A-Z0-9-]+)\">(.*?)</tr>", t, flags=re.S):
+        nums = re.findall(r'data-order="(-?[0-9.eE+-]+)"', row[1])
+        # after the symbol: market cap, price, change %, 1-year %, P/E, dividend yield, free float, 30-day volume
+        if len(nums) >= 3:
+            try:
+                out[row[0]] = (float(nums[1]), float(nums[2]))
+            except ValueError:
+                continue
+    return out

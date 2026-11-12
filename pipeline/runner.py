@@ -484,6 +484,29 @@ def run_loop(cfg: dict, dry_run: bool = False, minutes: int | None = None) -> bo
     return more
 
 
+def _screener_probe(now: datetime, state: State, view: list[dict]) -> None:
+    """Once a trading day around 11:00: is PSX's screener page live during the session? (scstrade's all-stock
+    table is not: it updates once, after the close.) Compares it with the live KSE-100 view and keeps the
+    answer in state snap 'screener_probe' (last 10 days) for a decision on live prices for every stock."""
+    if now.weekday() > 4 or not in_window(now, "11:00", "13:00") or state.flag(f"scrprobe:{now:%Y-%m-%d}"):
+        return
+    state.set_flag(f"scrprobe:{now:%Y-%m-%d}")
+    from .sources import psx
+    scr = psx.screener()
+    n = live = prev = 0
+    for r in view or []:
+        c, p, ld = r.get("company_code"), r.get("CurrentPrice"), r.get("LDCP")
+        if not c or not p or not ld or abs(p - ld) < 0.006 or c not in scr:
+            continue
+        n += 1
+        live += abs(scr[c][0] - p) <= max(0.011, p * 0.002)
+        prev += abs(scr[c][0] - ld) < 0.006
+    res = {"time": f"{now:%Y-%m-%d %H:%M}", "stocks": len(scr), "compared": n, "same_as_live": live, "same_as_prev_close": prev}
+    hist = (state.snap("screener_probe") or [])[-9:] + [res]
+    state.set_snap("screener_probe", hist)
+    log.info("PSX screener probe: %s", res)
+
+
 def _start_workflows(cfg: dict, state: State, now: datetime) -> None:
     """Start the other workflows (swing scan, Stock of the Day, weekly cards, re-test) at their proper
     time. GitHub's own schedule starts them hours late; their schedules stay as a backstop and each of
@@ -585,8 +608,9 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
     if not light and mk:
         state.set_snap("mk_last", mk)  # light passes reuse the last global snapshot (card tiles, context)
     if intraday.session_open(now) and not bootstrap:
-        S("intraday record", lambda: intraday.record(now, scs.daily_activity(), view_now))
+        S("intraday record", lambda: intraday.record(now, scs.live_activity(view_now)[0], view_now))
     S("intraday housekeeping", intraday.housekeeping, now)
+    S("PSX screener probe", _screener_probe, now, state, view_now)
 
     if not light:
         _health(cfg, state, sender, {

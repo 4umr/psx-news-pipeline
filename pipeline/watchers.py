@@ -221,8 +221,8 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dic
         return []
     fresh.sort(key=lambda r: (r.get("company_code") not in kse100, r.get("company_code") or ""))
     limit = 25
-    try:
-        act = {r["company_code"]: r for r in scs.daily_activity() if r.get("company_code")}
+    try:  # today's move: KSE-100 live during the session, every stock once the table is updated after the close
+        act = {r["company_code"]: r for r in scs.live_activity()[0] if r.get("company_code")}
     except Exception:  # noqa: BLE001
         act = {}
     yoy = _assess_all(fresh[:limit])
@@ -631,11 +631,13 @@ def stock_moves(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
     names: dict[str, str] = {}
     try:
         act = {r["company_code"]: r for r in scs.daily_activity() if r.get("company_code")}
+        # the all-stock table is yesterday's until about 16:15: mid/small caps only once it is today's
+        today_ok = scs.activity_is_today(list(act.values()), view)
         min_val = float((cfg.get("swing") or {}).get("min_adtv", 10e6))
         for c, v in avg_values(state, act).items():
             r = act[c]
             names[c] = r.get("company_name") or ""
-            if v >= min_val and r.get("trading_close") and r.get("trading_change") is not None:
+            if today_ok and v >= min_val and r.get("trading_close") and r.get("trading_change") is not None:
                 quotes[c] = (r["trading_close"], r["trading_close"] - r["trading_change"])
     except Exception as e:  # noqa: BLE001  KSE-100 moves still work without the wider list
         log.warning("liquid stocks for big moves failed: %s", e)
@@ -1037,14 +1039,18 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
 # ---------------------------------------------------------------- unusual volume
 def unusual_volume(now, state: State, cfg: dict, kse100: set[str]) -> list[Alert]:
     """Volume running at a multiple of the 10-session average — often a footprint of news or big money."""
-    mh = cfg["market_hours"]
-    if now.weekday() > 4 or not in_window(now, "10:30", mh["end"]):
+    # volume for every stock exists only in the all-stock table, which is updated once, after the close
+    # (about 16:15). Before 13 Nov 2026 this ran from 10:30 on YESTERDAY's volumes. Now: once the table is
+    # today's, until 18:00.
+    if now.weekday() > 4 or not in_window(now, "15:30", "18:00"):
         return []
     daily = state.data.get("daily", {})
     hist = [daily[d]["vol"] for d in sorted(daily) if daily[d].get("vol") and d < f"{now:%Y-%m-%d}"][-10:]
     if len(hist) < 5:
         return []  # needs about a week of history first
-    act = scs.daily_activity()
+    act, full = scs.live_activity()
+    if not full:
+        return []
     wl = {s.upper() for s in (cfg.get("watchlist") or {})}
     mult = cfg.get("unusual_volume_x", 3.0)
     hits = []
@@ -1070,10 +1076,10 @@ def unusual_volume(now, state: State, cfg: dict, kse100: set[str]) -> list[Alert
         if close and chg is not None and close - chg:
             pct = f" · price {chg / (close - chg) * 100:+.1f}%"
         lines.append(f"🔎 <b>{esc(code)}</b> {vol / 1e6:,.2f}m shares — <b>{x:.1f}×</b> its 10-day average{pct}")
-    text = (header("🔎", "Unusual volume", f"KSE-100 / watchlist · {now:%H:%M} PKT") + "\n" + "\n".join(lines) +
+    text = (header("🔎", "Unusual volume today", f"KSE-100 / watchlist · after the close · {now:%d %b}") + "\n" + "\n".join(lines) +
             "\n\n💡 Volume spikes often come with news: check filings and headlines. On PSX a volume burst on its own "
             "has not predicted further gains (2010-2026 test), and after weak results it was followed by underperformance.")
-    card = {"theme": "psx", "kicker": f"Unusual volume · {now:%H:%M} PKT",
+    card = {"theme": "psx", "kicker": f"Unusual volume today · {now:%d %b}",
             "title": f"{len(hits)} stock(s) trading far above normal volume",
             "rows_title": "Stock · volume vs 10-day average · price", "rows": [
                 (code, f"{vol / 1e6:,.2f}m shares · {x:.1f}x average",

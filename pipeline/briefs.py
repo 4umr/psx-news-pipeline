@@ -731,20 +731,22 @@ def midday(cfg: dict, state: State, mk: dict, view=None):
     last = state.snap("kse_last_close")
     if not cur or not pre or (last and abs(pre - last) > 1):
         return None, None, ""  # market closed today (holiday) - skip
-    act = scs.daily_activity()
+    # the all-stock table is yesterday's until about 16:15: breadth from the live KSE-100, no volume figures
+    act, full = scs.live_activity(view)
     chg = cur - pre
     up = sum(1 for r in act if (r.get("trading_change") or 0) > 0)
     dn = sum(1 for r in act if (r.get("trading_change") or 0) < 0)
     vol = sum(r.get("trading_vol") or 0 for r in act)
     gl = [f"KSE-100 at {cur:,.0f}, {'up' if chg > 0 else 'down'} {abs(chg):,.0f} pts ({chg / pre * 100:+.2f}%)",
-          f"{up} stocks up · {dn} down · {vol / 1e6:,.0f}m shares traded so far"]
+          (f"{up} stocks up · {dn} down · {vol / 1e6:,.0f}m shares traded so far" if full
+           else f"KSE-100 stocks: {up} up · {dn} down")]
     secs = sector_rows(view, act)
     if secs:
         gl.append(f"Leading: {secs[0][0]} ({secs[0][2]:+.0f} pts) · Lagging: {secs[-1][0]} ({secs[-1][2]:+.0f} pts)")
     hours = max(now.hour - 6, 3)
     text = (header("🕐", "PSX Midday Pulse", f"{now:%A, %d %B %Y} · {now:%H:%M} PKT") + "\n"
             + f"{section('⚡', 'At a glance')}\n" + "\n".join(f"• {esc(x)}" for x in gl) + "\n\n"
-            + (f"{breadth_block(act)}\n\n" if act else "")
+            + (f"{breadth_block(act)}\n\n" if act and full else "")
             + (f"{sector_block(view, act)}\n\n" if secs else "")
             + f"{movers_block(view)}\n\n"
             + f"{section('📰', 'News so far today')}\n{headlines_block(state, hours, 8)}"
@@ -752,8 +754,8 @@ def midday(cfg: dict, state: State, mk: dict, view=None):
     cards = None
     if cfg.get("brand", {}).get("cards", True):
         from .cards import midday_cards
-        hl = [x for x in (_sector_line(view, act), _movers_line(view), _volume_line(act)) if x]
-        ctx = {"view": view, "act": act, "idx": scs.indices(), "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"),
+        hl = [x for x in (_sector_line(view, act), _movers_line(view), _volume_line(act) if full else "") if x]
+        ctx = {"view": view, "act": act if full else [], "idx": scs.indices(), "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"),
                "hist": scs.index_history(45),
                "mk": mk, "intraday": (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}"),
                "sectors": _sector_rows_for_card(view, act), "headlines": card_headlines(cfg, state, hours, 8),
@@ -778,7 +780,7 @@ def opening(cfg: dict, state: State, mk: dict, view=None):
     last = state.snap("kse_last_close")
     if not cur or not pre or (last and abs(pre - last) > 1):
         return None, None, ""  # market closed today (holiday)
-    act = scs.daily_activity()
+    act, full = scs.live_activity(view)  # KSE-100 live; the all-stock table is yesterday's until ~16:15
     chg = cur - pre
     intra = (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}") or {}
     pts = intra.get("pts") or []
@@ -786,14 +788,14 @@ def opening(cfg: dict, state: State, mk: dict, view=None):
     if pts:
         first = pts[0][1]
         hl.append(f"First reading {pts[0][0]}: {first:,.0f} ({first - pre:+,.0f} pts vs yesterday's close)")
-    hl += [x for x in (_sector_line(view, act), _movers_line(view), _volume_line(act)) if x]
+    hl += [x for x in (_sector_line(view, act), _movers_line(view), _volume_line(act) if full else "") if x]
     text = (header("🔔", "PSX Opening Bell", f"{now:%A, %d %B %Y} · {now:%H:%M} PKT") + "\n"
             f"KSE-100 at <b>{cur:,.0f}</b> ({chg:+,.0f} pts, {chg / pre * 100:+.2f}%)\n"
             + "\n".join(f"• {esc(x)}" for x in hl) + footer(cfg))
     cards = None
     if cfg.get("brand", {}).get("cards", True):
         from .cards import opening_cards
-        ctx = {"view": view, "act": act, "idx": scs.indices(), "intraday": intra, "hist": scs.index_history(45),
+        ctx = {"view": view, "act": act if full else [], "idx": scs.indices(), "intraday": intra, "hist": scs.index_history(45),
                "highlights": hl}
         cards = _safe_card(opening_cards, cfg, now, ctx)
     return text, cards, brief_caption(cfg, f"<b>PSX Opening Bell</b> · {now:%A %d %b} · {now:%H:%M} PKT", state, 4, 2)

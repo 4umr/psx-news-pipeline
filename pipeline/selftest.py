@@ -181,6 +181,13 @@ def levels_tests() -> list[str]:
                                           {"date": "2026-11-12", "kind": "warning", "r5": -3.0}]})
     ok("scan record: asset-backed 2, average +0.5%, 50% right; warnings 1, 100% right",
        "asset-backed 2, average +0.5% vs KSE-100, 50% right" in rec and "warnings 1, average -3.0% vs KSE-100, 100% right" in rec)
+    from .sources import scs as _scs
+    v20 = [{"company_code": f"S{i}", "CurrentPrice": 101.0, "LDCP": 100.0} for i in range(20)]
+    ok("all-stock table still yesterday's (shows the previous close) -> not today",
+       _scs.activity_is_today([{"company_code": f"S{i}", "trading_close": 100.0} for i in range(20)], v20) is False)
+    ok("all-stock table updated after the close -> today",
+       _scs.activity_is_today([{"company_code": f"S{i}", "trading_close": 101.0} for i in range(20)], v20) is True)
+    ok("too few moving stocks to tell -> unknown", _scs.activity_is_today([], v20[:5]) is None)
     ln = earnings.eps_line({"annual": True, "eps": 10.0, "eps_ly": 8.0, "eps_q": 3.0, "eps_q_ly": 1.0, "yoy_q": 2.0, "yoy": 0.25})
     ok("annual result line shows the fourth quarter first", ln == "fourth-quarter EPS 3.00 vs 1.00 a year ago (+200%); full year 10.00 vs 8.00")
     return bad
