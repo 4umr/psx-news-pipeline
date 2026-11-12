@@ -36,6 +36,19 @@ def formulas() -> list[str]:
     f3 = fairvalue.compute(snap, 0.17, -2.0, {})
     ok("loss-maker: no fair value", f3.get("fair") is None)
     ok("cost of equity = 12 + 5 = 17%", _close(fairvalue.coe({}, 12.0), 0.17))
+    # normalised earnings: a loss now with a 5-year average of 3 -> 3 / 0.17 = 17.65 is the only method
+    ann = {"2022": 3.0, "2023": 3.0, "2024": 3.0, "2025": 3.0, "2026": 3.0}
+    f4 = fairvalue.compute({**snap, "eps_annual": ann}, 0.17, -2.0, {})
+    ok("loss now, 5-year average 3: fair = 17.65", _close(f4.get("fair"), 17.647))
+    # a spike: trailing 30 vs average 10 -> normalised 58.82 joins EPV 176.47, RI 288.89, DDM 72 -> median 124.24
+    f5 = fairvalue.compute({**snap, "eps_annual": {k: 10.0 for k in ann}}, 0.17, 30.0, {})
+    ok("spike year: median of 4 methods = 124.24", _close(f5.get("fair"), 124.235))
+    f6 = fairvalue.compute({**snap, "eps_annual": {k: 9.0 for k in ann}}, 0.17, 10.0, {"2026": 48.0})
+    ok("normal year: normalised not used", "Normalised earnings" not in f6["methods"] and _close(f6["fair"], 66.6667))
+    f8 = fairvalue.compute({**snap, "values": {**snap["values"], "pr": None, "d": None}}, 0.17, 10.0, {})
+    ok("no growth: residual income not double-counted", list(f8["methods"]) == ["Earnings power"])
+    f7 = fairvalue.compute({**snap, "eps_annual": {k: -1.0 for k in ann}}, 0.17, -2.0, {})
+    ok("losses now and on average: no fair value", f7.get("fair") is None)
     # quarters must be consecutive
     ok("consecutive quarters", checks.last4({"2025 Q4": 1, "2026 Q1": 1, "2026 Q2": 1, "2026 Q3": 1})[1])
     ok("gap in quarters detected", not checks.last4({"2025 Q3": 1, "2026 Q1": 1, "2026 Q2": 1, "2026 Q3": 1})[1])

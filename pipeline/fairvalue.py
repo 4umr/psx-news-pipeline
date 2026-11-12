@@ -11,6 +11,10 @@ THREE STANDARD METHODS (the ones sell-side analysts use when only reported figur
        points (never above long-run nominal growth). Standard for banks and asset-heavy companies.
   3. Dividend discount        DDM = DPS x (1 + g) / (COE - g)
        only when the company pays out 40%+ of profit (otherwise dividends say little about value)
+  4. Normalised earnings      NORM = average EPS of the last 5 years / COE
+       used only when this year is abnormal: losses now (then it is the only method), or trailing EPS more
+       than 50% above or below the 5-year average (cyclicals at a peak or trough). If the 5-year average is
+       itself a loss while the company earns now, the card warns that current profit may not last.
   FAIR VALUE = median of the methods available; RANGE = lowest to highest.
   The methods "agree" when the range is within 50% of the fair value; otherwise the card says they disagree.
 
@@ -56,6 +60,12 @@ def compute(snap: dict, cost: float, ttm: float | None = None, bv_hist: dict | N
                  "financial": any(k in sector for k in FINANCIAL), "eps_used": ttm, "methods": {}}
     if p and bv and bv > 0:
         out["pb"] = p / bv
+    ann = snap.get("eps_annual") or {}
+    last5 = [ann[k] for k in sorted(ann)[-5:]]
+    avg5 = sum(last5) / len(last5) if len(last5) >= 3 else None
+    out["avg5"] = avg5
+    if ttm is not None and ttm <= 0 and avg5 and avg5 > 0:
+        out["methods"]["Normalised earnings"] = avg5 / cost
     if ttm is not None and ttm > 0 and bv and bv > 0:
         roe = ttm / bv
         pr = v.get("pr")
@@ -63,19 +73,21 @@ def compute(snap: dict, cost: float, ttm: float | None = None, bv_hist: dict | N
         g = max(0.0, min(roe * keep, G_CAP, cost - 0.04))
         out.update(roe=roe, g=g)
         out["methods"]["Earnings power"] = ttm / cost
-        if roe > g:
+        if roe > g and g > 0.001:  # with no growth residual income equals earnings power: count it once
             out["methods"]["Residual income"] = bv * (roe - g) / (cost - g)
         dps = v.get("d")
         if dps and dps > 0 and pr is not None and pr >= 40:
             out["methods"]["Dividend discount"] = dps * (1 + g) / (cost - g)
+        if avg5 is not None and avg5 > 0 and not 0.5 <= ttm / avg5 <= 1.5:
+            out["methods"]["Normalised earnings"] = avg5 / cost
     vals = list(out["methods"].values())
     if vals:
         out["fair"] = median(vals)
         out["low"], out["high"] = min(vals), max(vals)
         out["agree"] = (out["high"] - out["low"]) <= 0.5 * out["fair"]
         out["upside"] = (out["fair"] / p - 1) * 100 if p else None
-        out["epv"] = out["methods"]["Earnings power"]
-        out["epv_gap"] = (out["epv"] / p - 1) * 100 if p else None
+        out["epv"] = out["methods"].get("Earnings power")
+        out["epv_gap"] = (out["epv"] / p - 1) * 100 if p and out["epv"] else None
     # balance sheet at the last year end
     ear = v.get("ear")
     yr = _year_of(snap.get("period", {}).get("ear"))
@@ -93,7 +105,11 @@ def compute(snap: dict, cost: float, ttm: float | None = None, bv_hist: dict | N
         if v.get("cr") is not None and v["cr"] < 1:
             flags.append(f"current ratio {v['cr']:.2f} (short-term bills exceed short-term assets)")
     if ttm is not None and ttm <= 0:
-        flags.append("loss-making over the last 4 quarters: no earnings value")
+        flags.append("loss-making over the last 4 quarters" + (
+            f"; 5-year average EPS {avg5:.2f} is also a loss: no earnings value at all" if avg5 is not None and avg5 <= 0 else ""))
+    elif ttm and avg5 is not None and avg5 <= 0:
+        flags.append(f"5-year average EPS is a loss ({avg5:.2f}): today's profit may not last")
+        out["agree"] = False
     out["flags"] = flags
     return out
 
@@ -107,8 +123,11 @@ def lines(fv: dict) -> list[str]:
                  f"required return {fv['coe'] * 100:.0f}%, growth used {fv['g'] * 100:.1f}%"
                  + ("" if fv["agree"] else "; the methods disagree, so treat the range, not the point"))
     elif fv.get("nav"):
-        L.append(f"No earnings-based fair value (no profit over the last 4 quarters, or EPS not verified); "
-                 f"book value Rs {fv['nav']:,.2f}, price to book {fv.get('pb', 0):.2f}x")
+        why = ("losses over the last 4 quarters" + (f" and over 5 years on average (EPS {fv['avg5']:.2f})"
+                                                    if fv.get("avg5") is not None and fv["avg5"] <= 0 else "")
+               if fv.get("eps_used") is not None and fv["eps_used"] <= 0 else "earnings could not be verified")
+        L.append(f"No fair value from earnings or dividends ({why}). The only anchor is book value Rs {fv['nav']:,.2f} "
+                 f"a share; the price is {fv.get('pb', 0):.2f}x that, and losses keep lowering it")
     if fv.get("assets") and not fv["financial"]:
         L.append(f"At the {fv['bs_year']} year end, per share: assets Rs {fv['assets']:,.2f}, liabilities Rs "
                  f"{fv['liabilities']:,.2f} ({fv['liab_pct']:.0f}% of assets), book value Rs {fv['bv_year']:,.2f}")

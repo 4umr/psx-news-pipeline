@@ -12,7 +12,8 @@ MONTHS = ["", "January", "February", "March", "April", "May", "June", "July", "A
 def fv_items(fv: dict, rank: float | None) -> list:
     """Tiles for the blue-chip cards: fair value, gap, rank, and assets against liabilities."""
     fair = fv.get("fair")
-    items = [("Fair value (3 methods)", "not given" if not fair else f"Rs {fair:,.2f}", None),
+    items = [("Fair value", "none (losses)" if not fair and (fv.get("eps_used") or 0) <= 0 else
+              ("not verified" if not fair else f"Rs {fair:,.2f}"), None),
              ("Gap to price", "n/a" if fv.get("upside") is None else f"{fv['upside']:+.0f}%", None),
              ("Range of methods", "n/a" if not fair else f"{fv['low']:,.0f} to {fv['high']:,.0f}", None),
              ("Book value", "n/a" if fv.get("nav") is None else f"Rs {fv['nav']:,.2f}", None)]
@@ -134,13 +135,12 @@ def _watch(c: Card, w: dict, session: str) -> int:
                     ("Debt to equity", "n/a" if fv.get("tde") is None else f"{fv['tde'] / 100:.1f}x", None),
                     ("Current ratio", "n/a" if fv.get("cr") is None else f"{fv['cr']:.2f}x", None),
                     ("Cash / share", rs(fv.get("cash")), None),
-                    ("Fair value (3 methods)", ("loss-making" if (w.get("ttm") or 0) <= 0 else "not verified")
+                    ("Fair value", ("none: losses" if (w.get("ttm") or 0) <= 0 else "not verified")
                      if not fv.get("fair") else rs(fv["fair"]), None)],
                 title=f"Assets against liabilities (FY{str(fv.get('bs_year', ''))[2:]} year end)" if fv.get("bs_year")
                 else "Assets against liabilities", cols=4, tile_h=88)
-    if fv.get("fair"):
-        from .fairvalue import lines as fv_lines
-        y = c.highlights(y, fv_lines(fv)[:1], title="Fair value", max_lines=5)
+    from .fairvalue import lines as fv_lines
+    y = c.highlights(y, fv_lines(fv)[:1], title="Fair value", max_lines=5)
     hist = []
     if lv.get("hf"):
         hist.append(f"3-year floor (10% of closes were lower): Rs {lv['hf']:,.2f}; price is {(p / lv['hf'] - 1) * 100:+.0f}% from it")
