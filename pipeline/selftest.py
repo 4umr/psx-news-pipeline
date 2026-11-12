@@ -93,6 +93,49 @@ def scoring() -> list[str]:
     return bad
 
 
+def levels_tests() -> list[str]:
+    """Technicals, buy / sell levels, the setup vote, the split adjustment and result wording, by hand."""
+    from . import earnings, lab, levels
+    bad = []
+
+    def ok(name, cond):
+        if not cond:
+            bad.append(name)
+
+    import numpy as np
+    ok("RSI of a rising series = 100", _close(levels._rsi(np.arange(1, 40, dtype=float)), 100.0))
+    ok("RSI of a falling series = 0", _close(levels._rsi(np.arange(40, 1, -1, dtype=float)), 0.0))
+    # 10 ups and 4 downs of 1, then a flat day: average gain 10/14, loss 4/14 -> RS 2.5 -> RSI 71.43
+    c = np.cumsum([100.0] + [1.0] * 10 + [-1.0] * 4 + [0.0])
+    ok("RSI 71.43 worked by hand", _close(levels._rsi(c), 71.4286))
+    # weeks run Monday to Friday: 2-6 Nov (last close Friday) and 9-11 Nov (last close Wednesday)
+    days = ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-09", "2026-11-10", "2026-11-11"]
+    wc = levels.weekly_closes([(d, 0, float(i + 1), 0) for i, d in enumerate(days)])
+    ok("weekly closes = Friday 6 Nov and Wednesday 11 Nov", wc == [5.0, 8.0])
+    # 30 sessions with range 90-110, then 10 sessions 98-104, price 100
+    px = [(f"2026-01-{i:02d}", 100.0, 100.0, 0, 110.0, 90.0) for i in range(1, 31)] +          [(f"2026-02-{i:02d}", 100.0, 100.0, 0, 104.0, 98.0) for i in range(1, 11)]
+    lv = levels.swing_levels(px, 100.0)
+    ok("supports 98 / 90, resistances 104 / 110", (lv["s1"], lv["s2"], lv["r1"], lv["r2"]) == (98.0, 90.0, 104.0, 110.0))
+    d = {"snap": {"values": {"price": 100.0}}, "px": px, "fv": {"pb": 0.8, "fair": 150.0, "upside": 50.0, "nav": 125.0}}
+    good = {"cls": "big_up", "label": "1Q27", "line": "x"}
+    su = levels.setup(d, {"view": "Outperform", "confidence": 4}, {"kind": "backed", "tested": "t"}, good)
+    ok("setup: results + value + AI = BUY SIDE (+3)", su["score"] == 3 and su["label"] == "BUY SIDE")
+    # the next support 90 is more than 8% under 98, so the risk line is 98 x 0.95 = 93.10; reward to risk (104-100)/(100-93.1)
+    ok("risk line 93.10, buy zone 98 to 100.94", _close(su["risk"], 93.1) and _close(su["zone"][1], 100.94))
+    ok("reward to risk 0.58", _close(su["rr"], 4 / 6.9))
+    d2 = {"snap": {"values": {"price": 100.0}}, "px": px, "fv": {"fair": 60.0, "upside": -40.0}}
+    su2 = levels.setup(d2, None, {"kind": "warning", "tested": "t"}, {"cls": "big_down", "label": "1Q27", "line": "x"})
+    ok("setup: warning + 40% above fair value = SELL SIDE (-3)", su2["score"] == -3 and su2["side"] == "sell")
+    # a 10-for-1 split: 100 -> opens at 10; earlier prices become 10, volume x10
+    adj = lab.adjust_jumps([("2026-01-01", 100.0, 100.0, 1000, 101.0, 99.0), ("2026-01-02", 100.0, 100.0, 1000, 101.0, 99.0),
+                            ("2026-01-05", 10.0, 10.2, 10000, 10.5, 9.9)])
+    ok("split adjustment", _close(adj[0][2], 10.0) and _close(adj[1][4], 10.1) and _close(adj[0][3], 10000))
+    ok("a normal 10% day is not adjusted", lab.adjust_jumps([("a", 100.0, 100.0, 1, 0, 0), ("b", 100.0, 110.0, 1, 0, 0)])[0][2] == 100.0)
+    ln = earnings.eps_line({"annual": True, "eps": 10.0, "eps_ly": 8.0, "eps_q": 3.0, "eps_q_ly": 1.0, "yoy_q": 2.0, "yoy": 0.25})
+    ok("annual result line shows the fourth quarter first", ln == "fourth-quarter EPS 3.00 vs 1.00 a year ago (+200%); full year 10.00 vs 8.00")
+    return bad
+
+
 def live() -> list[str]:
     """The sources still look the way the code expects (a changed website is caught here)."""
     from . import checks
@@ -119,7 +162,7 @@ def live() -> list[str]:
 
 def run(with_live: bool = True) -> list[str]:
     from .common import log
-    bad = [f"formula: {x}" for x in formulas()] + [f"scoring: {x}" for x in scoring()]
+    bad = [f"formula: {x}" for x in formulas()] + [f"scoring: {x}" for x in scoring()] +         [f"levels: {x}" for x in levels_tests()]
     if with_live:
         bad += [f"data: {x}" for x in live()]
     for b in bad:

@@ -45,14 +45,20 @@ def _macd(c: np.ndarray) -> str | None:
     return "Buy" if m[-1] > _ema(m, 9)[-1] else "Sell"
 
 
+def weekly_closes(px: list[tuple]) -> list[float]:
+    """Last close of each Monday-to-Friday week (ISO weeks; numpy's 'W' unit starts weeks on Thursday)."""
+    from datetime import date
+    wk = [date.fromisoformat(p[0][:10]).isocalendar()[:2] for p in px]
+    return [px[i][2] for i in range(len(px)) if px[i][2] and (i == len(px) - 1 or wk[i + 1] != wk[i])]
+
+
 def technicals(px: list[tuple]) -> dict:
     """SCS-style technicals computed from closing prices, for stocks SCS does not cover (it covers ~74).
     px rows: (date, open, close, volume[, high, low])."""
     c = np.array([p[2] for p in px if p[2]], dtype=float)
     if len(c) < 60:
         return {}
-    weekly = np.array([px[i][2] for i in range(len(px)) if i == len(px) - 1 or
-                       np.datetime64(px[i + 1][0], "W") != np.datetime64(px[i][0], "W")], dtype=float)
+    weekly = np.array(weekly_closes(px), dtype=float)
     out = {"macddaily": _macd(c), "macdweekly": _macd(weekly), "rsidaily": _rsi(c),
            "sma50": float(c[-50:].mean()), "sma100": float(c[-100:].mean()) if len(c) >= 100 else None,
            "sma200": float(c[-200:].mean()) if len(c) >= 200 else None, "src": "computed from closing prices"}

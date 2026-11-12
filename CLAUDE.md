@@ -222,6 +222,14 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   Quarter chart merges the verified quarters (snapshot lags). fairvalue.lines crashed for normalised-only fair
   values (no 'g'): fixed + self-test.
 
+- Formula audit (2026-11-12): fair value, balance sheet, checks, underdog, earnings classes, price adjustment,
+  P/E, scoring re-read and checked against live data (face value read from the snapshot: LUCK/SYS Rs 2, STCL 5).
+  Fixed: weekly MACD used numpy 'W' weeks (Thursday-Wednesday) -> ISO weeks (`levels.weekly_closes`); annual
+  result lines now show the fourth quarter (the basis of good/weak) then the full year (`earnings.eps_line`,
+  also main-channel results posts). Self-test `levels_tests`: RSI 71.43 by hand, weeks, swing levels, setup
+  votes, risk line 93.10, reward to risk, split adjustment, result wording. Known by design: Lab scoring
+  measures the stock from the next open but the KSE-100 from the call day's close (no index open in the data).
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,

@@ -241,12 +241,24 @@ def assess(sym: str, label: str = "") -> dict | None:
     yoy = r["yoy_cum"] if annual else r["yoy_q"]
     both = pd.notna(now_) and pd.notna(ly)
     return {"label": r["label"], "date": r["date"], "annual": annual, "eps": now_, "eps_ly": ly, "eps_q": r["eps_q"],
+            "eps_q_ly": r["eps_q_ly"], "yoy_q": None if pd.isna(r["yoy_q"]) else float(r["yoy_q"]),
             "yoy": None if pd.isna(yoy) else float(yoy), "cls": r["cls"], "div": r["div"],
             "turnaround": bool(both and now_ > 0 > ly), "to_loss": bool(both and now_ < 0 < ly)}
 
 
+def _q_part(q, q_ly, yoy) -> str:
+    s = f"fourth-quarter EPS {q:.2f} vs {q_ly:.2f} a year ago"
+    if yoy is not None:
+        return s + f" ({yoy * 100:+.0f}%)"
+    return s + (" (back to profit)" if q > 0 > q_ly else " (turned to a loss)" if q < 0 < q_ly else "")
+
+
 def eps_line(a: dict) -> str:
-    """'quarterly EPS 1.89 vs 0.85 a year ago (+122%)' in plain words."""
+    """'quarterly EPS 1.89 vs 0.85 a year ago (+122%)' in plain words. For a full-year result the class
+    (good / weak) is judged on the fourth quarter, so that quarter is shown first, then the full year."""
+    if a["annual"] and pd.notna(a.get("eps_q")) and pd.notna(a.get("eps_q_ly")):
+        full = f"; full year {a['eps']:.2f}" + (f" vs {a['eps_ly']:.2f}" if pd.notna(a["eps_ly"]) else "") if pd.notna(a["eps"]) else ""
+        return _q_part(a["eps_q"], a["eps_q_ly"], a.get("yoy_q")) + full
     what = "full-year EPS" if a["annual"] else "quarterly EPS"
     if pd.isna(a["eps"]):
         return "EPS not given"
