@@ -157,6 +157,13 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
                 c.text(c.R - 24, yy + 40, sub, 9, t["muted"], ha="right")
         y += ph + 16
 
+    # chart read (facts) and what the chart evidence says
+    if d.get("chart"):
+        from .ta import TESTED, lines as chart_lines
+        y = c.highlights(y, chart_lines(d["chart"]) + [TESTED["alone"][0].upper() + TESTED["alone"][1:]
+                                                     + "; it counts only as confirmation of results, or as a warning."],
+                         title="Chart read", max_lines=12)
+
     # quarterly EPS vs the same quarter a year earlier
     # the snapshot can be a quarter behind: add the quarters checked against the results announcements
     q = {**(d["snap"].get("eps_quarters") or {}), **((d.get("ver") or {}).get("quarters") or {})}

@@ -116,6 +116,10 @@ def setup(d: dict, call: dict | None, scan_item: dict | None, result: dict | Non
         votes.append((1, f"value: price {up:.0f}% below its fair value Rs {fv['fair']:,.2f}"))
     elif fv.get("fair") and up is not None and up <= -30:
         votes.append((-1, f"value: price {-up:.0f}% above its fair value Rs {fv['fair']:,.2f}"))
+    # chart: only the tested reads vote (confirms / cancels good results; stage 4 and springs warn)
+    from .ta import verdicts
+    good_now = good or bool(scan_item and scan_item["kind"] != "warning")
+    votes += verdicts(d.get("chart") or {}, good_now)
     if call and call.get("view") in ("Outperform", "Underperform") and call.get("confidence", 0) >= 3:
         votes.append((1 if call["view"] == "Outperform" else -1,
                       f"AI view {call['view']} {call['confidence']}/5 (still being scored)"))

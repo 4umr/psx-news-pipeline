@@ -206,6 +206,17 @@ def dossier(sym: str, shared: dict, cfg: dict) -> dict | None:
         extra += "\nBALANCE SHEET FLAGS: " + "; ".join(d["fv"]["flags"])
     if ver["problems"]:
         extra += "\nDATA CHECK PROBLEMS (do not rely on the affected figures): " + "; ".join(ver["problems"])
+    try:
+        from . import ta
+        d["chart"] = ta.read(px, idx, (shared.get("rs") or {}).get(sym))
+        cl = ta.lines(d["chart"])
+        if cl:
+            extra += ("\nCHART READ (computed from adjusted daily prices): " + " | ".join(cl)
+                      + "\nCHART EVIDENCE ON PSX 2012-2026: " + ta.TESTED["alone"] + "; " + ta.TESTED["confirm"] + "; "
+                      + ta.TESTED["cancel"] + "; " + ta.TESTED["stage4"] + "; " + ta.TESTED["spring"])
+    except Exception:  # noqa: BLE001
+        log.exception("chart read %s failed", sym)
+        d["chart"] = {}
     d["text"] = _text(d, shared) + extra
     return d
 
@@ -486,11 +497,16 @@ def _scan_picks(sc: dict, st: dict, sessions: list[str], skip: list[str], n: int
     return out
 
 
+def _rs_ranks() -> dict:
+    from . import ta
+    return ta.rs_ranks()
+
+
 def _try(fn, *a):
     try:
         return fn(*a)
     except Exception:  # noqa: BLE001
-        log.exception("lab: %s(%s) failed", fn.__name__, a[0])
+        log.exception("lab: %s(%s) failed", fn.__name__, a[0] if a else "")
         return None
 
 
@@ -711,7 +727,7 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
               "meetings": scs.board_meetings(), "xdates": scs.book_closures(), "brokers": brokers.reports(),
               "flows": flows.week(end - timedelta(days=28), end), "act": act,
               "context": context.build(State(), view, (State().snap("mk_last") or {})),
-              "coe": fairvalue.coe(cfg, policy)}
+              "coe": fairvalue.coe(cfg, policy), "rs": _try(_rs_ranks)}
     with ThreadPoolExecutor(3) as ex:
         dossiers = dict(zip(syms, ex.map(lambda x: _try(dossier, x, shared, cfg), syms)))
     if not only:

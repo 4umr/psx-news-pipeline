@@ -294,6 +294,22 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 - Config `level_alerts.enabled`. Tests: selftest levels_tests (7 events + screener check); scratch sim.py
   simulates a day (09:20 nothing, zone, sell zone, target 1, failed, target 2, broke).
 
+## Technical analyst (built 2026-11-13) — `ta.py`, chart reading like a professional, tested
+- Umer asked for a system that reads charts like an elite technical analyst. Researched what they check
+  (Weinstein stages, Minervini trend template + VCP, O'Neil/Morales pocket pivots + distribution days, Wyckoff
+  springs/upthrusts, RS line) and turned each into formulas (`ta.features`, docstring). Order book: not free on PSX.
+- TESTED 2012-2026 (scratch ta_test.py, liquid Rs 2m+, next open, vs same-tier, after costs, both halves): on their
+  own NO edge (stage 2 entry +0.9% median -5.5%, VCP 110 cases split halves, pocket pivot / accumulation +0.8-0.9%
+  weak, RS leads ~0, upthrust and distribution not negative). RELIABLE WARNINGS: stage 4 entry -1.1%/60 (large
+  -1.6%), Wyckoff spring -1.5%/20 (0/15 years). AS A RESULTS FILTER (results_momentum events, n 371, +4.1%):
+  stage 2 +8.1% (halves +4.5/+12.7), RS top 30% +6.5% (9/12 yrs), above 200-day +5.0%; RS bottom half -0.3%,
+  below 200-day +0.1%. => the chart confirms or cancels results; numbers in `ta.TESTED`.
+- Live: `ta.rs_ranks()` (RS rank of every liquid stock from state/prices.csv.gz, once per Lab run, shared["rs"]),
+  `ta.read(px, idx, rs)` per stock in `lab.dossier` -> d["chart"]; `ta.lines` (facts) go into the AI dossier with the
+  evidence and onto every Lab card ("Chart read" panel); `ta.verdicts` = only tested votes in `levels.setup`
+  (+1 confirm / -1 cancel when results are good or the stock is in a positive scan section; -1 stage 4; -1 spring).
+  Self-test: verdict logic + a synthetic uptrend read as stage 2.
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,

@@ -202,6 +202,20 @@ def levels_tests() -> list[str]:
     ok("PSX screener live when it shows the live index prices",
        lw.screener_live(v, {f"S{i}": (101.0, 1.0) for i in range(20)}) is True
        and lw.screener_live(v, {f"S{i}": (100.0, 0.0) for i in range(20)}) is False)
+    from . import ta
+    strong = {"stage2": True, "rs_rank": 0.9, "sma200": 90.0, "price": 100.0, "events": []}
+    weak = {"stage2": False, "rs_rank": 0.3, "sma200": 110.0, "price": 100.0, "events": []}
+    ok("chart confirms good results (stage 2 / strong RS): +1", [v for v, _ in ta.verdicts(strong, True)] == [1])
+    ok("chart cancels good results (weak RS, below 200-day): -1", [v for v, _ in ta.verdicts(weak, True)] == [-1])
+    ok("chart alone does not vote without good results", ta.verdicts(strong, False) == [])
+    ok("stage 4 and a spring are warnings", [v for v, _ in ta.verdicts({**weak, "stage4": True,
+                                              "events": ["Wyckoff spring (x) on 01 Jan"]}, False)] == [-1, -1])
+    # a clean uptrend read from prices: 300 sessions rising 0.3% a day -> stage 2 needs RS; with rank 0.9 it is stage 2
+    import datetime as _dt
+    days = [(_dt.date(2025, 1, 1) + _dt.timedelta(days=i)).isoformat() for i in range(300)]
+    pxs = [(d, 100 * 1.003 ** i, 100 * 1.003 ** i, 100000, 100 * 1.003 ** i * 1.01, 100 * 1.003 ** i * 0.99) for i, d in enumerate(days)]
+    rd = ta.read(pxs, {d: 1000.0 for d in days}, 0.9)
+    ok("steady uptrend with strong RS reads as stage 2", rd.get("stage2") is True and rd.get("stage4") is False)
     ln = earnings.eps_line({"annual": True, "eps": 10.0, "eps_ly": 8.0, "eps_q": 3.0, "eps_q_ly": 1.0, "yoy_q": 2.0, "yoy": 0.25})
     ok("annual result line shows the fourth quarter first", ln == "fourth-quarter EPS 3.00 vs 1.00 a year ago (+200%); full year 10.00 vs 8.00")
     return bad
