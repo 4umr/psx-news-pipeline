@@ -511,6 +511,142 @@ def _levels_line(su: dict) -> str:
     return ", ".join(parts)
 
 
+def chunks(text: str, limit: int = 3900) -> list[str]:
+    """Telegram refuses messages over 4096 characters: split at blank lines, then at lines."""
+    if not text:
+        return []
+    out, cur = [], ""
+    for block in text.split("\n\n"):
+        parts = [block] if len(block) <= limit else block.split("\n")
+        for part in parts:
+            part = part[:limit]
+            sep = "\n\n" if part is block else "\n"
+            if cur and len(cur) + len(sep) + len(part) > limit:
+                out.append(cur)
+                cur = part
+            else:
+                cur = cur + sep + part if cur else part
+    if cur:
+        out.append(cur)
+    return out
+
+
+def scan_record(st: dict) -> str:
+    """The daily scan's own record so far: every flag scored against the KSE-100 after 20 sessions
+    (5 sessions until the first ones are 20 sessions old). Warnings are right when the stock lagged."""
+    calls = st.get("calls_scan", [])
+    for h in (20, 5):
+        done = [c for c in calls if f"r{h}" in c]
+        if done:
+            break
+    else:
+        first = min((c["date"] for c in calls), default=None)
+        return (f"Record: the first flags ({datetime.strptime(first, '%Y-%m-%d'):%d %b}) are scored after 5 and 20 sessions."
+                if first else "Record: scoring starts with the first flags.")
+    names = {"breakout": "breakouts", "breakout_backed": "breakouts at 1.2x book", "backed": "asset-backed",
+             "volume": "volume with results", "warning": "warnings"}
+    parts = []
+    for k, nm in names.items():
+        xs = [c[f"r{h}"] for c in done if c["kind"] == k]
+        if not xs:
+            continue
+        right = sum((x < 0) if k == "warning" else (x > 0) for x in xs) / len(xs) * 100
+        parts.append(f"{nm} {len(xs)}, average {np.mean(xs):+.1f}% vs KSE-100, {right:.0f}% right")
+    return f"Record so far ({h} sessions after each flag): " + "; ".join(parts) + "."
+
+
+def _report_item(d: dict, c: dict | None, it: dict | None) -> dict:
+    su = d.get("setup") or {}
+    return {"sym": d["sym"], "name": d.get("name", ""), "kind": (it or {}).get("kind", "bluechip"),
+            "close": d["snap"]["values"].get("price"), "label": su.get("label"), "score": su.get("score"),
+            "side": su.get("side"), "zone": su.get("zone"), "risk": su.get("risk"), "r1": su.get("r1"),
+            "r2": su.get("r2"), "sell_zone": su.get("sell_zone"), "exit": su.get("exit"),
+            "view": (c or {}).get("view"), "conf": (c or {}).get("confidence"),
+            "fair": (d.get("fv") or {}).get("fair")}
+
+
+def morning(cfg: dict, dry: bool = False, force: bool = False) -> None:
+    """Pre-open (about 08:45 on trading days): last night's levels for every stock researched, plus what is
+    new since the close: PSX filings, headlines, board meetings and ex-dates today. No AI call, nothing is
+    re-valued: the evening report stays the analysis; this is the checklist for the open."""
+    import os
+
+    from .sources import psx
+    from .telegram import Sender
+    from .underdogcard import preopen_card
+    st = _load()
+    rep_ = st.get("report") or {}
+    today = now_pkt().strftime("%Y-%m-%d")
+    if not rep_.get("items"):
+        log.info("morning: no evening report to follow up")
+        return
+    if rep_["session"] < (now_pkt() - timedelta(days=5)).strftime("%Y-%m-%d"):
+        log.info("morning: the last report (%s) is too old", rep_["session"])
+        return
+    if st.get("morning_sent") == today and not force:
+        log.info("morning: already sent today")
+        return
+    meetings = {(b.get("company_code") or "").strip(): b for b in scs.board_meetings()
+                if b.get("date") and f"{b['date']:%Y-%m-%d}" == today}
+    xdates = {(x.get("company_code") or "").strip(): x for x in scs.book_closures()
+              if x.get("date") and today <= f"{x['date']:%Y-%m-%d}" <= (now_pkt() + timedelta(days=1)).strftime("%Y-%m-%d")}
+    news_lines: list[str] = []
+    for it in rep_["items"]:
+        sym, new = it["sym"], []
+        try:
+            new += [f"PSX filing {f['date']}: {f['title'][:90]}" for f in (psx.company(sym) or {}).get("filings", [])
+                    if str(f.get("date", "")) > rep_["session"]][:2]
+        except Exception:  # noqa: BLE001
+            pass
+        core = " ".join(w for w in re.sub(r"\b(Ltd|Limited|Company|Co|Corporation|Corp)\b\.?", "", it.get("name") or "").split()[:2])
+        terms = (_cfg(cfg).get("news_terms") or {}).get(sym) or (f'"{core}"' if core else f'"{sym}"')
+        for n in _news(terms + " Pakistan", days=1, n=4):
+            words = [w.lower() for w in re.findall(r"[A-Za-z]{4,}", core)]
+            seen = {re.sub(r"[^a-z]", "", x.lower())[:30] for x in new}
+            key = re.sub(r"[^a-z]", "", n["title"].lower())[:30]
+            if n["date"] >= rep_["session"] and key not in seen and not any(
+                    len(set(n["title"].lower().split()) & set(x.lower().split())) >= 4 for x in new) and (
+                    sym in n["title"] or (words and all(w in n["title"].lower() for w in words))):
+                new.append(f"News {n['date']}: {n['title'][:100]} ({n['source']}, unverified)")
+        if sym in meetings:
+            b = meetings[sym]
+            new.append("Board meeting today" + (f" ({b.get('bm_quarter_number')})" if b.get("bm_quarter_number") else "")
+                       + ": results can move the price; the levels were set before them")
+        if sym in xdates:
+            new.append(f"Ex-date {xdates[sym]['date']:%d %b}: the price drops by about the payout; levels are before it")
+        it["new"] = new[:3]
+        if new:
+            news_lines.append(f"<b>{sym}</b>: " + "; ".join(esc(x) for x in new[:3]))
+    head = f"<b>Pre-open · {now_pkt():%a %d %b}</b>\nLevels from last night's research (close of {rep_['session']}):"
+    rows = []
+    for it in rep_["items"]:
+        lv = (f"sell zone {it['sell_zone'][0]:,.2f} to {it['sell_zone'][1]:,.2f}, breaks below {it['exit']:,.2f}"
+              if it.get("side") == "sell" and it.get("sell_zone") and it.get("exit") else
+              (f"buy {it['zone'][0]:,.2f} to {it['zone'][1]:,.2f}, fails below {it['risk']:,.2f}"
+               + (f", target {it['r1']:,.2f}" if it.get("r1") else "") if it.get("zone") and it.get("risk") else "no levels"))
+        rows.append(f"<b>{it['sym']}</b> {it.get('label') or ''} (closed {it['close']:,.2f}): {lv}")
+    text = (head + "\n" + "\n".join(rows) + "\n\n<b>New since the close</b>\n"
+            + ("\n".join(news_lines) if news_lines else "No new PSX filing, headline, board meeting or ex-date for these stocks.")
+            + "\n\n<i>Levels are from chart support and resistance (not tested); the setup comes from tested signals. "
+              "Not investment advice.</i>")
+    card = preopen_card(cfg, rep_, now_pkt().strftime("%Y-%m-%d"))
+    s = Sender(dry)
+    chat = os.environ.get("TELEGRAM_RESEARCH_CHAT_ID", "").strip() or s.admin
+    if dry or not chat:
+        out = ROOT / "out" / "lab"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "preopen.png").write_bytes(card)
+        (out / "preopen.txt").write_text(text, encoding="utf-8")
+        log.info("morning (dry run): written to %s", out)
+    else:
+        s._photo(chat, card, f"Pre-open levels · {now_pkt():%a %d %b}", "lab_preopen")
+        for part in chunks(text):
+            s._post(chat, part, False)
+        st["morning_sent"] = today
+        _save(st)
+    log.info("morning: %d stocks, %d with news since the close", len(rows), len(news_lines))
+
+
 def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | None = None,
         only: bool = False) -> None:
     """Daily (after the close): calls for the blue chips and the underdog scan every trading day, logged and
@@ -538,10 +674,10 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
                 (out / "summary.txt").write_text(text, encoding="utf-8")
             log.info("lab (dry run): %d cards in %s", len(cards), out)
             return
-        if text:
-            s._post(chat, text, False)
+        for part in chunks(text or ""):
+            s._post(chat, part, False)
         for name, png, cap in cards:
-            s._photo(chat, png, cap, f"lab_{name}")
+            s._photo(chat, png, cap[:1000], f"lab_{name}")
 
     bad = selftest.run()
     if bad:
@@ -585,6 +721,7 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
     out_cards: list[tuple[str, bytes, str]] = []
     notes: list[str] = []
     views: list[str] = []
+    report: list[dict] = []
     for sym in syms:
         d = dossiers.get(sym)
         if not d:
@@ -601,13 +738,17 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
         if not any(x["id"] == entry["id"] for x in st["calls"]):
             st["calls"].append(entry)
         views.append(f"<b>{sym}</b>: {c['view']} ({c['confidence']}/5). {esc(c['headline'])}")
-        why = ["on request"] if only else _bluechip_reasons(d, c, sent.get(sym), session)
-        if not why:
-            continue
-        d["fv_rank"] = None
         try:
             from .scan import _last_result
             d["setup"] = levels.setup(d, c, None, _last_result(sym, session))
+            report.append(_report_item(d, c, None))
+        except Exception:  # noqa: BLE001
+            log.exception("lab setup %s failed", sym)
+        why = ["on request"] if only else _bluechip_reasons(d, c, sent.get(sym), session)
+        if not why or not d.get("setup"):
+            continue
+        d["fv_rank"] = None
+        try:
             out_cards.append((sym, lab_card(cfg, d, c, sb, session), f"{sym} · {'; '.join(why)}"))
         except Exception:  # noqa: BLE001
             log.exception("lab card %s failed", sym)
@@ -645,9 +786,14 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
             if not only and ud_conf.get("daily_scan", True):
                 from . import scan
                 from .underdogcard import scan_card
+                open_sc = [x for x in st.get("calls_scan", []) + st.get("calls_scan_ai", [])
+                           if not all(f"r{h}" in x for h in HORIZONS)]
+                if open_sc:
+                    score({"calls": open_sc}, idx, {x["sym"]: _history(x["sym"]) for x in open_sc[-40:]})
                 sc = scan.build(cfg, session, r, st, idx)
+                sc["record"] = scan_record(st)
                 out_cards.insert(0, ("scan", scan_card(cfg, sc), f"Daily stock scan · {session}"))
-                scan_text = scan.text(sc)
+                scan_text = scan.text(sc) + f"\n\n<i>{esc(sc['record'])}</i>"
                 picks = _scan_picks(sc, st, sorted(idx), syms, int(ud_conf.get("research_max", 6)))
                 if picks:
                     def _safe_dossier(x):  # one stock's bad data must not stop the others
@@ -675,6 +821,7 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
                         out_cards.insert(pos, (f"scan_{sym}", card, f"{sym} · {levels.SECTION.get(it['kind'])}"))
                         pos += 1
                         st["scan_research"][sym] = {"date": session, "kind": it["kind"]}
+                        report.append(_report_item(d, c, it))
                         if c:
                             st.setdefault("calls_scan_ai", []).append(
                                 {"id": f"SA:{sym}:{session}", "sym": sym, "date": session, "price": d["snap"]["values"].get("price"),
@@ -685,10 +832,6 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
                                       + _levels_line(d["setup"]))
                     if rlines:
                         scan_text += "\n\n<b>Full research on today's scan stocks</b> (one card each)\n" + "\n".join(rlines)
-                open_sc = [x for x in st.get("calls_scan", []) + st.get("calls_scan_ai", [])
-                           if not all(f"r{h}" in x for h in HORIZONS)]
-                if open_sc:
-                    score({"calls": open_sc}, idx, {x["sym"]: _history(x["sym"]) for x in open_sc[-30:]})
             open_ud = [x for x in st.get("underdog", []) if not all(f"r{h}" in x for h in HORIZONS)]
             if open_ud and not only:
                 score({"calls": open_ud}, idx, {x["sym"]: _history(x["sym"]) for x in open_ud})
@@ -699,6 +842,7 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
             notes.append("Underdog scan could not be completed today.")
     if not only:
         st["last"] = session
+        st["report"] = {"session": session, "made": now_pkt().strftime("%Y-%m-%d %H:%M"), "items": report}
     # ---- what goes out: only the cards that matter; Friday adds the roundup
     head = f"<b>Research Lab · {session}</b>" + (" · on request" if only else "")
     if (friday or force) and not only:

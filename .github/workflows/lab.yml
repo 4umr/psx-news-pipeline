@@ -1,6 +1,7 @@
 name: Research Lab
 
-# EXPERIMENT. After the close (started on time by the news loop at 18:20 PKT; this schedule is a backstop):
+# EXPERIMENT. After the close (started on time by the news loop at 18:20 PKT; this schedule is a backstop),
+# and a short pre-open message at 08:40 PKT (last night's levels + filings, headlines and events since the close):
 # a dossier of everything scstrade, PSX and the news show about each top blue chip, one AI view versus the
 # KSE-100 over 20 sessions, a one-page card each, and automatic scoring of the earlier calls.
 # Goes ONLY to the test chat (secret TELEGRAM_RESEARCH_CHAT_ID; until it is set, the admin chat).
@@ -15,6 +16,8 @@ on:
         default: lab
         options:
           - lab
+          - lab --morning
+          - lab --morning --force
           - lab --force
           - lab --dry-run --force
           - whereis

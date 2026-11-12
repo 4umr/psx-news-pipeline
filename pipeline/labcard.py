@@ -217,7 +217,12 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
         gap = (v["price"] / tech["sma200"] - 1) * 100
         items.append(("Price vs 200-day avg", f"{gap:+.1f}%", _col(gap)))
     y = c.strip(y, items[:4], h=100)
-    lines = _wrap("Lab record: " + record_line(sb), 930, 12.5)[:3]
+    ver = d.get("ver") or {}
+    chk = ("Data checks passed: price matches the exchange, the last 4 quarters match the results announcements, "
+           "book value and price to book cross-checked." if not ver.get("problems") else
+           "Data check problem (no fair value shown): " + "; ".join(ver["problems"][:2]))
+    chk += "".join(f" {n[0].upper()}{n[1:]}." for n in (ver.get("notes") or [])[:2])
+    lines = _wrap(chk, 930, 12.5)[:4] + _wrap("Lab record: " + record_line(sb), 930, 12.5)[:3]
     ph = 40 + 26 * len(lines)
     c.panel(c.L, y, 1000, ph, fill=t["tile"])
     for j, ln in enumerate(lines):

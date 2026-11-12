@@ -243,6 +243,24 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 - Results 13 Nov: FFC 538 (price 570), UBL 465, OGDC 371, LUCK 393, MEBL 455, HUBC 261, POL 837, MARI 633,
   MCB 267, EFERT 167, SYS 46 (growth stocks above 8% are a known limit of a one-stage model). 13 hand-worked tests.
 
+## Lab v3 (2026-11-13): growth stage, pre-open report, record, polish
+- Fair value growth stage (`fairvalue._ri_two_stage`, `history()`): when fundable growth (ROE x retention) AND the
+  STEADY 5-year EPS growth (no 3x jump, no unadjusted split = EPS and book fell together, rising 3+ of 5 years)
+  are both >= 12% and ROE > COE: growth starts at the lower (max 25%) and fades linearly to g (<= 8%) over 5 years.
+  MEBL 455 -> 543, LUCK 393 -> 471; FFC (11.7% fundable) stays 538. Boom (3x jump in a year, SAZEW): 5-year average
+  EPS joins + flag "upper bound". MARI's annual EPS is NOT split-restated by SCS (2023 420 -> 2024 64): caught.
+  SYS stays expensive on purpose: ROE 17% < COE and EPS grew ~11%/yr; the market prices growth it has not shown.
+- PRE-OPEN (Umer chose evening + morning): `lab --morning` (lab.yml menu; loop dispatches 08:40 Mon-Fri, grace 40,
+  no cron backstop: a late pre-open message is worse than none). Reads `calls.json` -> `report` (saved by the
+  evening run: every blue-chip view + every scan-research stock with setup, zones, risk, targets, close, fair) and
+  adds what is new since the close: PSX filings dated after the session, Google News 1 day (ticker or both core
+  name words in the title), board meeting today, ex-date today/tomorrow. One card (`underdogcard.preopen_card`)
+  + text; no AI, nothing re-valued; `morning_sent` = once a day.
+- `lab.chunks()`: Telegram refuses > 4096 chars; every Lab message is split at blank lines (was a silent loss risk).
+- `lab.scan_record()`: the scan's own record (r20, else r5) by section on the scan card + text; open scan flags are
+  scored BEFORE the card is drawn. Scan lines show the tested number ("tested +5.1%"). Stock cards end with a
+  data-check line (passed / problem + notes like book value updated).
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,

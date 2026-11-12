@@ -57,6 +57,7 @@ def main() -> None:
     lb.add_argument("--force", action="store_true")
     lb.add_argument("--symbols", default="", help="comma-separated; default config lab.symbols")
     lb.add_argument("--analyse", default="", help="any stock(s), comma-separated: full analysis now, always sent")
+    lb.add_argument("--morning", action="store_true", help="pre-open message: last night's levels + what is new")
     sub.add_parser("selftest", help="check every Research Lab formula and the data sources")
     rv = sub.add_parser("review", help="replay recent important headlines through the main-channel editor")
     rv.add_argument("--hours", type=float, default=36)
@@ -70,6 +71,10 @@ def main() -> None:
     bt.add_argument("--notify-changes", action="store_true", help="send the report only if a live rule's verdict changed")
     args = p.parse_args()
 
+    if args.cmd == "lab" and args.morning:
+        from .lab import morning
+        morning(load_config(), args.dry_run, args.force)
+        return
     if args.cmd == "lab":
         from .lab import run as lab
         on_demand = [x.strip().upper() for x in args.analyse.replace(" ", ",").split(",") if x.strip()]

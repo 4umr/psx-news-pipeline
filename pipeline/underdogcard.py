@@ -176,6 +176,13 @@ def watch_card(cfg: dict, w: dict, session: str) -> bytes:
 
 
 # ---------------------------------------------------------------- daily stock scan (one page)
+def _tested_num(t: str) -> str:
+    """'tested: +5.1% vs similar stocks ...' -> 'tested +5.1%' (the number on the right of each line)."""
+    import re
+    m = re.search(r"([+-]\d+(?:\.\d+)?%)", t)
+    return (("weak " if t.startswith("weak") else "tested ") + m.group(1)) if m else "tested"
+
+
 def _scan(c: Card, sc: dict) -> int:
     from .scan import TESTED
     t = c.t
@@ -192,7 +199,7 @@ def _scan(c: Card, sc: dict) -> int:
             continue
         shown = True
         y = c.entries(y, title, [(x["sym"], f"Rs {x['price']:,.2f}" + (f"  ({x['move']:+.1f}% today)" if x.get("move") is not None else ""),
-                                  x["why"], TESTED[x["kind"]].split(":")[0], -1 if x["kind"] == "warning" else 1)
+                                  x["why"], _tested_num(TESTED[x["kind"]]), -1 if x["kind"] == "warning" else 1)
                                  for x in items], right_title="")
     if not shown:
         y = c.highlights(y, ["No stock met any of the tested conditions today. Quiet days are normal: the conditions "
@@ -204,6 +211,8 @@ def _scan(c: Card, sc: dict) -> int:
                  "n/a" if f["held"] is None else ("yes", UP) if f["held"] else ("no", DOWN)] for f in fol]
         y = c.grid(y, "Following: flagged in the last 10 sessions", ["Stock", "Flagged", "Why", "Since", "Vs KSE-100", "Near high"],
                    rows, [30, 200, 330, 640, 820, 970], ["left", "left", "left", "right", "right", "right"], row_h=40, max_rows=10)
+    if sc.get("record"):
+        y = c.highlights(y, [sc["record"]], title="The scan's own record", max_lines=4)
     y = c.highlights(y, [TESTED["breakout"].replace("tested", "Results breakouts, tested"),
                          TESTED["backed"].replace("tested", "Asset-backed and improving, tested"),
                          TESTED["warning"].replace("tested", "Warnings, tested"),
@@ -217,3 +226,44 @@ def _scan(c: Card, sc: dict) -> int:
 
 def scan_card(cfg: dict, sc: dict) -> bytes:
     return _two_pass(cfg, _scan, sc)
+
+
+# ---------------------------------------------------------------- pre-open levels (morning)
+def _preopen(c: Card, rep: dict, today: str) -> int:
+    t = c.t
+    y = _head(c, "Research Lab · pre-open", today)
+    c.text(c.L, y + 40, "PRE-OPEN LEVELS", 48, CREAM, bold=True, serif=True)
+    c.text(c.L + 2, y + 90, f"From the research after the close of {datetime.strptime(rep['session'], '%Y-%m-%d'):%d %b}",
+           22, t["title2"], bold=True, serif=True)
+    y += 120
+    rows = []
+    for it in rep["items"]:
+        sell = it.get("side") == "sell"
+        col = UP if (it.get("score") or 0) >= 1 else DOWN if (it.get("score") or 0) <= -1 else "#b8862a"
+        if sell:
+            z = it.get("sell_zone")
+            zone = (f"sell {z[0]:,.2f}-{z[1]:,.2f}", DOWN) if z else ("at a high", DOWN)
+            line = (f"{it['exit']:,.2f}", DOWN) if it.get("exit") else "n/a"
+            tgt = "n/a"
+        else:
+            z = it.get("zone")
+            zone = f"{z[0]:,.2f}-{z[1]:,.2f}" if z else "n/a"
+            line = (f"{it['risk']:,.2f}", DOWN) if it.get("risk") else "n/a"
+            tgt = (f"{it['r1']:,.2f}", UP) if it.get("r1") else "at a high"
+        rows.append([it["sym"], ((it.get("label") or "n/a").title(), col), zone, line, tgt, f"{it['close']:,.2f}"])
+    y = c.grid(y, "Levels to watch at the open (Rs)", ["Stock", "Setup", "Zone", "Fails below", "Target", "Closed"],
+               rows, [30, 170, 400, 700, 845, 970], ["left", "left", "left", "right", "right", "right"], row_h=42, max_rows=14)
+    new = [f"{it['sym']}: {x}" for it in rep["items"] for x in it.get("new", [])]
+    y = c.highlights(y, new or ["No new PSX filing, headline, board meeting or ex-date for these stocks since the close."],
+                     title="New since the close", max_lines=9)
+    y = c.highlights(y, ["Setup comes from tested signals (results, value, AI view); zones and targets come from chart "
+                         "support and resistance and are not tested. Buying near support keeps the loss small if the "
+                         "setup fails.", "For a results breakout the tested entry is the open itself."],
+                     title="How to use", max_lines=6)
+    c.text(c.L, y + 8, "Experiment: fixed formulas on public data, scored against the market. Not investment advice.",
+           10.5, t["muted"], italic=True)
+    return y + 30
+
+
+def preopen_card(cfg: dict, rep: dict, today: str) -> bytes:
+    return _two_pass(cfg, _preopen, rep, today)

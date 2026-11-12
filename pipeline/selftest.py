@@ -78,6 +78,23 @@ def formulas() -> list[str]:
        and _close(f8["fair"], 58.8235))
     f7 = fairvalue.compute({**snap, "eps_annual": {k: -1.0 for k in ann}}, 0.17, -2.0, {})
     ok("losses now and on average: no fair value", f7.get("fair") is None)
+    # growth stage, worked by hand: book 100, ROE 30%, required 17%, growth 20% fading to 8% over 5 years
+    # residual income 13.00, 15.60, 18.35, 21.13, 23.84 discounted = 56.11; terminal 292.43 discounted = 133.38
+    ok("two-stage residual income = 289.49", _close(fairvalue._ri_two_stage(100, 0.30, 0.17, 0.20, 0.08), 289.4932))
+    ok("two-stage with no extra growth = one-stage 75.56", _close(fairvalue._ri_two_stage(50, 0.216, 0.17, 0.08, 0.08), 75.5556))
+    h1 = fairvalue.history({"2020": 1, "2021": 1.2, "2022": 1.5, "2023": 1.8, "2024": 2.2, "2025": 2.6}, {})
+    ok("steady growth 1 -> 2.6 in 5 years = 21.06% a year", _close(h1["cagr"], 0.21058))
+    h2 = fairvalue.history({"2020": 10, "2021": 12, "2022": 14, "2023": 2, "2024": 2.4, "2025": 2.8},
+                           {"2022": 100, "2023": 15})
+    ok("unadjusted split detected (EPS and book fell together)", h2["split"] and h2["cagr"] is None)
+    h3 = fairvalue.history({"2020": 1, "2021": 1.2, "2022": 5, "2023": 6, "2024": 7, "2025": 8}, {})
+    ok("boom detected (profit up 4x in a year)", h3["boom"] and h3["cagr"] is None)
+    # a steady grower qualifies: book 50, EPS 10 (ROE 20%), payout 20% (fundable growth 16%), shown 21% -> 16%
+    fg = fairvalue.compute({**snap, "values": {**snap["values"], "pr": 20.0},
+                            "eps_annual": {"2020": 3.8, "2021": 4.6, "2022": 5.6, "2023": 6.8, "2024": 8.2, "2025": 10.0}},
+                           0.17, 10.0, {})
+    ok("growth stage used: 16% fading to 8%", _close(fg.get("g1"), 0.16) and _close(fg["g"], 0.08)
+       and _close(fg["fair"], fairvalue._ri_two_stage(50, 11.6 / 50, 0.17, 0.16, 0.08)))
     # quarters must be consecutive
     ok("consecutive quarters", checks.last4({"2025 Q4": 1, "2026 Q1": 1, "2026 Q2": 1, "2026 Q3": 1})[1])
     ok("gap in quarters detected", not checks.last4({"2025 Q3": 1, "2026 Q1": 1, "2026 Q2": 1, "2026 Q3": 1})[1])
@@ -155,6 +172,15 @@ def levels_tests() -> list[str]:
                             ("2026-01-05", 10.0, 10.2, 10000, 10.5, 9.9)])
     ok("split adjustment", _close(adj[0][2], 10.0) and _close(adj[1][4], 10.1) and _close(adj[0][3], 10000))
     ok("a normal 10% day is not adjusted", lab.adjust_jumps([("a", 100.0, 100.0, 1, 0, 0), ("b", 100.0, 110.0, 1, 0, 0)])[0][2] == 100.0)
+    long_text = "\n\n".join(f"<b>Stock {i}</b>\n" + "line " * 300 for i in range(12))
+    parts = lab.chunks(long_text)
+    ok("long Lab message split under Telegram's 4096 limit, nothing lost",
+       all(len(x) <= 4096 for x in parts) and len(parts) > 1 and sum(x.count("<b>Stock") for x in parts) == 12)
+    rec = lab.scan_record({"calls_scan": [{"date": "2026-11-12", "kind": "backed", "r5": 2.0},
+                                          {"date": "2026-11-12", "kind": "backed", "r5": -1.0},
+                                          {"date": "2026-11-12", "kind": "warning", "r5": -3.0}]})
+    ok("scan record: asset-backed 2, average +0.5%, 50% right; warnings 1, 100% right",
+       "asset-backed 2, average +0.5% vs KSE-100, 50% right" in rec and "warnings 1, average -3.0% vs KSE-100, 100% right" in rec)
     ln = earnings.eps_line({"annual": True, "eps": 10.0, "eps_ly": 8.0, "eps_q": 3.0, "eps_q_ly": 1.0, "yoy_q": 2.0, "yoy": 0.25})
     ok("annual result line shows the fourth quarter first", ln == "fourth-quarter EPS 3.00 vs 1.00 a year ago (+200%); full year 10.00 vs 8.00")
     return bad
