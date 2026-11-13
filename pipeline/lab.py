@@ -220,6 +220,20 @@ def dossier(sym: str, shared: dict, cfg: dict) -> dict | None:
             extra += ("\nCHART PATTERNS AND PRICE MATHEMATICS: " + " | ".join(pl)
                       + "\nPATTERN EVIDENCE ON PSX 2012-2026: bullish patterns alone had no edge; head and shoulders tops, "
                         "bullish RSI divergences and bull flags or squeezes outside a stage 2 uptrend were followed by underperformance.")
+        try:  # similar past cases and the market regime (decision support; see analogs.py)
+            from . import analogs
+            from .scan import _last_result
+            lr = _last_result(sym, shared["session"])
+            uni = ta.universe()
+            d["tier"] = uni["tier"].get(sym)
+            reg = shared.get("regime") or analogs.regime(idx)
+            d["analog"] = analogs.read((lr or {}).get("cls"), d["chart"], (d.get("fv") or {}).get("pb"), d["tier"], reg, None)
+            d["breadth"] = uni.get("breadth")
+            al = analogs.lines(d["analog"], d["breadth"])
+            if al:
+                extra += "\nSIMILAR PAST CASES AND MARKET (2012-2026 PSX history): " + " | ".join(al)
+        except Exception:  # noqa: BLE001
+            log.exception("analog read %s failed", sym)
         cl = ta.lines(d["chart"])
         if cl:
             extra += ("\nCHART READ (computed from adjusted daily prices): " + " | ".join(cl)
@@ -508,6 +522,20 @@ def _scan_picks(sc: dict, st: dict, sessions: list[str], skip: list[str], n: int
     return out
 
 
+def _regime(idx: dict) -> dict:
+    from . import analogs
+    return analogs.regime(idx)
+
+
+def _size(d: dict) -> None:
+    """After the setup: the position size for the analog panel."""
+    from . import analogs
+    if d.get("analog") is not None and d.get("setup"):
+        su = d["setup"]
+        d["analog"]["size"] = analogs.size(su.get("price"), su.get("risk"), (d["analog"].get("regime") or {}).get("name", "mixed"),
+                                           su.get("side", "buy"))
+
+
 def _rs_ranks() -> dict:
     from . import ta
     return ta.rs_ranks()
@@ -555,19 +583,23 @@ def note_analysis(sym: str, cfg: dict) -> dict:
     act = {r["company_code"].strip(): r for r in scs.daily_activity() if r.get("company_code")}
     shared = {"index": idx, "session": max(idx) if idx else now_pkt().strftime("%Y-%m-%d"), "tech": scs_deep.technicals(),
               "opinions": {}, "meetings": scs.board_meetings(), "xdates": scs.book_closures(), "brokers": [], "flows": [],
-              "act": act, "context": "", "coe": fairvalue.coe(cfg, fairvalue.risk_free(sbp_snap)), "rs": _try(_rs_ranks) or {}}
+              "act": act, "context": "", "coe": fairvalue.coe(cfg, fairvalue.risk_free(sbp_snap)), "rs": _try(_rs_ranks) or {},
+              "regime": _try(_regime, idx) or {}}
     d = dossier(sym, shared, cfg)
     if not d:
         return {}
     if not d.get("patterns"):
         d["patterns"] = patterns.read(d["px"], idx)
     su = levels.setup(d, None, None, _last_result(sym, shared["session"]))
+    d["setup"] = su
+    _size(d)
     fv = d.get("fv") or {}
     if (d.get("ver") or {}).get("problems"):
         fv = {k: v for k, v in fv.items() if k not in ("fair", "methods", "low", "high", "upside")}
     pt = dict(d.get("patterns") or {})
     long_px = _history(sym, 720) or d["px"]   # enough sessions for the 150 / 200-day averages over the whole chart
     return {"setup": su, "fv": fv, "chart": d.get("chart") or {}, "patterns": pt, "px": long_px[-460:],
+            "analog": d.get("analog") or {}, "breadth": d.get("breadth"),
             "problems": (d.get("ver") or {}).get("problems", [])}
 
 
@@ -781,7 +813,7 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
               "meetings": scs.board_meetings(), "xdates": scs.book_closures(), "brokers": brokers.reports(),
               "flows": flows.week(end - timedelta(days=28), end), "act": act,
               "context": context.build(State(), view, (State().snap("mk_last") or {})),
-              "coe": fairvalue.coe(cfg, policy), "rs": _try(_rs_ranks)}
+              "coe": fairvalue.coe(cfg, policy), "rs": _try(_rs_ranks), "regime": _try(_regime, idx)}
     with ThreadPoolExecutor(3) as ex:
         dossiers = dict(zip(syms, ex.map(lambda x: _try(dossier, x, shared, cfg), syms)))
     if not only:
@@ -805,6 +837,7 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
                     from .scan import _last_result
                     d["fv_rank"], d["kicker"] = None, "Research Lab · on request"
                     d["setup"] = levels.setup(d, None, None, _last_result(sym, session))
+                    _size(d)
                     out_cards.append((sym, lab_card(cfg, d, NO_CALL, sb, session), f"{sym} · on request (no AI view)"))
                 except Exception:  # noqa: BLE001
                     log.exception("lab card %s failed", sym)
@@ -819,6 +852,7 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
         try:
             from .scan import _last_result
             d["setup"] = levels.setup(d, c, None, _last_result(sym, session))
+            _size(d)
             report.append(_report_item(d, c, None))
         except Exception:  # noqa: BLE001
             log.exception("lab setup %s failed", sym)
@@ -891,6 +925,7 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
                         c = _call_retry(d, cfg)
                         d["kicker"], d["fv_rank"] = "Research Lab · daily scan", None
                         d["setup"] = levels.setup(d, c, it, scan._last_result(sym, session))
+                        _size(d)
                         try:
                             card = lab_card(cfg, d, c or NO_CALL, sb, session)
                         except Exception:  # noqa: BLE001

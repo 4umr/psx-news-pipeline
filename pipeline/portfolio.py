@@ -35,7 +35,8 @@ def _ideas(cfg: dict, df: pd.DataFrame, min_adtv: float) -> pd.DataFrame:
 
 
 def simulate(df: pd.DataFrame, ideas: pd.DataFrame, cost: dict, slots: int = 10, stop: float | None = None,
-             start: str = "2018-01-01") -> dict:
+             start: str = "2018-01-01", size_fn=None) -> dict:
+    """size_fn(idea_row) -> multiple of the equal slot size (1.0 = equal weight; capped at 2 slots)."""
     ao = df.pivot_table(index="date", columns="sym", values="ao")
     ac = df.pivot_table(index="date", columns="sym", values="ac")
     days = [d for d in ac.index if d >= pd.Timestamp(start)]
@@ -53,7 +54,8 @@ def simulate(df: pd.DataFrame, ideas: pd.DataFrame, cost: dict, slots: int = 10,
                     continue
                 o = ao.at[d, r["sym"]] if r["sym"] in ao.columns else np.nan
                 before = ac.at[p, r["sym"]] if r["sym"] in ac.columns else np.nan
-                size = min(equity / slots, cash)
+                mult = min(2.0, max(0.0, float(size_fn(r)))) if size_fn else 1.0
+                size = min(equity / slots * mult, cash)
                 if not o or np.isnan(o) or size <= equity * 0.01:
                     continue
                 if np.isnan(before) or not 0.6 <= o / before <= 1.6:  # impossible overnight jump: bad data, skip

@@ -686,6 +686,11 @@ def _tech_page(p: Page, d: dict, t: dict, reserve: bool = False) -> None:
         if notes:
             ry, _ = p.bullets(M + half + GAP, ry, notes, half, size=7.8, gap=4, max_y=ry + 120)
     y = max(ly, ry) + 6
+    from .analogs import lines as an_lines
+    an = [clean(x) for x in an_lines(t.get("analog") or {}, t.get("breadth"))]
+    if an:
+        y = p.section(M, y, full, "Similar past cases, market and position size")
+        y, _ = p.bullets(M, y, an, full, size=8.2, gap=4, max_y=end - 330)
     from .ta import TESTED as TT, lines as ch_lines
     from .patterns import lines as pt_lines
     rd = [clean(x) for x in ch_lines(ch)]

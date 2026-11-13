@@ -157,6 +157,13 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
                 c.text(c.R - 24, yy + 40, sub, 9, t["muted"], ha="right")
         y += ph + 16
 
+    # decision support: similar past cases, the market, position size
+    if d.get("analog"):
+        from .analogs import lines as an_lines
+        al = an_lines(d["analog"], d.get("breadth"))
+        if al:
+            y = c.highlights(y, al, title="Similar past cases, market and size", max_lines=12)
+
     # chart read (facts) and what the chart evidence says
     if d.get("chart"):
         from .ta import TESTED, lines as chart_lines

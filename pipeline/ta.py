@@ -169,8 +169,45 @@ def stage_label(row) -> str:
 
 
 # ---------------------------------------------------------------- live: one stock's chart, read in words
+_UNI: dict = {}
+
+
+def universe() -> dict:
+    """{'rs': {sym: rank 0-1}, 'tier': {sym: Large/Mid/Small/Micro}, 'breadth': share of liquid stocks above their
+    200-day average} on the latest session of the swing price database (one pass, cached for the run)."""
+    if _UNI:
+        return _UNI
+    import json
+
+    from . import prices
+    from .signals import features as sig_features
+    if not prices.LIVE_PATH.exists():
+        return {"rs": {}, "tier": {}, "breadth": None}
+    raw = prices.load(prices.LIVE_PATH)
+    try:
+        meta = json.loads(prices.META_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    d = sig_features(prices.adjust(raw), meta)
+    g = d.groupby("sym", sort=False)
+    r = lambda n: d["ac"] / g["ac"].shift(n) - 1  # noqa: E731
+    d["rs_raw"] = 0.4 * r(63) + 0.2 * r(126) + 0.2 * r(189) + 0.2 * r(250)
+    last = d[d["date"] == d["date"].max()]
+    liq = last[last["adtv20"] >= 2e6]
+    above = liq[liq["sma200"].notna()]
+    _UNI.update(rs=liq.set_index("sym")["rs_raw"].rank(pct=True).to_dict(),
+                tier=last.set_index("sym")["tier"].to_dict(),
+                breadth=float((above["ac"] > above["sma200"]).mean()) if len(above) else None)
+    return _UNI
+
+
 def rs_ranks(session: str | None = None) -> dict[str, float]:
     """Relative-strength rank (0-1) of every liquid stock on the latest session of the swing price database."""
+    return universe()["rs"]
+
+
+def _rs_ranks_old(session: str | None = None) -> dict[str, float]:
+    """(kept for reference) the original single-purpose version."""
     import json
 
     from . import prices

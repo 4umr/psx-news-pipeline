@@ -248,6 +248,18 @@ def levels_tests() -> list[str]:
     ok("news tries the main model first, research the other one",
        _an.models_for(_cf) == ["main-model", "lite"] and _an.models_for(_cf, True) == ["lite", "main-model"])
     _an._model = _keep
+    from . import analogs as _ag
+    sz = _ag.size(100.0, 95.0, "up")
+    ok("position size: 5% to the fails-below line -> 1% risk = 20% capped at 10%, risking 0.5%",
+       abs(sz["pct"] - 10.0) < 1e-6 and abs(sz["risk_pct"] - 0.5) < 1e-6)
+    sz2 = _ag.size(100.0, 80.0, "up")
+    ok("position size: 20% to the line -> 5% of the portfolio, risking 1%", abs(sz2["pct"] - 5.0) < 1e-6 and abs(sz2["risk_pct"] - 1.0) < 1e-6)
+    ok("no size on the sell side", _ag.size(100.0, 95.0, "up", "sell") == {})
+    pf = _ag.profile("big_up", {"stage2": True, "rs_rank": 0.9}, 0.9, "Mid", "up")
+    ok("profile buckets", pf == {"res": "G", "chart": "S2", "rs": "H", "pb": "V", "tier": "M", "regime": "up"})
+    lk = _ag.lookup(pf)
+    ok("similar past cases found with at least 40 cases", lk is not None and lk["n"] >= 40 and lk["matched"])
+    ok("regime from index history", _ag.regime({f"d{i:04d}": 100 + i * 0.1 for i in range(300)})["name"] == "up")
     ln = earnings.eps_line({"annual": True, "eps": 10.0, "eps_ly": 8.0, "eps_q": 3.0, "eps_q_ly": 1.0, "yoy_q": 2.0, "yoy": 0.25})
     ok("annual result line shows the fourth quarter first", ln == "fourth-quarter EPS 3.00 vs 1.00 a year ago (+200%); full year 10.00 vs 8.00")
     return bad

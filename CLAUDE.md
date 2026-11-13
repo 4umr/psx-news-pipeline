@@ -330,6 +330,23 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   fair value table; chart read; patterns; evidence). Pages: summary, financials, technical, business (if the annual
   report was read; disclosures on the last page). Caption adds the setup and model fair value lines.
 
+## Decision support (built 2026-11-13) — `analogs.py`, `pipeline/analog_stats.json`
+- Umer chose: similar past cases + market regime + position sizing. Built by scratch analog_test.py (2012-2026,
+  liquid Rs 2m+, one observation per stock per week, 122k stock-weeks, 443 stocks; outcome = 60-session return vs
+  same-size liquid stocks, before costs). Profile = result class (latest within 90 days, strictly before the day),
+  chart (stage 2 / 4 / other), RS (top 30% / middle / bottom half), P/B (<=1.2 / 1.2-3 / >3 / unknown; book values
+  only ~5 years), size, regime. Six back-off levels stored in analog_stats.json (67 KB, committed); live `lookup`
+  takes the most specific profile with >= 150 cases, 30 stocks and 5 years.
+- Findings: good result + stage 2 + RS top 30% +3.4% avg (median -0.3%, 49% beat, 13/15 yrs); ordinary stock 0.0%
+  (sanity); weak result + stage 4 + weak RS -2.4% (3/15 yrs). Results rule by regime: up-trend +5.1% (256), mixed
+  +1.1% (64), down +2.7% (54); breadth 50%+ +5.1% vs +1.8%. Sizing (portfolio 2013-2026, 10 slots): equal 18.2%/yr,
+  worst fall -35.7%, Sharpe 1.00; vol-scaled 18.0/-35.7/1.03; half in down markets 16.8/-35.7/1.03; both 17.4/-35.7/1.10
+  -> no adjustment reduced the worst fall: size = plain risk rule (1% risk / distance to fails-below, 2-10%).
+  `portfolio.simulate(..., size_fn)` added for this.
+- Live: `ta.universe()` (RS, size tier, breadth, cached per run), shared["regime"] = `analogs.regime(idx)`; `lab.dossier`
+  -> d["analog"] (+ lines in the AI dossier), `lab._size(d)` after every setup; panel "Similar past cases, market and
+  size" on every Lab card; Stock of the Day technical page section. Display only: no vote (its features already vote).
+
 ## System review fixes (2026-11-13) — evidence: 100 runs, state, 59 editor decisions, 60 channel posts
 - Stock of the Day was published at 01:00-03:00 (11-13 Nov): stock.yml's backstop cron fires hours late, after
   midnight = a new day. `sotd.run` now refuses a SCHEDULED run (GITHUB_EVENT_NAME=schedule) outside 17:30-23:00;
