@@ -347,6 +347,17 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   -> d["analog"] (+ lines in the AI dossier), `lab._size(d)` after every setup; panel "Similar past cases, market and
   size" on every Lab card; Stock of the Day technical page section. Display only: no vote (its features already vote).
 
+## First live day of the new Lab (13 Nov 2026) — lessons
+- Nothing new arrived overnight: every new Lab feature was pushed AFTER the 12 Nov 18:20 run, whose old code saved no
+  `report`, so the 08:40 pre-open ("morning: no evening report") and level alerts had nothing. Manual run #12
+  (lab --force, 10:50) sent 12 cards at 11:11 and saved the report; morning() now always says why it is empty.
+- Run #12 log: `gemini-2.5-flash-lite` -> HTTP 404 on this key (every fallback failed) and from 10:59 the main model
+  hit its per-minute limit (RetryError) -> most scan stocks without an AI view. Fixed: `analysis._backup_model`
+  picks the configured backup only if `_available_models()` lists it, else the newest other text flash (lite first);
+  research calls paced 12 s apart (`_LAST_RESEARCH`). Self-test sets `_AVAILABLE` itself (never the live list).
+- Same log: 52 stocks rejected in market hours because `checks.basic` compared the live snapshot with YESTERDAY's
+  close (stale all-stock table) at 5%: in market hours the tolerance is now the day's price band (10.5% / Rs 1.05).
+
 ## System review fixes (2026-11-13) — evidence: 100 runs, state, 59 editor decisions, 60 channel posts
 - Stock of the Day was published at 01:00-03:00 (11-13 Nov): stock.yml's backstop cron fires hours late, after
   midnight = a new day. `sotd.run` now refuses a SCHEDULED run (GITHUB_EVENT_NAME=schedule) outside 17:30-23:00;
