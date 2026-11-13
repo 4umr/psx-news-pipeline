@@ -359,3 +359,76 @@ def auto_sales(url: str) -> dict | None:
                  url=url, modified=_modified(r))
         return d
     return None
+
+
+# ---------------------------------------------------------------- regulators (NEPRA, OGRA)
+NEPRA_HOME = "https://nepra.org.pk/"
+OGRA_PAGES = {  # page -> what its notices are about
+    "https://www.ogra.org.pk/rlng-notified-prices-3": "RLNG price",
+    "https://www.ogra.org.pk/lpg-notified-prices": "LPG price",
+    "https://www.ogra.org.pk/consumer-gas-prices": "Gas price",
+}
+
+
+def parse_nepra(html: str) -> list[dict]:
+    """NEPRA's home page tables: date (dd-mm-yyyy) | what was decided or notified | 'view' link to the PDF.
+    Returns [{date, title, url}] newest first (as listed)."""
+    from urllib.parse import urljoin
+    soup = BeautifulSoup(html, "lxml")
+    out, seen = [], set()
+    for tr in soup.find_all("tr"):
+        tds = tr.find_all("td", recursive=False)
+        if len(tds) < 3:
+            continue
+        m = re.search(r"(\d{2})-(\d{2})-(\d{4})", tds[0].get_text(" "))
+        a = tr.find("a", href=True)
+        title = clean_ws(tds[1].get_text(" "))
+        if not (m and a and len(title) > 15):
+            continue
+        url = urljoin(NEPRA_HOME, a["href"].strip())
+        if url in seen:
+            continue
+        seen.add(url)
+        try:
+            d = datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            continue
+        out.append({"date": d, "title": title, "url": url})
+    return out
+
+
+def nepra_items() -> list[dict] | None:
+    r = _get(NEPRA_HOME)
+    if r is None:
+        return None
+    items = parse_nepra(r.text)
+    return items or None  # an empty list means the layout changed
+
+
+def parse_ogra(html: str) -> list[dict]:
+    """OGRA download lists: <li><div class="dowload-title"><p>title</p></div><a href=".../download/ID">."""
+    soup = BeautifulSoup(html, "lxml")
+    out = []
+    for li in soup.select("li"):
+        t = li.select_one(".dowload-title, .download-title")
+        a = li.find("a", href=re.compile(r"/download/\d+"))
+        if t and a:
+            out.append({"title": clean_ws(t.get_text(" ")), "url": a["href"].split("?")[0]})
+    return out
+
+
+def ogra_items() -> list[dict] | None:
+    out = []
+    for page, kind in OGRA_PAGES.items():
+        r = _get(page)
+        if r is None:
+            return None
+        got = parse_ogra(r.text)
+        if not got:
+            return None
+        have = {x["url"] for x in out}
+        for g in got:  # the page nests lists, so the same notice can appear twice
+            if g["url"] not in have and len([x for x in out if x["page"] == page]) < 12:
+                have.add(g["url"])
+                out.append({**g, "kind": kind, "page": page})
+    return out

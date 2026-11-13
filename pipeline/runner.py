@@ -738,11 +738,13 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
             {"t": it.title, "u": it.url, "s": it.source, "sc": it.score, "l": it.label, "topic": it.topic,
              "ts": int(time.time())}, cfg))
 
-    # Items whose AI reading failed on a busy Gemini (errors 429/503) come back first, for up to 3 tries in 30 min
+    # Items whose AI reading failed on a busy Gemini (errors 429/503), or that did not fit in this pass's AI
+    # budget, come back first: up to 5 tries in 60 min. Before 14 Nov 2026 an item over the per-pass budget was
+    # dropped untried ("AI unavailable"), e.g. NEPRA industrial rates and SBP's Rs 500bn profit on 13 Nov.
     tries: dict[str, int] = {}
     firsts: dict[str, int] = {}
     for r in state.data.pop("ai_retry", []):
-        if time.time() - r["first"] < 1800:
+        if time.time() - r["first"] < 3600:
             back = NewsItem(title=r["t"], url=r["u"], source=r["s"], summary=r.get("sm", ""), pk=True,
                             official=r.get("off", False),
                             published=datetime.fromtimestamp(r["pub"], tz=now.tzinfo) if r.get("pub") else None)
@@ -766,7 +768,9 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
             ai = S("article analysis", analysis.analyse, it.title, it.url, it.source, cfg, it.summary,
                    ctx_text, tickers, editor.posted_list(state))
             status = analysis.last_status
-        if status == "error" and tries.get(it.title, 0) < 2:
+        elif analysis.available(cfg):
+            status = "error"  # not tried: this pass's AI budget is used up, so it waits for the next pass
+        if status == "error" and tries.get(it.title, 0) < 4:
             first = firsts.get(it.title, int(time.time()))
             state.data.setdefault("ai_retry", []).append(
                 {"t": it.title, "u": it.url, "s": it.source, "sm": (it.summary or "")[:300], "off": it.official,

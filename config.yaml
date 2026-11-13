@@ -92,6 +92,7 @@ market_hours: {start: "09:15", end: "16:45"} # window for intraday checks (PKT)
 
 # Alert when any KSE-100 stock moves this much intraday (PSX circuit is ~10%)
 big_stock_move_pct: 7.5
+big_moves_batch_minutes: 45     # mid/small caps during the session: one card at most every 45 min (or at 6 stocks)
 # Unusual volume: alert when a KSE-100/watchlist stock trades this multiple of its 10-day average
 unusual_volume_x: 3.0
 # PSX company filings: company pages checked per pass (watchlist, companies with results due and the
@@ -99,7 +100,8 @@ unusual_volume_x: 3.0
 # small cap). The fast loop's light passes use the smaller number (about 8 pages a minute).
 psx_filings_per_run: 25
 psx_filings_per_pass_light: 8
-psx_filings_batch_minutes: 30   # one filings card at most every 30 min (material information at once)
+psx_filings_roundup: "17:30"    # routine filings (insider dealings, notices) -> ONE card after the close, Mon-Fri
+psx_filings_roundup_max: 40     # ...or earlier if this many pile up; material information + results post at once
 
 # Fast loop (market hours, Mon-Fri): one GitHub job stays open and checks every minute instead of waiting
 # for GitHub's schedule (which starts runs only every 35-80 minutes). A light pass = RSS news, PSX data,
@@ -127,6 +129,8 @@ official_data:
   remit: true
   bop: true
   autos: true
+  nepra: true     # NEPRA tariff / fuel charges decisions and notifications (hourly)
+  ogra: true      # OGRA RLNG, LPG and gas price notices (hourly)
 
 # Research Lab (experiment, pipeline/lab.py): one AI view a trading day per stock, versus the KSE-100 over
 # 20 sessions, scored automatically. Goes ONLY to the test chat (secret TELEGRAM_RESEARCH_CHAT_ID, or the

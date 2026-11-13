@@ -381,6 +381,39 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 - Same log: 52 stocks rejected in market hours because `checks.basic` compared the live snapshot with YESTERDAY's
   close (stale all-stock table) at 5%: in market hours the tolerance is now the day's price band (10.5% / Rs 1.05).
 
+## R&D fixes (2026-11-14) — from 3 days of live state (news_log, posted, street, snap, events)
+- CPI: PBS posted the October 2026 review as a PDF (was .docx) -> `pbs.cpi_details` read nothing for 12 days, snap
+  stayed September. Now docx, else PDF (`_pdf_text`, pypdf) + `tidy_text` (PDF word breaks: "month -on- month",
+  "a n", "in crease", "1. 5%"); MoM must be in the SAME paragraph (old regex took the next item's figure);
+  range check. `watchers.pbs_releases`: `behind` = newest release not in snap (snap["post"] = url) -> catch-up read
+  every 15 min (`_PBS_TRIED`); fresh release unreadable -> one admin note; `_cpi_consistent` (new prev_yoy must
+  equal our last month within 0.15pp) else admin "data check", nothing posted; old release caught up -> snap/hist
+  updated, Street View scored, admin note only (flag `cpi_post:<month>` = once). October: 9.6% (prev 10.3).
+- Street View: had captured India/Thai/Singapore/Norway CPI ("Reuters poll") and an SBP DECISION as forecasts.
+  Now `_about_pakistan` (foreign country in the title without a Pakistan word = out; international sources need a
+  Pakistan word), `_is_forecast` (forecast verb in the SAME sentence, not "below/above forecast"), one-off clean
+  (`clean_v2`), scoring only counts calls made BEFORE the release (`_score(until=)`).
+- Filings: material information + results -> own card at once ("Material information on PSX" / "Results filed on
+  PSX"); everything else (83 of 116 logged were insider disclosures) -> ONE "Company filings today" card at
+  `psx_filings_roundup` 17:30 Mon-Fri (insider dealings grouped in one line; or at `psx_filings_roundup_max` 40).
+  Was 10-19 single-filing cards a day (half of all channel posts). `_filings_alert`, `_urgent_filing`.
+- News + AI: an item over the per-pass AI budget (`ai.max_per_run` 6) was dropped untried as "AI unavailable"
+  (13 Nov: NEPRA industrial rates, SBP Rs 500bn profit). Now it waits for the next pass (`ai_retry`), up to 5
+  tries in 60 min (also for 429/5xx errors).
+- Corroboration: `editor.corroborate_queries` = names + amounts (+Pakistan) and the 4 most specific words (old
+  6-word AND query found 0 of 8 real cases; new finds 4: ADB $500m, weekly SPI, World Bank debt, IMF auto policy).
+  The Saudi $3bn rollover (12 Nov) and China/Kuwait rollover (13 Nov) had NO trusted coverage at all: correct to hold.
+- Live prices for every stock: `psx.live_screener(view)` (one shared copy, 180 s, used only while
+  `psx.screener_live` agrees with the KSE-100 view; levelwatch uses it too) and `scs.live_activity(view, wide=True)`
+  (adds screener rows, `screener: True`, no volume). Used by stock_moves (mid/small caps DURING the session now),
+  results posts' "x% today" and filing card prices. Briefs keep KSE-100-only breadth (wide=False).
+  Mid/small moves in session are batched (`moves_pending`, `big_moves_batch_minutes` 45 or 6 stocks); KSE-100 /
+  watchlist moves go at once and take the waiting ones along.
+- Regulators (`official.py` watchers `nepra`, `ogra`, hourly): NEPRA home page tables (date | text | PDF) filtered
+  by `_NEPRA_KEEP` / `_NEPRA_DROP` (tariffs, FCA, quarterly adjustments, SRO notifications, hearings marked "not yet
+  decided"; no jobs, licences, show-cause, drafts), last 4 days; OGRA download lists (RLNG, LPG, consumer gas).
+  OGRA PDFs are scanned images: cards show the published title + link only, never a number. First run silent.
+
 ## System review fixes (2026-11-13) — evidence: 100 runs, state, 59 editor decisions, 60 channel posts
 - Stock of the Day was published at 01:00-03:00 (11-13 Nov): stock.yml's backstop cron fires hours late, after
   midnight = a new day. `sotd.run` now refuses a SCHEDULED run (GITHUB_EVENT_NAME=schedule) outside 17:30-23:00;
@@ -417,9 +450,9 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   channel: <reason>". 23:45 report adds "Main channel news: N posted, M kept for you (reasons)".
 - First live day (11 Nov): 5 news posts (Hormuz, OGDCL discovery, ADB $500m, petrol cut twice), 22 kept for admin.
   Fixes: `editor.burst_hours` (2): a second post on a topic within 2 h needs materiality 5 (AI same_event missed the
-  ProPakistani + The Nation petrol posts 10 min apart); PSX filings are batched (`psx_filings_batch_minutes` 30,
-  `state.data["filings_pending"]`, 8 filings or any "material" title flushes at once) because the every-minute
-  loop produced ~20 "1 new filing on PSX" cards a day. Lab ran on time 18:20 (5 calls, 5 cards, admin chat).
+  ProPakistani + The Nation petrol posts 10 min apart); PSX filings were batched (30 min; replaced 14 Nov by
+  the 17:30 "Company filings today" card, see R&D fixes) because the every-minute loop produced ~20 "1 new
+  filing on PSX" cards a day. Lab ran on time 18:20 (5 calls, 5 cards, admin chat).
 - Replay test: `python -m pipeline review --hours 36` (workflow `review.yml`, manual, uses the Gemini key, reads
   the state branch, sends/saves nothing): runs the last hours' candidates in time order through the same gates
   with a simulated posted list (`editor._clock` set to each item's time) and prints a table + RESULT.

@@ -114,9 +114,10 @@ def activity_is_today(act: list[dict], view: list[dict]) -> bool | None:
     return None if n < 15 else cur >= 0.6 * n
 
 
-def live_activity(view: list[dict] | None = None) -> tuple[list[dict], bool]:
+def live_activity(view: list[dict] | None = None, wide: bool = False) -> tuple[list[dict], bool]:
     """Rows shaped like daily_activity() that are about TODAY: the full table once it has been updated after
     the close; before that, the KSE-100 stocks from the live index view (price and change; no volume).
+    wide=True adds every other stock from the PSX screener while it is live (price and change; no volume).
     Returns (rows, full) where full=True means every stock with today's volume."""
     view = view if view is not None else kse100_view_cached()
     act = daily_activity()
@@ -131,6 +132,17 @@ def live_activity(view: list[dict] | None = None) -> tuple[list[dict], bool]:
             rows.append({"company_code": c, "company_name": r.get("company_name") or o.get("company_name", ""),
                          "sector_name": o.get("sector_name", ""), "trading_close": p, "trading_change": round(p - ld, 4),
                          "trading_vol": None})
+    if wide:
+        from . import psx
+        have = {r["company_code"] for r in rows}
+        for c, (p, chg) in psx.live_screener(view).items():
+            if c in have or not p or chg is None or chg <= -100:
+                continue
+            o = sec.get(c) or {}
+            ld = p / (1 + chg / 100)
+            rows.append({"company_code": c, "company_name": o.get("company_name", ""),
+                         "sector_name": o.get("sector_name", ""), "trading_close": p,
+                         "trading_change": round(p - ld, 4), "trading_vol": None, "screener": True})
     return rows, False
 
 

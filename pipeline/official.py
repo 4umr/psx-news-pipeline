@@ -4,6 +4,8 @@
   remit    workers' remittances (SBP)                         hourly
   bop      current account and trade (SBP balance of payments) hourly
   autos    vehicle sales by company (PAMA)                    every 2 hours
+  nepra    power regulator decisions (tariffs, fuel charges)  hourly
+  ogra     oil and gas regulator price notices (RLNG, LPG)    hourly
 
 The first time a source is seen its numbers are recorded quietly, unless the file was published in
 the last 3 days (then it is still news). After that, every new release is posted once. A source that
@@ -11,18 +13,19 @@ keeps failing produces one private note; numbers that fail a sanity check are ne
 """
 from __future__ import annotations
 
+import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .common import Alert, esc, link, log, now_utc
 from .sources import official as src
 from .style import header
 
-CHECK_MINUTES = {"fuel": 20, "remit": 60, "bop": 60, "autos": 120}
+CHECK_MINUTES = {"fuel": 20, "remit": 60, "bop": 60, "autos": 120, "nepra": 60, "ogra": 60}
 FRESH_DAYS = 3
 FAILS_BEFORE_NOTE = 8
 NAMES = {"fuel": "Fuel prices (PSO)", "remit": "Remittances (SBP)", "bop": "Balance of payments (SBP)",
-         "autos": "Vehicle sales (PAMA)"}
+         "autos": "Vehicle sales (PAMA)", "nepra": "NEPRA decisions", "ogra": "OGRA price notices"}
 FUEL_LABEL = {"petrol": "Petrol", "diesel": "High-speed diesel", "kerosene": "Kerosene", "ldo": "Light diesel oil"}
 FUEL_SHORT = {"kerosene": "Kerosene", "ldo": "Light diesel"}
 
@@ -242,7 +245,91 @@ def _autos(now: datetime, st: dict) -> list[Alert] | None:
     return [Alert(text, 8, f"autos:{url}", tags=["AutoSales"], extra={"card": card})]
 
 
-WATCHERS = (("fuel", _fuel), ("remit", _remit), ("bop", _bop), ("autos", _autos))
+# ---------------------------------------------------------------- regulators
+# NEPRA (power) and OGRA (oil and gas) publish decisions as PDFs; OGRA's are scanned images, so the card shows
+# exactly what the regulator published (title, date, link to the official PDF) and never a number we did not read.
+_NEPRA_KEEP = re.compile(r"fuel charges? adjustment|\bfca\b|quarterly adjustment|tariff|s\.?\s?r\.?\s?o\b|"
+                         r"notification|uniform|incremental|capacity|k-?\s?electric|base rate|determination|"
+                         r"power purchase|indexation|net[- ]?metering|wheeling|circular debt", re.I)
+_NEPRA_DROP = re.compile(r"job|vacanc|recruit|intern|tender|procurement|workshop|seminar|webinar|training|"
+                         r"licen[cs]e|show cause|draft .*regulation|consultation|regulations?, 20|housing|"
+                         r"complaint|anniversary|newsletter", re.I)
+_NEPRA_LEAD = re.compile(r"^(decision of the authority in the matter of|nepra hereby notifies the|"
+                         r"order of the authority in the matter of)\s*", re.I)
+
+
+_TIDY = ((r"\s*along[- ]with .*?(?=in the matter of)", " "),                        # dissent notes etc.
+          (r"NEPRA hereby notifies the (following )?Decisions? of the Authority", "decision of the Authority"),
+          (r"Determination of\s+", ""),
+          (r"Re-?\s?Gasified Liquefied Natural Gas \(RLNG\)", "RLNG"),
+          (r"Weighted Average Sale Provisional Price", "provisional sale price"),
+          (r"Weighted Average Sale Price", "sale price"),
+          (r"for the Month of", "for"),
+          (r"\s+Dated\s+", ", dated "))
+
+
+def _short(t: str, n: int = 170) -> str:
+    t = _NEPRA_LEAD.sub("", t).strip(" -")
+    for a, b in _TIDY:
+        t = re.sub(a, b, t, flags=re.I)
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    t = t[0].upper() + t[1:] if t else t
+    return t if len(t) <= n else t[:n].rsplit(" ", 1)[0] + "..."
+
+
+def _regulator(name: str, items: list[dict] | None, now: datetime, st: dict) -> list[Alert] | None:
+    if items is None:
+        return None
+    known = set(st.get("seen", []))
+    first = not known
+    new = [x for x in items if x["url"] not in known]
+    st["seen"] = (list(st.get("seen", [])) + [x["url"] for x in new])[-800:]
+    if first:
+        return []  # first sighting: record quietly
+    if name == "nepra":
+        cut = now.replace(tzinfo=None) - timedelta(days=4)
+        new = [x for x in new if x["date"] >= cut and _NEPRA_KEEP.search(x["title"])
+               and not _NEPRA_DROP.search(x["title"])]
+    if not new:
+        return []
+    new = new[:6]
+    if name == "nepra":
+        org, kicker = "NEPRA", "Power regulator · NEPRA"
+        rows = [(f"{x['date']:%d %b}", ("Hearing, not yet decided: " if re.search(r"hearing", x["title"], re.I)
+                                        else "") + _short(x["title"], 112), "", None) for x in new]
+        fca = any(re.search(r"fuel charges? adjustment|\bfca\b", x["title"], re.I) for x in new)
+        why = ("NEPRA decisions set electricity prices. A fuel charges adjustment changes next month's bills, which "
+               "feeds inflation and the cash flows of power distribution companies; tariff decisions also move costs "
+               "for industry (textiles, cement, steel)." if fca else
+               "NEPRA decisions set electricity prices and power-sector payments: they move costs for industry "
+               "(textiles, cement, steel) and the cash flows of power producers and distributors.")
+        sectors = ["Power generation", "Power distribution (KEL)", "Textiles", "Cement"]
+    else:
+        org, kicker = "OGRA", "Oil and gas regulator · OGRA"
+        rows = [(x["kind"].split()[0], _short(x["title"], 112), "", None) for x in new]
+        why = ("OGRA sets regulated gas, RLNG and LPG prices. RLNG and gas prices move costs for fertilizer, power "
+               "and industry and the revenue of SNGP and SSGC; LPG prices matter for LPG marketers.")
+        sectors = ["Gas utilities (SNGP, SSGC)", "Fertilizer", "Power", "LPG"]
+    title = (f"{org}: {rows[0][1]}" if len(rows) == 1 else f"{org}: {len(rows)} new decisions and notices")
+    title = title if len(title) <= 150 else title[:150].rsplit(" ", 1)[0] + "..."
+    card = {"theme": "economy", "kicker": kicker, "title": title, "rows_title": "Date or type · what was published",
+            "rows": rows, "why": why + " Open the official document for the figures.", "sectors": sectors,
+            "source": f"{org} website", "links": [(org, x["url"]) for x in new[:4]]}
+    text = (header("⚡" if name == "nepra" else "🔥", title, kicker) + "\n"
+            + "\n".join(f"{esc(a)}: {esc(b)}" for a, b, _, _ in rows)
+            + f"\n\n💡 {why}\n" + "\n".join(f"🔗 {link(x['url'], org)}" for x in new[:4]))
+    return [Alert(text, 8, f"{name}:{new[0]['url']}", tags=[org], extra={"card": card})]
+
+
+def _nepra(now: datetime, st: dict) -> list[Alert] | None:
+    return _regulator("nepra", src.nepra_items(), now, st)
+
+
+def _ogra(now: datetime, st: dict) -> list[Alert] | None:
+    return _regulator("ogra", src.ogra_items(), now, st)
+
+
+WATCHERS = (("fuel", _fuel), ("remit", _remit), ("bop", _bop), ("autos", _autos), ("nepra", _nepra), ("ogra", _ogra))
 
 
 def official_data(now: datetime, state, cfg: dict) -> list[Alert]:

@@ -18,9 +18,9 @@ import json
 import time
 
 from .common import ROOT, esc, in_window, log
+from .sources.psx import screener_live  # noqa: F401  (used by the self-test)
 
 LAB_PATH = ROOT / "state" / "lab" / "calls.json"
-_SCR: dict = {"at": 0.0, "prices": {}, "live": None}
 
 
 def _report() -> dict:
@@ -30,17 +30,6 @@ def _report() -> dict:
         return {}
 
 
-def screener_live(view: list[dict], scr: dict[str, tuple[float, float]]) -> bool | None:
-    """Does the PSX screener show today's live prices? Compared on KSE-100 stocks that moved today."""
-    n = live = 0
-    for r in view or []:
-        c, p, ld = r.get("company_code"), r.get("CurrentPrice"), r.get("LDCP")
-        if not c or not p or not ld or abs(p - ld) < 0.006 or c not in scr:
-            continue
-        n += 1
-        live += abs(scr[c][0] - p) <= max(0.011, p * 0.003)
-    return None if n < 15 else live >= 0.6 * n
-
 
 def live_prices(view: list[dict], need: set[str], max_age: float = 180.0) -> tuple[dict[str, float], str]:
     """{sym: live price} for the stocks in `need`, and a note on where the prices came from."""
@@ -48,12 +37,9 @@ def live_prices(view: list[dict], need: set[str], max_age: float = 180.0) -> tup
     rest = need - set(px)
     if not rest:
         return px, "live KSE-100 prices"
-    if time.time() - _SCR["at"] > max_age:
-        from .sources import psx
-        scr = psx.screener()
-        _SCR.update(at=time.time(), prices=scr, live=screener_live(view, scr) if scr else None)
-    if _SCR["live"]:
-        px.update({s: _SCR["prices"][s][0] for s in rest if s in _SCR["prices"]})
+    from .sources import psx
+    if scr := psx.live_screener(view, max_age):
+        px.update({s: scr[s][0] for s in rest if s in scr})
         return px, "live prices (KSE-100 view and PSX screener)"
     return px, "live KSE-100 prices only (PSX screener not live right now)"
 

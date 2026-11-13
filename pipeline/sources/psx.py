@@ -171,6 +171,32 @@ def index_members(index: str, known: set[str] | None = None) -> list[str]:
     return out
 
 
+_SCR: dict = {"at": 0.0, "prices": {}, "live": None}
+
+
+def screener_live(view: list[dict], scr: dict[str, tuple[float, float]]) -> bool | None:
+    """Does the PSX screener show today's live prices? Compared on KSE-100 stocks that moved today
+    (13 Nov 2026 probe: 93 of 97 matched the live index view)."""
+    n = live = 0
+    for r in view or []:
+        c, p, ld = r.get("company_code"), r.get("CurrentPrice"), r.get("LDCP")
+        if not c or not p or not ld or abs(p - ld) < 0.006 or c not in scr:
+            continue
+        n += 1
+        live += abs(scr[c][0] - p) <= max(0.011, p * 0.003)
+    return None if n < 15 else live >= 0.6 * n
+
+
+def live_screener(view: list[dict], max_age: float = 180.0) -> dict[str, tuple[float, float]]:
+    """{sym: (price, change %)} for every listed stock, ONLY if the screener agrees with the live KSE-100 view
+    right now; else {}. Downloaded at most every `max_age` seconds (one copy shared by the whole job)."""
+    import time
+    if time.time() - _SCR["at"] > max_age:
+        scr = screener()
+        _SCR.update(at=time.time(), prices=scr, live=screener_live(view, scr) if scr else None)
+    return _SCR["prices"] if _SCR["live"] else {}
+
+
 def screener() -> dict[str, tuple[float, float]]:
     """PSX screener page (dps.psx.com.pk/screener): every listed stock with price and change % (no volume).
     {sym: (price, change %)}. Whether it is live during the session is checked by runner._screener_probe."""

@@ -116,7 +116,26 @@ def _words(t: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9$.]+", (t or "").lower()) if len(w) > 2 and w not in _STOP}
 
 
-def corroborate(it: NewsItem, cfg: dict, state) -> NewsItem | None:
+_AMOUNT = re.compile(r"\$?\d[\d,]*(?:\.\d+)?\s?(?:bn|billion|mn|million|tr|trillion|b|m|%|pc)?\b%?", re.I)
+
+
+def corroborate_queries(title: str) -> list[str]:
+    """Two Google News searches: (1) the names and amounts in the headline (Saudi, IMF, $3 billion), the parts
+    every outlet repeats; (2) the four most specific words. Six AND-ed words (the old query) found nothing even
+    when the story existed under a different wording."""
+    raw = re.findall(r"[A-Za-z][A-Za-z'.-]*", title)
+    caps = [w for w in raw if w[0].isupper()]
+    title_case = len(caps) > 0.6 * max(1, len(raw))
+    names = [] if title_case else [w for w in raw if w[0].isupper() and re.sub(r"'s$", "", w.lower()) not in _STOP]
+    names += [w for w in raw if len(w) >= 2 and w.isupper() and w not in names]  # IMF, SBP, ADB
+    amounts = [m.group(0).strip() for m in _AMOUNT.finditer(title) if re.search(r"\d", m.group(0))][:2]
+    longest = sorted(_words(title) - {w.lower() for w in names}, key=len, reverse=True)
+    q1 = " ".join(dict.fromkeys(names[:3] + amounts + longest[:max(0, 2 - len(names))] + ["Pakistan"]))
+    q2 = " ".join(sorted(_words(title), key=len, reverse=True)[:4])
+    return [q for q in dict.fromkeys((q1, q2)) if len(q.split()) >= 3]
+
+
+def corroborate(it: NewsItem, cfg: dict, state, days: int = 2) -> NewsItem | None:
     """An important story seen only on an untrusted site: look for the same story from a trusted outlet (Google
     News, last 2 days). Found -> that trusted article replaces it (the AI then reads the trusted version).
     12 Nov 2026: 'Saudi Arabia rolls over $3 billion deposit to Pakistan' was dropped this way (OrissaPOST only).
@@ -135,17 +154,20 @@ def corroborate(it: NewsItem, cfg: dict, state) -> NewsItem | None:
     log_.append(now)
     words = _words(it.title)
     nums = set(re.findall(r"\d+(?:\.\d+)?", it.title))
-    key = " ".join(sorted(words, key=len, reverse=True)[:6])
     if len(words) < 3:
         return None
     from urllib.parse import quote_plus
-    url = f"https://news.google.com/rss/search?q={quote_plus(key + ' when:2d')}&hl=en-PK&gl=PK&ceid=PK:en"
-    try:
-        feed = feedparser.parse(http().get(url, timeout=20).content)
-    except Exception as e:  # noqa: BLE001
-        log.info("corroboration search failed: %s", e)
-        return None
-    for e in feed.entries[:15]:
+    entries, seen_links = [], set()
+    for q in corroborate_queries(it.title):
+        url = f"https://news.google.com/rss/search?q={quote_plus(q + f' when:{days}d')}&hl=en-PK&gl=PK&ceid=PK:en"
+        try:
+            for e in feedparser.parse(http().get(url, timeout=20).content).entries[:15]:
+                if e.get("link") not in seen_links:
+                    seen_links.add(e.get("link"))
+                    entries.append(e)
+        except Exception as e:  # noqa: BLE001
+            log.info("corroboration search failed: %s", e)
+    for e in entries:
         src = (e.get("source") or {}).get("title", "") if isinstance(e.get("source"), dict) else ""
         title = re.sub(r"\s+-\s+[^-]{2,60}$", "", clean_ws(e.get("title", "")))
         cand = NewsItem(title=title, url=e.get("link", ""), source=src, published=it.published, summary="", pk=it.pk)

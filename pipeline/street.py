@@ -48,13 +48,59 @@ _MPC_HOLD = re.compile(r"(hold|unchanged|status quo|maintain|pause|keep)[^.]{0,4
                        r"(policy rate|interest rate)[^.]{0,40}(unchanged|on hold|steady)", re.I)
 
 
+# Pakistan only: international sources (Reuters polls etc.) also cover India, Thailand, Norway...
+_INTL = {"Reuters poll", "Moody's Analytics", "EFG Hermes"}
+_PK = re.compile(r"pakistan|\bsbp\b|state bank|\bpbs\b|\bkse|\bpsx\b|\bpkr\b|rupee", re.I)
+_FOREIGN = re.compile(
+    r"\b(india|indian|rbi|thai|thailand|singapore|norway|norwegian|u\.?s\.?|america|american|fed|federal reserve|"
+    r"ecb|euro ?zone|europe|britain|british|uk|england|japan|japanese|boj|china|chinese|pboc|turkey|turkish|egypt|"
+    r"sri lanka|bangladesh|australia|australian|rba|canada|canadian|korea|korean|germany|german|brazil|mexico|"
+    r"russia|indonesia|philippines|malaysia|vietnam|saudi|uae|nigeria|kenya|south africa|new zealand)\b", re.I)
+# a reported actual figure ("rises to 2%, below forecast") is not a forecast
+_ACTUAL = re.compile(r"\b(above|below|beat|beats|missed|misses|than|in line with|tops)\b[^.;]{0,25}"
+                     r"(forecast|expectation|estimate|poll|limit)", re.I)
+_SENT = re.compile(r"(?<!\d)[.!?](?!\d)|;|\n")
+
+
 def _brokers(text: str) -> list[str]:
     return [k for k, rx in _BROKER_RE.items() if rx.search(text)]
 
 
+def _sentence(text: str, pos: int) -> str:
+    """The sentence of `text` that contains character position `pos`."""
+    start = max((m.end() for m in _SENT.finditer(text, 0, pos)), default=0)
+    m = _SENT.search(text, pos)
+    return text[start:m.start() if m else len(text)]
+
+
+def _about_pakistan(title: str, text: str, brokers: list[str]) -> bool:
+    if _FOREIGN.search(title) and not _PK.search(title):
+        return False  # "India inflation jumps to 5.54%", "Thai October headline CPI"
+    if all(b in _INTL for b in brokers) and not _PK.search(text):
+        return False  # a Reuters poll must be about Pakistan
+    return True
+
+
+def _is_forecast(text: str, start: int) -> bool:
+    """The figure is a forecast only if a forecast word sits in the SAME sentence and it is not
+    a reported actual compared with a forecast ('raises policy rate by 50bps' is a decision)."""
+    s = _sentence(text, start)
+    return bool(_VERB.search(s)) and not _ACTUAL.search(s)
+
+
+def valid(f: dict) -> bool:
+    """Re-check a stored forecast from its title (used to clean records made by older rules)."""
+    t = f.get("t", "")
+    brokers = [f.get("broker", "")]
+    if not _about_pakistan(t, t, brokers):
+        return False
+    m = _CPI.search(t) if f.get("kind") == "cpi" else (_MPC_BPS.search(t) or _MPC_HOLD.search(t))
+    return bool(m) and _is_forecast(t, m.start())
+
+
 def capture(items: list[NewsItem], state: State) -> list[dict]:
     """Record new brokerage forecasts found in news items. Returns the newly captured ones."""
-    store = state.data.setdefault("street", {"forecasts": [], "scores": {}})
+    store = _store(state)
     have = {f["u"] for f in store["forecasts"]}
     new = []
     for it in items:
@@ -62,19 +108,19 @@ def capture(items: list[NewsItem], state: State) -> list[dict]:
         if it.url in have or not _VERB.search(text):
             continue
         brokers = _brokers(text)
-        if not brokers:
+        if not brokers or not _about_pakistan(it.title, text, brokers):
             continue
         rec = None
         if m := _CPI.search(text):
             v = float(m.group(1))
-            if 0 < v < 50:
+            if 0 < v < 50 and _is_forecast(text, m.start()):
                 rec = {"kind": "cpi", "value": v}
         elif re.search(r"policy rate|interest rate|monetary policy|\bmpc\b|rate cut|rate hike", text, re.I):
-            if m := _MPC_BPS.search(text):
+            if (m := _MPC_BPS.search(text)) and _is_forecast(text, m.start()):
                 bps = int(m.group(1) or m.group(4))
                 word = (m.group(2) or m.group(3)).lower()
                 rec = {"kind": "mpc", "value": -bps if word.startswith(("cut", "reduc")) else bps}
-            elif _MPC_HOLD.search(text):
+            elif (m := _MPC_HOLD.search(text)) and _is_forecast(text, m.start()):
                 rec = {"kind": "mpc", "value": 0}
         if not rec:
             continue
@@ -88,15 +134,27 @@ def capture(items: list[NewsItem], state: State) -> list[dict]:
     return new
 
 
-def _score(state: State, kind: str, actual: float, window_days: int, hit_tol: float) -> list[dict]:
+def _store(state: State) -> dict:
     store = state.data.setdefault("street", {"forecasts": [], "scores": {}})
-    cutoff = time.time() - window_days * 86400
+    if not store.get("clean_v2"):  # one-off: drop records the older, looser rules let in
+        store["forecasts"] = [f for f in store["forecasts"] if f.get("scored") or valid(f)]
+        store["clean_v2"] = True
+    return store
+
+
+def _score(state: State, kind: str, actual: float, window_days: int, hit_tol: float,
+           until: float | None = None) -> list[dict]:
+    """Score the calls made in the `window_days` before `until` (the release time; default now).
+    Calls made after the release are never judged against it."""
+    store = _store(state)
+    until = until or time.time()
+    cutoff = until - window_days * 86400
     latest: dict[str, dict] = {}
     for f in store["forecasts"]:
-        if f["kind"] == kind and not f["scored"] and f["ts"] >= cutoff:
+        if f["kind"] == kind and not f["scored"] and cutoff <= f["ts"] <= until:
             latest[f["broker"]] = f  # most recent call per broker counts
     for f in store["forecasts"]:
-        if f["kind"] == kind and f["ts"] >= cutoff:
+        if f["kind"] == kind and cutoff <= f["ts"] <= until:
             f["scored"] = True
     results = []
     for b, f in latest.items():
@@ -110,8 +168,9 @@ def _score(state: State, kind: str, actual: float, window_days: int, hit_tol: fl
     return sorted(results, key=lambda r: r["err"])
 
 
-def score_cpi(state: State, actual: float) -> str:
-    res = _score(state, "cpi", actual, window_days=35, hit_tol=0.3)
+def score_cpi(state: State, actual: float, published=None) -> str:
+    res = _score(state, "cpi", actual, window_days=35, hit_tol=0.3,
+                 until=published.timestamp() if published else None)
     if not res:
         return ""
     lines = [f"{'✅' if r['hit'] else '▫️'} {esc(r['broker'])}: {r['value']:.1f}% "

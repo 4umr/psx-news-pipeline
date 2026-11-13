@@ -261,8 +261,8 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dic
         return []
     fresh.sort(key=lambda r: (r.get("company_code") not in kse100, r.get("company_code") or ""))
     limit = 25
-    try:  # today's move: KSE-100 live during the session, every stock once the table is updated after the close
-        act = {r["company_code"]: r for r in scs.live_activity()[0] if r.get("company_code")}
+    try:  # today's move: live for every stock (KSE-100 view + PSX screener while it is live; full table after close)
+        act = {r["company_code"]: r for r in scs.live_activity(wide=True)[0] if r.get("company_code")}
     except Exception:  # noqa: BLE001
         act = {}
     yoy = _assess_all(fresh[:limit])
@@ -669,15 +669,19 @@ def stock_moves(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
     kse = {r.get("company_code") for r in view}
     quotes = {}  # code -> (price, previous close)
     names: dict[str, str] = {}
+    today_ok = True  # if the wider list fails, KSE-100 moves are posted at once as before
     try:
         act = {r["company_code"]: r for r in scs.daily_activity() if r.get("company_code")}
-        # the all-stock table is yesterday's until about 16:15: mid/small caps only once it is today's
+        # the all-stock table is yesterday's until about 16:15; during the session mid/small caps come from the
+        # PSX screener, used only while it agrees with the live KSE-100 view (scs.live_activity wide=True)
         today_ok = scs.activity_is_today(list(act.values()), view)
+        live = act if today_ok else {r["company_code"]: r for r in scs.live_activity(view, wide=True)[0]
+                                     if r.get("company_code")}
         min_val = float((cfg.get("swing") or {}).get("min_adtv", 10e6))
         for c, v in avg_values(state, act).items():
-            r = act[c]
-            names[c] = r.get("company_name") or ""
-            if today_ok and v >= min_val and r.get("trading_close") and r.get("trading_change") is not None:
+            names[c] = act[c].get("company_name") or ""
+            r = live.get(c) or {}
+            if v >= min_val and r.get("trading_close") and r.get("trading_change") is not None:
                 quotes[c] = (r["trading_close"], r["trading_close"] - r["trading_change"])
     except Exception as e:  # noqa: BLE001  KSE-100 moves still work without the wider list
         log.warning("liquid stocks for big moves failed: %s", e)
@@ -701,6 +705,27 @@ def stock_moves(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
         state.set_flag(k)
         hits.append((code, pct, cur, code in wl, code in kse))
         log_price(state, code, cur, "big move")
+    # Mid/small caps during the session (live from the PSX screener since 14 Nov 2026) cross the line one at a
+    # time: collect them and post one card at most every `big_moves_batch_minutes`, or at 6 stocks. KSE-100 and
+    # watchlist moves go at once and take the waiting ones along. After the close everything goes at once.
+    if not today_ok:
+        pend = state.data.setdefault("moves_pending", [])
+        if pend and pend[0].get("d") != f"{now:%Y-%m-%d}":
+            pend.clear()
+        pend += [{"c": h[0], "t": time.time(), "d": f"{now:%Y-%m-%d}"} for h in hits if not (h[3] or h[4])]
+        urgent = [h for h in hits if h[3] or h[4]]
+        wait = float(cfg.get("big_moves_batch_minutes", 45)) * 60
+        if urgent or len(pend) >= 6 or (pend and time.time() - pend[0]["t"] >= wait):
+            got = {h[0] for h in urgent}
+            for x in pend:
+                q = quotes.get(x["c"])
+                if q and q[1] and x["c"] not in got:
+                    urgent.append((x["c"], (q[0] / q[1] - 1) * 100, q[0], False, False))
+                    got.add(x["c"])
+            pend.clear()
+            hits = urgent
+        else:
+            hits = []
     if not hits:
         return []
     hits.sort(key=lambda h: (not h[4], -abs(h[1])))
@@ -747,24 +772,58 @@ def pbs_releases(state: State) -> list[Alert]:
         url = rel["url"]
         fresh = not state.seen(url)
         is_latest = latest[kind] == url
-        if not fresh and not (is_latest and not state.snap(kind)):
+        # the newest release not yet in our snapshot (e.g. it could not be read when it came out)
+        behind = is_latest and (state.snap(kind) or {}).get("post") != url
+        if not fresh and not behind:
             continue
+        if not fresh and time.time() - _PBS_TRIED.get(url, 0) < 900:
+            continue  # a catch-up read is tried at most every 15 minutes
+        _PBS_TRIED[url] = time.time()
         state.mark(url)  # the generic news item for this release is now redundant
         recent = rel["published"] is None or (now_utc() - rel["published"]).days < 3
         if not is_latest and not (fresh and recent):
             continue
         d = pbs.cpi_details(url) if kind == "cpi" else pbs.spi_details(url)
         if not d:
+            if kind == "cpi" and recent and not state.flag(f"pbsfail:{url}"):
+                state.set_flag(f"pbsfail:{url}")
+                alerts.append(Alert("<b>Data check</b>\nA new PBS inflation release was found but its numbers "
+                                    f"could not be read (layout changed?). It will be retried.\n{esc(url)}",
+                                    0, f"pbsfail:{url}", admin=True))
             continue
+        d["post"] = url
+        if kind == "cpi":
+            old = (state.snap("cpi") or {}).get("general") or {}
+            if not _cpi_consistent(old, d["general"]):
+                if not state.flag(f"pbsodd:{url}"):
+                    state.set_flag(f"pbsodd:{url}")
+                    alerts.append(Alert(
+                        "<b>Data check, not posted to channel</b>\nPBS CPI: the new release says last month was "
+                        f"{d['general']['prev_yoy']:.1f}% but we recorded {old.get('yoy')}% for "
+                        f"{old.get('month')}. Please check the release.\n{esc(url)}", 0, f"pbsodd:{url}", admin=True))
+                continue
         if is_latest:
             state.set_snap(kind, d)
             if kind == "cpi":
                 _record_cpi(state, d["general"])
+        if kind == "cpi":
+            posted = state.flag(f"cpi_post:{d['general']['month']}")
+            if recent and not posted:
+                state.set_flag(f"cpi_post:{d['general']['month']}")
+                alerts.append(_cpi_alert(d, url, state))
+            elif not recent and not posted:
+                state.set_flag(f"cpi_post:{d['general']['month']}")
+                from . import street
+                called = street.score_cpi(state, d["general"]["yoy"], published=rel["published"])
+                alerts.append(Alert(
+                    f"<b>Caught up</b>\nPBS CPI for {esc(d['general']['month'])} ({d['general']['yoy']:.1f}%, "
+                    f"previous {d['general']['prev_yoy']:.1f}%) was read late, so it updated the data the system "
+                    "uses (real rate, AI context, briefs) but was NOT posted to the channel as news."
+                    + (f"\n\n{called}" if called else ""), 0, f"cpilate:{url}", admin=True))
+            continue
         if not (fresh and recent):
             continue
-        if kind == "cpi":
-            alerts.append(_cpi_alert(d, url, state))
-        else:
+        if True:  # weekly SPI
             alerts.append(Alert(
                     header("🛒", "Weekly SPI (Sensitive Price Indicator)", f"Week ended {d['week']} · PBS") + "\n"
                     f"{trend(d['wow'])} SPI: <b>{d['index']:.2f}</b> ({d['wow']:+.2f}% WoW)\n\n"
@@ -781,6 +840,22 @@ def pbs_releases(state: State) -> list[Alert]:
                                            "monthly CPI and the SBP's rate path.",
                                     "source": "Pakistan Bureau of Statistics"}}))
     return alerts
+
+
+_PBS_TRIED: dict = {}   # release url -> time of the last catch-up read in this job
+
+
+def _cpi_consistent(old: dict, new: dict) -> bool:
+    """The new release's 'previous month' must equal what we recorded for that month (PBS rarely revises)."""
+    try:
+        cur = datetime.strptime(new["month"], "%B %Y")
+        was = datetime.strptime(old["month"], "%B %Y")
+    except (KeyError, ValueError):
+        return True
+    prev = (cur.replace(day=1) - timedelta(days=1))
+    if (was.year, was.month) != (prev.year, prev.month):
+        return True  # nothing to compare with (gap or same month)
+    return abs(float(old["yoy"]) - float(new["prev_yoy"])) <= 0.15
 
 
 def _record_cpi(state: State, g: dict) -> None:
@@ -993,7 +1068,7 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
     known = set(state.data.setdefault("psx_known", []))
     # prices for the card: the all-stock table is yesterday's until about 16:15, so during the session only
     # live KSE-100 prices are shown (every stock once the table is today's)
-    live_rows, _ = scs.live_activity(view)
+    live_rows, _ = scs.live_activity(view, wide=True)
     px = {r["company_code"]: {"CurrentPrice": r["trading_close"], "LDCP": r["trading_close"] - r["trading_change"]}
           for r in live_rows if r.get("company_code") and r.get("trading_close") and r.get("trading_change") is not None}
     px.update({r["company_code"]: r for r in view})
@@ -1029,8 +1104,8 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
             ev.append({"d": f["date"], "t": f"{now:%Y-%m-%d %H:%M}", "sym": sym, "kind": kind, "title": f["title"][:160],
                        "px": r.get("CurrentPrice"), "url": f["url"]})
     state.data["events"] = ev[-1500:]
-    # Batch: with a pass every minute, filings arrive one at a time. Collect them and post one card at most
-    # every psx_filings_batch_minutes (or at 8 filings); material information goes out at once.
+    # Pending list: material information and results leave at once; routine filings wait for the
+    # psx_filings_roundup card (see below).
     pend = state.data.setdefault("filings_pending", [])
     pend += [{"sym": sym, "f": f, "t": int(time.time())} for sym, f in fresh]
     # results filings: read the notice itself with the AI right away (private alert, minutes before data sites)
@@ -1054,14 +1129,47 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
                 alerts_fast.append(Alert(quickresults.message(rq, mv), 9, "fastresults", admin=True))
         for k in [k for k, v in done_q.items() if v[:10] < f"{now - timedelta(days=10):%Y-%m-%d}"]:
             del done_q[k]
-    # material information and company RESULTS go out at once (results are the tested edge: minutes matter)
-    urgent = any("material" in x["f"]["title"].lower() or RESULTS_FILING.search(x["f"]["title"]) for x in pend)
-    wait = float(cfg.get("psx_filings_batch_minutes", 30)) * 60
-    if not pend or (not urgent and len(pend) < 8 and time.time() - min(x["t"] for x in pend) < wait):
-        return alerts_fast
-    fresh = [(x["sym"], x["f"]) for x in pend]
-    state.data["filings_pending"] = []
+    # Material information and company RESULTS go out at once, on their own card (results are the tested
+    # edge: minutes matter). Everything else (insider dealing disclosures, routine notices) waits for ONE
+    # "Company filings today" card after the close: on 11-13 Nov one-filing cards were half of all posts.
+    urgent = [x for x in pend if _urgent_filing(x["f"]["title"])]
+    routine = [x for x in pend if not _urgent_filing(x["f"]["title"])]
+    out = list(alerts_fast)
+    if urgent:
+        out.append(_filings_alert([(x["sym"], x["f"]) for x in urgent], px, wl, kse_set, roundup=False))
+    rh, rm = (int(v) for v in str(cfg.get("psx_filings_roundup", "17:30")).split(":"))
+    flag = f"filings_roundup:{now:%Y-%m-%d}"
+    due = routine and ((now.weekday() < 5 and (now.hour, now.minute) >= (rh, rm) and not state.flag(flag))
+                       or len(routine) >= int(cfg.get("psx_filings_roundup_max", 40)))
+    if due:
+        state.set_flag(flag)
+        out.append(_filings_alert([(x["sym"], x["f"]) for x in routine], px, wl, kse_set, roundup=True))
+        routine = []
+    state.data["filings_pending"] = routine
+    return out
+
+
+def _urgent_filing(title: str) -> bool:
+    return "material" in title.lower() or "materail" in title.lower() or "infromation" in title.lower() \
+        or bool(RESULTS_FILING.search(title))
+
+
+_INSIDER = re.compile(r"disclosure of interest", re.I)
+
+
+def _filings_alert(fresh: list, px: dict, wl: list, kse_set: set, roundup: bool) -> Alert:
+    """One card: either the instant material / results filings, or the day's routine filings (insider
+    dealings grouped into one line)."""
+    if roundup:
+        ins = list(dict.fromkeys(s for s, f in fresh if _INSIDER.search(f["title"])))
+        rest = [(s, f) for s, f in fresh if not _INSIDER.search(f["title"])]
+    else:
+        ins, rest = [], fresh
     lines, done = [], set()
+    if ins:
+        lines.append(f"👤 <b>Insider dealing disclosures</b> (director, executive or major shareholder traded "
+                     f"shares): {esc(', '.join(ins))}")
+    fresh = rest
     for sym, f in fresh:
         if (sym, f["title"].lower()) in done:  # same notice filed twice (e.g. daily buy-back reports)
             continue
@@ -1080,10 +1188,19 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
         doc = f" · {link(f['url'], 'view filing')}" if f["url"] else ""
         detail = " · ".join(x for x in (price.lstrip(" ·"), doc.lstrip(" ·")) if x)
         lines.append(f"{star} <b>{esc(sym)}</b> — {esc(title[:140])}" + (f"\n      {detail}" if detail else ""))
-    text = (header("📢", "New company filings on PSX", "Straight from the exchange") + "\n"
+    n = len(done) + len(ins)
+    if roundup:
+        head = "Company filings today"
+    elif all(RESULTS_FILING.search(f["title"]) for _, f in fresh):
+        head = "Results filed on PSX"
+    else:
+        head = "Material information on PSX" if n == 1 else "New company filings on PSX"
+    text = (header("📢", head, "Straight from the exchange") + "\n"
             + "\n".join(lines) +
             "\n\n💡 Company disclosures often reach PSX before the news media — open the filing for full details.")
     rows, links, seen = [], [], set()
+    if ins:
+        rows.append(("Insiders", f"Insider dealing disclosures: {', '.join(ins)}"[:150], "", None))
     for sym, f in fresh:
         if (sym, f["title"].lower()) in seen:
             continue
@@ -1096,11 +1213,19 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
         rows.append((sym, title[:150], f"{pct:+.1f}%" if pct is not None else "", pct))
         if f["url"]:
             links.append((sym, f["url"]))
-    card = {"theme": "psx", "kicker": "PSX company filings", "title": f"{len(rows)} new filing(s) on PSX",
+    if roundup:
+        title = f"Company filings today: {n} notice{'s' if n != 1 else ''} from {len({s for s, _ in fresh} | set(ins))} companies"
+    elif n == 1 and rows:
+        title = f"{rows[0][0]}: {rows[0][1][:90]}"
+    else:
+        title = f"{n} new filings on PSX"
+    more = len(rows) - 10
+    card = {"theme": "psx", "kicker": "PSX company filings" + (" · end of day" if roundup else ""), "title": title,
             "rows_title": "Company · filing · price today", "rows": rows[:10],
-            "why": "Company disclosures often reach PSX before the news media — open the filing for full details.",
-            "source": "Pakistan Stock Exchange (dps.psx.com.pk)", "links": links}
-    return alerts_fast + [Alert(text, 9, "psxfilings", tags=["PSXFilings", "MaterialInformation"], extra={"card": card})]
+            "why": "Company disclosures often reach PSX before the news media — open the filing for full details."
+                   + (f" {more} more in the post text." if more > 0 else ""),
+            "source": "Pakistan Stock Exchange (dps.psx.com.pk)", "links": links[:8]}
+    return Alert(text, 9, "psxfilings", tags=["PSXFilings", "MaterialInformation"], extra={"card": card})
 
 
 # ---------------------------------------------------------------- unusual volume
