@@ -42,10 +42,15 @@ def basic(snap: dict, close: float | None) -> list[str]:
     p = v.get("price")
     if not p or p <= 0:
         return ["no price"]
-    # after the close both sources show the same final price (1% allowed); during the session they refresh at
-    # different moments, so only a gross difference (5%) is treated as an error
-    tol = 0.05 if market_open() else 0.01
-    if close and abs(p / close - 1) > tol:
+    # after the close both sources show the same final price (1% allowed). During the session the exchange figure
+    # passed in is usually YESTERDAY's close (scstrade's all-stock table updates once, about 16:15), so the live
+    # snapshot may differ by up to the day's price limit (10%, or Rs 1 for cheap stocks): only more than that is an
+    # error. (13 Nov 2026: 40+ stocks that had simply moved 5-10% that day were wrongly rejected.)
+    if market_open():
+        bad = close and abs(p - close) > max(0.105 * close, 1.05)
+    else:
+        bad = close and abs(p / close - 1) > 0.01
+    if bad:
         out.append(f"snapshot price {p:,.2f} differs from the exchange's {close:,.2f}")
     keys, ok = last4(snap.get("eps_quarters") or {})
     if len(keys) == 4 and not ok:

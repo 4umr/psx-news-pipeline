@@ -170,13 +170,45 @@ def _pick_model(cfg: dict) -> str:
     return _model
 
 
+_AVAILABLE: list[str] | None = None
+_LAST_RESEARCH = [0.0]
+
+
+def _available_models() -> list[str]:
+    """Models this key may call (generateContent), newest names first; [] if the list cannot be read."""
+    global _AVAILABLE
+    if _AVAILABLE is None:
+        try:
+            r = http().get(f"{API}/models", headers={"x-goog-api-key": _key()}, timeout=20)
+            _AVAILABLE = sorted((m["name"].split("/", 1)[-1] for m in r.json().get("models", [])
+                                 if "generateContent" in m.get("supportedGenerationMethods", [])), reverse=True)
+        except Exception as e:  # noqa: BLE001
+            log.info("Gemini model list failed (%s)", e)
+            _AVAILABLE = []
+    return _AVAILABLE
+
+
+def _backup_model(cfg: dict, main: str) -> str | None:
+    """The configured backup if this key can use it; otherwise the newest other text 'flash' model (lite first).
+    (13 Nov 2026: 'gemini-2.5-flash-lite' answered 404 on this key, so every fallback failed.)"""
+    want = (cfg.get("ai") or {}).get("fallback_model", "gemini-2.5-flash-lite")
+    names = _available_models()
+    if not names:
+        return want
+    if want in names:
+        return want
+    text = [n for n in names if "flash" in n and n != main and not re.search(r"image|tts|audio|live|exp|preview|thinking", n)]
+    lite = [n for n in text if "lite" in n]
+    return (lite or text or [None])[0]
+
+
 def models_for(cfg: dict, research: bool = False) -> list[str]:
     """Which Gemini models to try, in order. News: the main model, then the backup. Research (Research Lab, the
     annual-report reader) runs on the backup first, so the free quota of the main model stays with the news;
     each model has its own free-tier limits. Both lists fall back to the other model when one is busy."""
-    ai = cfg.get("ai") or {}
-    main, backup = _pick_model(cfg), ai.get("fallback_model", "gemini-2.5-flash-lite")
-    order = [ai.get("research_model", backup), main] if research else [main, backup]
+    main = _pick_model(cfg)
+    backup = _backup_model(cfg, main)
+    order = [backup, main] if research else [main, backup]
     return list(dict.fromkeys(m for m in order if m))
 
 
@@ -186,6 +218,12 @@ def _call(cfg: dict, prompt: str, timeout: int = 60, research: bool = False) -> 
     global _disabled
     if not available(cfg) or not _budget_ok():
         return None
+    if research:  # the free tier allows only a few requests a minute: research calls are paced 12 seconds apart
+        import time as _t
+        wait = 12 - (_t.time() - _LAST_RESEARCH[0])
+        if wait > 0:
+            _t.sleep(wait)
+        _LAST_RESEARCH[0] = _t.time()
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
     for model in models_for(cfg, research):

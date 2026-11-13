@@ -242,12 +242,15 @@ def levels_tests() -> list[str]:
     ok("results filing sent at once", bool(_w.RESULTS_FILING.search("Financial Results for the Quarter Ended 30 Sep 2026")))
     ok("report transmission waits for the batch", not _w.RESULTS_FILING.search("Transmission of Quarterly Report for the Period"))
     from . import analysis as _an
-    _keep = _an._model
-    _an._model = "main-model"
-    _cf = {"ai": {"fallback_model": "lite", "research_model": "lite"}}
+    _keep, _keep_av = _an._model, _an._AVAILABLE
+    _an._model, _an._AVAILABLE = "main-model", []          # no live model list: the configured backup is used
+    _cf = {"ai": {"fallback_model": "lite"}}
     ok("news tries the main model first, research the other one",
        _an.models_for(_cf) == ["main-model", "lite"] and _an.models_for(_cf, True) == ["lite", "main-model"])
-    _an._model = _keep
+    _an._AVAILABLE = ["gemini-3-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash", "main-model", "text-embedding"]
+    ok("backup the key cannot use is replaced by an available flash-lite model",
+       _an._backup_model({"ai": {"fallback_model": "gemini-2.5-flash-lite"}}, "main-model") == "gemini-2.0-flash-lite")
+    _an._model, _an._AVAILABLE = _keep, _keep_av
     from . import analogs as _ag
     sz = _ag.size(100.0, 95.0, "up")
     ok("position size: 5% to the fails-below line -> 1% risk = 20% capped at 10%, risking 0.5%",

@@ -38,8 +38,9 @@ ai:
   model: gemini-2.5-flash   # if Google retires this name, the newest available "flash" model is used
   max_per_run: 6            # important news items analysed per run (free tier limits)
   daily_limit: 200          # max AI requests per day (stays inside Google's free tier)
-  fallback_model: gemini-2.5-flash-lite   # tried when the main model is busy (each model has its own free limits)
-  research_model: gemini-2.5-flash-lite   # Research Lab + annual-report reader start here, so news keeps the main quota
+  fallback_model: gemini-2.5-flash-lite   # backup when the main model is busy; if this key cannot use it, the newest
+                                          # other "flash" model on the key is picked automatically. Research Lab and the
+                                          # annual-report reader start on the backup, so news keeps the main quota
 
 # Messages appended to briefs / digests / alerts
 disclaimer: "For information only — not investment advice."
