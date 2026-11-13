@@ -976,6 +976,7 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
             known.add(sym)
         state.set_snap(f"eps:{sym}", {"annual": p["annual_eps"], "quarterly": p["quarterly_eps"]})
     state.data["psx_known"] = sorted(known)
+    alerts_fast: list[Alert] = []
     if not fresh and not state.data.get("filings_pending"):
         return []
     # Keep a log of insider dealings and material information with the price at the time, so these
@@ -994,11 +995,32 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
     # every psx_filings_batch_minutes (or at 8 filings); material information goes out at once.
     pend = state.data.setdefault("filings_pending", [])
     pend += [{"sym": sym, "f": f, "t": int(time.time())} for sym, f in fresh]
+    # results filings: read the notice itself with the AI right away (private alert, minutes before data sites)
+    if (cfg.get("fast_results") or {}).get("enabled", True):
+        from . import quickresults
+        done_q = state.data.setdefault("fast_results", {})
+        live = {r["company_code"]: r for r in view}
+        for sym, f in [(s_, f_) for s_, f_ in fresh if RESULTS_FILING.search(f_["title"]) and f_.get("url")][:3]:
+            key = f"{sym}:{f['url']}"
+            if key in done_q:
+                continue
+            done_q[key] = f"{now:%Y-%m-%d %H:%M}"
+            try:
+                rq = quickresults.read(sym, f["url"], cfg)
+            except Exception as e:  # noqa: BLE001
+                log.warning("fast results %s failed: %s", sym, e)
+                rq = None
+            if rq:
+                lv = live.get(sym) or {}
+                mv = (lv["CurrentPrice"] / lv["LDCP"] - 1) * 100 if lv.get("CurrentPrice") and lv.get("LDCP") else None
+                alerts_fast.append(Alert(quickresults.message(rq, mv), 9, "fastresults", admin=True))
+        for k in [k for k, v in done_q.items() if v[:10] < f"{now - timedelta(days=10):%Y-%m-%d}"]:
+            del done_q[k]
     # material information and company RESULTS go out at once (results are the tested edge: minutes matter)
     urgent = any("material" in x["f"]["title"].lower() or RESULTS_FILING.search(x["f"]["title"]) for x in pend)
     wait = float(cfg.get("psx_filings_batch_minutes", 30)) * 60
     if not pend or (not urgent and len(pend) < 8 and time.time() - min(x["t"] for x in pend) < wait):
-        return []
+        return alerts_fast
     fresh = [(x["sym"], x["f"]) for x in pend]
     state.data["filings_pending"] = []
     lines, done = [], set()
@@ -1040,7 +1062,7 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
             "rows_title": "Company · filing · price today", "rows": rows[:10],
             "why": "Company disclosures often reach PSX before the news media — open the filing for full details.",
             "source": "Pakistan Stock Exchange (dps.psx.com.pk)", "links": links}
-    return [Alert(text, 9, "psxfilings", tags=["PSXFilings", "MaterialInformation"], extra={"card": card})]
+    return alerts_fast + [Alert(text, 9, "psxfilings", tags=["PSXFilings", "MaterialInformation"], extra={"card": card})]
 
 
 # ---------------------------------------------------------------- unusual volume

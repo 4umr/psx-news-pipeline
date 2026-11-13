@@ -394,8 +394,9 @@ def run(cfg: dict, dry: bool = False, force: str | None = None, preview: bool = 
         pdf_name = f"{sym} research note {today}.pdf"
         if preview:  # print the annual report summary in the run log so it can be checked before going public
             print("ANNUAL REPORT SUMMARY", json.dumps(d.get("report"), ensure_ascii=False, indent=1))
-        if preview:
-            ok = s.send_admin_photo(pages[0], caption(d), name=f"sotd_{sym}")
+        if preview:  # every page to the bot chat (images), then the PDF
+            ok = all([s.send_admin_photo(pg, caption(d) if i == 0 else f"{sym} page {i + 1} of {len(pages)}", name=f"sotd_{sym}_{i}")
+                      for i, pg in enumerate(pages)])
             s.send_document(pdf, pdf_name, f"{esc(d['name'])} ({esc(sym)}): research note preview", admin_only=True)
         else:
             ok = s.send_album(pages, caption(d), name=f"sotd_{sym}")

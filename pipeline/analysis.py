@@ -212,7 +212,12 @@ def models_for(cfg: dict, research: bool = False) -> list[str]:
     return list(dict.fromkeys(m for m in order if m))
 
 
-def _call(cfg: dict, prompt: str, timeout: int = 60, research: bool = False) -> dict | None:
+def call_parts(cfg: dict, parts: list[dict], timeout: int = 60, research: bool = False) -> dict | None:
+    """Like _call, with several parts (text, images, PDFs as inline_data) in one request."""
+    return _call(cfg, "", timeout, research, parts=parts)
+
+
+def _call(cfg: dict, prompt: str, timeout: int = 60, research: bool = False, parts: list[dict] | None = None) -> dict | None:
     """One request; on a rate limit (429), an overloaded model (5xx), an unknown model (404) or a time-out the
     next model in models_for() is tried. Counts once against the daily budget."""
     global _disabled
@@ -224,7 +229,7 @@ def _call(cfg: dict, prompt: str, timeout: int = 60, research: bool = False) -> 
         if wait > 0:
             _t.sleep(wait)
         _LAST_RESEARCH[0] = _t.time()
-    body = {"contents": [{"parts": [{"text": prompt}]}],
+    body = {"contents": [{"parts": parts or [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
     for model in models_for(cfg, research):
         try:
