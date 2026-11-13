@@ -638,7 +638,17 @@ def morning(cfg: dict, dry: bool = False, force: bool = False) -> None:
     rep_ = st.get("report") or {}
     today = now_pkt().strftime("%Y-%m-%d")
     if not rep_.get("items"):
+        # never stay silent: say why there are no levels this morning (13 Nov 2026 the owner got nothing and no reason)
         log.info("morning: no evening report to follow up")
+        if not dry and st.get("morning_sent") != today:
+            s0 = Sender(dry)
+            chat0 = os.environ.get("TELEGRAM_RESEARCH_CHAT_ID", "").strip() or s0.admin
+            if chat0:
+                s0._post(chat0, f"<b>Pre-open · {now_pkt():%a %d %b}</b>\nNo levels this morning: last night's Research Lab "
+                                "run did not save a levels report. The next full research arrives after the close (about 18:20).",
+                         False)
+                st["morning_sent"] = today
+                _save(st)
         return
     if rep_["session"] < (now_pkt() - timedelta(days=5)).strftime("%Y-%m-%d"):
         log.info("morning: the last report (%s) is too old", rep_["session"])
