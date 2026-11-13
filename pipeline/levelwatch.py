@@ -110,6 +110,13 @@ def check(now, state, cfg: dict, view: list[dict]) -> str | None:
             if key in done:
                 continue
             done[key] = f"{now:%Y-%m-%d %H:%M}"
+            # every alert is logged with its price so the Research Lab can score it later (5 and 20 sessions vs KSE-100)
+            lg = state.data.setdefault("level_log", [])
+            lg.append({"d": f"{now:%Y-%m-%d}", "t": f"{now:%H:%M}", "sym": it["sym"], "ev": ev, "px": round(p, 2),
+                       "label": it.get("label"), "kind": it.get("kind")})
+            state.data["level_log"] = lg[-600:]
+            from .watchers import log_price
+            log_price(state, it["sym"], p, "level alert")
             chg = f" ({(p / it['close'] - 1) * 100:+.1f}% since the close)" if it.get("close") else ""
             lines.append(f"<b>{esc(it['sym'])}</b> Rs {p:,.2f}{chg} {esc(txt)}. Setup: {esc((it.get('label') or 'n/a').lower())}")
     # keep the log small: the last 10 days of keys

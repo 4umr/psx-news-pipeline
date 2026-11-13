@@ -347,6 +347,29 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   -> d["analog"] (+ lines in the AI dossier), `lab._size(d)` after every setup; panel "Similar past cases, market and
   size" on every Lab card; Stock of the Day technical page section. Display only: no vote (its features already vote).
 
+## Improvements batch (2026-11-13 midday) — from the review list
+- FAST RESULTS (`quickresults.py`): in `watchers.psx_filings`, a fresh results filing (RESULTS_FILING) is downloaded
+  (GIF/PNG -> PNG via PIL, or PDF), read by Gemini (`analysis.call_parts`, inline_data) into period / EPS / last
+  year / quarter / profit / payout; `check()` rejects: no EPS, unknown period, |EPS| > 2000, EPS vs profit sign,
+  last-year EPS != scstrade history (3%). Sent PRIVATELY ("Results just filed", Alert kind fastresults, admin) with
+  the tested rule; state `fast_results` (10 days). Config `fast_results.enabled`.
+- SWING: `_chart_check` tags results ideas (results_momentum / results_reaction / earn_accel) confirm / weak / neutral
+  from ta.features (tested: strong +6.5-8.1%, weak ~0%); weak ideas take no plan slot, all stay logged and tracked.
+- NEWS: `editor.corroborate` = untrusted source with score >= 9 -> Google News 2 days for the same story from a
+  trusted outlet (word overlap >= 50%, numbers shared); found -> the trusted article replaces it (max 6 searches/h).
+  Petrol / diesel price-change headlines are dropped (the official PSO fuel card covers each change once).
+- BOT CHAT: raw headlines collected in `state.data["admin_feed"]` and sent as one "Headlines" digest every
+  `raw_news_admin_digest_minutes` (120) or at 25 items; the rest flushed after 22:00 (`runner._flush_admin_feed`).
+- SCORING: `levelwatch` logs every alert in `state.data["level_log"]` (price); `lab.level_record(idx)` scores them at
+  5 sessions vs KSE-100 (read-only pipeline state in lab.yml) and appends to the scan record line.
+- RESULTS WEEK (Sunday card): note with how many companies had a strong / weak last result + the repeat odds
+  (strong -> strong 41% vs 23%; weak -> weak 36%).
+- REALITY CHECK: `watchers.log_price` on big moves and level alerts; `watchers.reality_check` once after 16:00 when the
+  all-stock table is today's: every logged price must lie in the day's low-high (0.3% leeway); one admin message.
+- Gemini: `_backups()` = configured backup if listed, else other text flash models ('-latest' and lite first), up to 3;
+  a model answering 404 goes into `_DEAD` for the run (13 Nov: 2.5-flash-lite 404'd although configured); the
+  daily health line lists the backups. Stock of the Day previews send every page.
+
 ## First live day of the new Lab (13 Nov 2026) — lessons
 - Nothing new arrived overnight: every new Lab feature was pushed AFTER the 12 Nov 18:20 run, whose old code saved no
   `report`, so the 08:40 pre-open ("morning: no evening report") and level alerts had nothing. Manual run #12

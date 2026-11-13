@@ -623,6 +623,42 @@ def chunks(text: str, limit: int = 3900) -> list[str]:
     return out
 
 
+LEVEL_NAMES = {"in_zone": "in the buy zone", "target1": "target 1 reached", "target2": "target 2 reached",
+               "failed": "fails-below line broken", "sell_zone": "in the sell zone", "broke": "support broken"}
+
+
+def level_record(idx: dict) -> str:
+    """The level alerts' own record (news pipeline state, read only): for each kind of alert, how the stock did
+    against the KSE-100 from the alert price to the close 5 sessions later. Buy-side alerts are right when the
+    stock beat the index; failed / sell-side ones when it lagged."""
+    from .state import State
+    lg = (State().data.get("level_log") or [])[-120:]
+    if not lg or not idx:
+        return ""
+    days = sorted(idx)
+    hist = {}
+    res: dict[str, list[float]] = {}
+    for e in lg:
+        later = [d for d in days if d > e["d"]]
+        if len(later) < 5 or e["d"] not in idx:
+            continue
+        if e["sym"] not in hist:
+            hist[e["sym"]] = {r[0]: r[2] for r in _history(e["sym"], 120)}
+        exit_d = later[4]
+        px = hist[e["sym"]].get(exit_d)
+        if not px:
+            continue
+        rel = (px / e["px"] - 1) * 100 - (idx[exit_d] / idx[e["d"]] - 1) * 100
+        res.setdefault(e["ev"], []).append(rel)
+    if not res:
+        return f"Level alerts: {len(lg)} sent so far; the first are scored 5 sessions after they fire."
+    parts = []
+    for ev, xs in res.items():
+        good = sum((x < 0) if ev in ("failed", "sell_zone", "broke") else (x > 0) for x in xs)
+        parts.append(f"{LEVEL_NAMES.get(ev, ev)} {len(xs)}, {np.mean(xs):+.1f}% vs KSE-100 after 5 sessions, {good / len(xs) * 100:.0f}% right")
+    return "Level alerts so far: " + "; ".join(parts) + "."
+
+
 def scan_record(st: dict) -> str:
     """The daily scan's own record so far: every flag scored against the KSE-100 after 20 sessions
     (5 sessions until the first ones are 20 sessions old). Warnings are right when the stock lagged."""
@@ -904,6 +940,9 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
                     score({"calls": open_sc}, idx, {x["sym"]: _history(x["sym"]) for x in open_sc[-40:]})
                 sc = scan.build(cfg, session, r, st, idx)
                 sc["record"] = scan_record(st)
+                lvl = _try(level_record, idx)
+                if lvl:
+                    sc["record"] += " " + lvl
                 out_cards.insert(0, ("scan", scan_card(cfg, sc), f"Daily stock scan · {session}"))
                 scan_text = scan.text(sc) + f"\n\n<i>{esc(sc['record'])}</i>"
                 picks = _scan_picks(sc, st, sorted(idx), syms, int(ud_conf.get("research_max", 6)))

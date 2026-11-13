@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 
 from . import analysis, briefs, context, editor, expectations, impact, intraday, official, street, watchers
 from .common import Alert, NewsItem, esc, hours_ago, in_window, link, log, now_pkt, to_pkt
@@ -161,13 +161,36 @@ def _flush_instant(cfg: dict, state: State, sender: Sender, now: datetime) -> in
     budget = cfg.get("max_news_posts_per_run", 15)
     send, keep = pending[:budget], pending[budget:]
     raw_admin = cfg.get("raw_news_to_admin", True)
+    every = float(cfg.get("raw_news_admin_digest_minutes", 120))
     for d in send:
-        if raw_admin:
+        if raw_admin and every > 0:  # the owner's bot chat: one headlines digest every couple of hours, not 200 messages
+            state.data.setdefault("admin_feed", []).append(_fmt_compact(d, cfg))
+        elif raw_admin:
             sender.send_admin(_fmt_compact(d, cfg))  # raw pipeline feed: owner's admin channel only
         else:
             sender.send(_fmt_compact(d, cfg))
     state.data["pending"] = keep
+    _flush_admin_feed(cfg, state, sender, now)
     return len(send)
+
+
+def _flush_admin_feed(cfg: dict, state: State, sender: Sender, now: datetime, force: bool = False) -> None:
+    """Send the collected raw headlines as one digest (split under Telegram's length limit)."""
+    feed = state.data.get("admin_feed") or []
+    if not feed:
+        return
+    every = float(cfg.get("raw_news_admin_digest_minutes", 120)) * 60
+    last = state.data.get("admin_feed_at", 0)
+    if not force and len(feed) < 25 and time.time() - last < every:
+        return
+    from .lab import chunks
+    since = to_pkt(datetime.fromtimestamp(last, tz=timezone.utc)) if last else None
+    head = (f"<b>Headlines</b> · {len(feed)} kept for you" + (f" since {since:%H:%M}" if since else "")
+            + " (each with the reason it stayed off the channel)")
+    for part in chunks(head + "\n\n" + "\n\n".join(feed)):
+        sender.send_admin(part)
+    state.data["admin_feed"] = []
+    state.data["admin_feed_at"] = int(time.time())
 
 
 def _flush_digest(cfg: dict, state: State, sender: Sender) -> int:
@@ -611,6 +634,12 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         S("intraday record", lambda: intraday.record(now, scs.live_activity(view_now)[0], view_now))
     S("intraday housekeeping", intraday.housekeeping, now)
     S("PSX screener probe", _screener_probe, now, state, view_now)
+    if not bootstrap:  # after the close: were all prices posted today inside the day's real range?
+        rc = S("reality check", watchers.reality_check, now, state)
+        if rc:
+            sender.send_admin(rc)
+        if now.hour >= 22:  # whatever headlines are left go out before the night
+            _flush_admin_feed(cfg, state, sender, now, force=True)
     if not bootstrap:  # private level alerts for the stocks of last night's Research Lab report
         from . import levelwatch
         msg = S("level alerts", levelwatch.check, now, state, cfg, view_now)

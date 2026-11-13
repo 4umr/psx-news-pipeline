@@ -188,28 +188,35 @@ def _available_models() -> list[str]:
     return _AVAILABLE
 
 
-def _backup_model(cfg: dict, main: str) -> str | None:
-    """The configured backup if this key can use it; otherwise the newest other text 'flash' model (lite first).
-    (13 Nov 2026: 'gemini-2.5-flash-lite' answered 404 on this key, so every fallback failed.)"""
+_DEAD: set[str] = set()   # models that answered 404 in this run: never tried again until the next run
+
+
+def _backups(cfg: dict, main: str) -> list[str]:
+    """Other models to fall back on, best first: the configured backup if this key lists it, then the other text
+    'flash' models on the key (stable '-latest' aliases and lite models first). Each model has its own free quota.
+    13 Nov 2026: 'gemini-2.5-flash-lite' answered 404 although configured, so one fixed backup is not enough."""
     want = (cfg.get("ai") or {}).get("fallback_model", "gemini-2.5-flash-lite")
     names = _available_models()
     if not names:
-        return want
-    if want in names:
-        return want
-    text = [n for n in names if "flash" in n and n != main and not re.search(r"image|tts|audio|live|exp|preview|thinking", n)]
-    lite = [n for n in text if "lite" in n]
-    return (lite or text or [None])[0]
+        return [m for m in (want,) if m not in _DEAD]
+    text = [n for n in names if "flash" in n and n != main
+            and not re.search(r"image|tts|audio|live|exp|preview|thinking|embedding|vision", n)]
+    text.sort(key=lambda n: (n != want, "latest" not in n, "lite" not in n))
+    return [n for n in text if n not in _DEAD][:3]
+
+
+def _backup_model(cfg: dict, main: str) -> str | None:
+    b = _backups(cfg, main)
+    return b[0] if b else None
 
 
 def models_for(cfg: dict, research: bool = False) -> list[str]:
-    """Which Gemini models to try, in order. News: the main model, then the backup. Research (Research Lab, the
-    annual-report reader) runs on the backup first, so the free quota of the main model stays with the news;
-    each model has its own free-tier limits. Both lists fall back to the other model when one is busy."""
+    """Which Gemini models to try, in order. News: the main model, then up to three backups. Research (Research
+    Lab, the annual-report reader) starts on the first backup, so the main model's free quota stays with the news."""
     main = _pick_model(cfg)
-    backup = _backup_model(cfg, main)
-    order = [backup, main] if research else [main, backup]
-    return list(dict.fromkeys(m for m in order if m))
+    backups = _backups(cfg, main)
+    order = (backups[:1] + [main] + backups[1:]) if research else ([main] + backups)
+    return [m for m in dict.fromkeys(order) if m and m not in _DEAD]
 
 
 def call_parts(cfg: dict, parts: list[dict], timeout: int = 60, research: bool = False) -> dict | None:
@@ -239,8 +246,12 @@ def _call(cfg: dict, prompt: str, timeout: int = 60, research: bool = False, par
                 _disabled = True  # bad key: stop trying this run
                 log.error("Gemini refused the API key (HTTP %s)", r.status_code)
                 return None
-            if r.status_code in (404, 429) or r.status_code >= 500:
-                log.warning("Gemini %s busy or unavailable (HTTP %s); trying the next model", model, r.status_code)
+            if r.status_code == 404:
+                _DEAD.add(model)
+                log.warning("Gemini %s is not available to this key (HTTP 404); skipped from now on", model)
+                continue
+            if r.status_code == 429 or r.status_code >= 500:
+                log.warning("Gemini %s busy (HTTP %s); trying the next model", model, r.status_code)
                 continue
             r.raise_for_status()
             raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -266,7 +277,8 @@ def health(cfg: dict) -> str:
             _disabled = True
             return f"refused (HTTP {r.status_code})"
         r.raise_for_status()
-        return f"ok {_pick_model(cfg)}"
+        main = _pick_model(cfg)
+        return f"ok {main}; backups {', '.join(_backups(cfg, main)) or 'none'}"
     except Exception as e:  # noqa: BLE001
         return f"error {type(e).__name__}"
 

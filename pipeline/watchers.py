@@ -208,6 +208,43 @@ def _assess_all(rows: list[dict]) -> dict[str, dict]:
 RESULTS_FILING = re.compile(r"financial results|results for the (quarter|year|half|period|nine)", re.I)
 
 
+def log_price(state: State, sym: str, px: float | None, kind: str) -> None:
+    """Every price shown in an alert during the day is logged; after the close the reality check tests that it lies
+    inside the stock's actual high-low range for the day (a price outside it can only be bad data)."""
+    if px:
+        lg = state.data.setdefault("price_checks", [])
+        lg.append({"d": f"{now_pkt():%Y-%m-%d}", "t": f"{now_pkt():%H:%M}", "sym": sym, "px": round(float(px), 2), "kind": kind})
+        state.data["price_checks"] = lg[-800:]
+
+
+def reality_check(now, state: State) -> str | None:
+    """Once a trading day after the close, when scstrade's all-stock table holds today's final data: every price
+    posted today must lie inside that day's low-high range (0.3% leeway). Returns the message, or None."""
+    if now.weekday() > 4 or now.hour < 16 or state.flag(f"reality:{now:%Y-%m-%d}"):
+        return None
+    act, full = scs.live_activity()
+    if not full:
+        return None
+    state.set_flag(f"reality:{now:%Y-%m-%d}")
+    day = {r["company_code"]: r for r in act if r.get("company_code")}
+    today = [x for x in state.data.get("price_checks", []) if x["d"] == f"{now:%Y-%m-%d}"]
+    if not today:
+        return None
+    bad = []
+    for x in today:
+        r = day.get(x["sym"]) or {}
+        hi, lo = r.get("trading_high"), r.get("trading_low")
+        if not hi or not lo:
+            continue
+        if not lo * 0.997 <= x["px"] <= hi * 1.003:
+            bad.append(f"{x['sym']} {x['kind']} at {x['t']}: Rs {x['px']:,.2f} posted, but the day traded Rs {lo:,.2f} to {hi:,.2f}")
+    if not bad:
+        return (f"<b>Reality check</b> · {now:%d %b}\nAll {len(today)} prices posted today were inside each stock's actual "
+                "trading range for the day.")
+    return (f"<b>Reality check</b> · {now:%d %b}\n{len(bad)} of {len(today)} prices posted today were OUTSIDE the day's "
+            "trading range (bad or stale data; worth a look):\n" + "\n".join(esc(b) for b in bad[:15]))
+
+
 def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dict | None = None) -> list[Alert]:
     from . import earnings, expectations
     cutoff = now_pkt() - timedelta(days=4)
@@ -663,6 +700,7 @@ def stock_moves(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
             continue
         state.set_flag(k)
         hits.append((code, pct, cur, code in wl, code in kse))
+        log_price(state, code, cur, "big move")
     if not hits:
         return []
     hits.sort(key=lambda h: (not h[4], -abs(h[1])))

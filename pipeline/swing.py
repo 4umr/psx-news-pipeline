@@ -129,6 +129,38 @@ def _results_signals(df: pd.DataFrame, sess: pd.Timestamp, since: pd.Timestamp, 
     return out
 
 
+RESULT_LONGS = ("results_momentum", "results_reaction", "earn_accel")
+
+
+def _chart_check(df: pd.DataFrame, sess: pd.Timestamp, new: list[dict]) -> None:
+    """Tag each new results idea with the tested chart verdict (ta.py): confirm = stage 2 or relative strength
+    top 30% (+6.5% to +8.1% vs similar stocks over 3 months, against +4.1% for all); weak = relative strength in the
+    bottom half or price below the 200-day average (about 0%). Ideas stay logged and tracked either way."""
+    from . import ta
+    ideas = [e for e in new if e["sig"] in RESULT_LONGS]
+    if not ideas:
+        return
+    f = ta.features(df.copy())
+    today = f[f["date"] == sess].set_index("sym")
+    for e in ideas:
+        if e["sym"] not in today.index:
+            continue
+        r = today.loc[e["sym"]]
+        rs = r.get("rs_rank")
+        s2 = bool(r.get("stage2"))
+        below = pd.notna(r.get("sma200")) and r["ac"] <= r["sma200"]
+        if s2 or (pd.notna(rs) and rs >= 0.7):
+            e["chart"] = "confirm"
+            e["detail"] += (f"; chart confirms ({'stage 2 uptrend' if s2 else f'relative strength top {100 - rs * 100:.0f}%'}:"
+                            " tested +6.5% to +8.1% vs similar stocks, against +4.1% for all)")
+        elif (pd.notna(rs) and rs < 0.5) or below:
+            e["chart"] = "weak"
+            e["detail"] += ("; weak chart (" + ("relative strength bottom half" if pd.notna(rs) and rs < 0.5 else "below the 200-day average")
+                            + "): tested about 0%, so skip this one")
+        else:
+            e["chart"] = "neutral"
+
+
 def _pre_results(df: pd.DataFrame, sess: pd.Timestamp, min_adtv: float, st: dict) -> list[dict]:
     """Board meeting within ~5 sessions (7 calendar days) and the previous result was bad."""
     today = df[df["date"] == sess].set_index("sym")
@@ -392,7 +424,7 @@ def radar(cfg: dict, sess: pd.Timestamp, new: list[dict], st: dict, closed: list
                    key=lambda e: e["date"], reverse=True)
     done = [e for e in st["log"] if e["status"] == "closed"]
     used = sorted({e["sig"] for e in new})
-    plan = plan_check(cfg, open_, longs)
+    plan = plan_check(cfg, open_, [e for e in longs if e.get("chart") != "weak"])   # weak-chart ideas take no slot
     ctx = {"date": sess, "longs": longs, "risks": risks, "open": open_, "done": done, "closed_today": closed,
            "names": {k: v["name"] for k, v in SPECS.items()}, "plan": plan,
            "notes": [_track_record(n, stats) for n in used if _track_record(n, stats)]}
@@ -540,6 +572,11 @@ def scan(cfg: dict, dry: bool = False, force: bool = False) -> None:
             notes.append(f"{label} failed today ({type(e).__name__}); the other rules still ran.")
     new = [e for e in new if e["sig"] in use]
     new = fresh(new, st["log"], sorted(df["date"].unique()))
+    try:  # chart check on the results ideas (tested 2012-2026: a strong chart doubles the edge, a weak one cancels it)
+        _chart_check(df, sess, new)
+    except Exception as e:  # noqa: BLE001
+        log.exception("swing: chart check failed")
+        notes.append(f"Chart check on results ideas failed today ({type(e).__name__}).")
     st["log"].extend(new)
     try:
         closed = _track(st, df, min_adtv)
@@ -656,6 +693,13 @@ def weekly(cfg: dict, dry: bool = False, force: bool = False) -> None:
                  "Last result = the latest announcement, compared with the same period a year earlier."]
     if n_more:
         cal_notes.insert(0, f"{n_more} more liquid companies also meet next week.")
+    if meetings:  # strong quarters tend to repeat (PSX 2012-2026): say how many of next week's names had one
+        strong = sum(1 for s in meetings if (last_res.get(s) or {}).get("cls") in earnings.GOOD)
+        weak = sum(1 for s in meetings if (last_res.get(s) or {}).get("cls") in earnings.BAD)
+        if strong or weak:
+            cal_notes.append(f"{strong} of these had a strong last result and {weak} a weak one. On PSX (2012-2026) a strong "
+                             "quarter was followed by another 41% of the time (23% for all companies); a weak one by "
+                             "another weak quarter 36% of the time.")
     ctx = {"label": f"Week ending {end:%d %b %Y}", "strip": strip, "gain": gain, "lose": lose, "active": active,
            "quiet": quiet, "notes": notes, "calendar": cal, "cal_notes": cal_notes,
            "cal_label": f"Week of {s0:%d %b %Y}"}

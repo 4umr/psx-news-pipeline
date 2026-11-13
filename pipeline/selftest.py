@@ -247,9 +247,16 @@ def levels_tests() -> list[str]:
     _cf = {"ai": {"fallback_model": "lite"}}
     ok("news tries the main model first, research the other one",
        _an.models_for(_cf) == ["main-model", "lite"] and _an.models_for(_cf, True) == ["lite", "main-model"])
-    _an._AVAILABLE = ["gemini-3-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash", "main-model", "text-embedding"]
-    ok("backup the key cannot use is replaced by an available flash-lite model",
-       _an._backup_model({"ai": {"fallback_model": "gemini-2.5-flash-lite"}}, "main-model") == "gemini-2.0-flash-lite")
+    _an._AVAILABLE = ["gemini-3-flash", "gemini-flash-lite-latest", "gemini-2.0-flash-lite", "gemini-2.0-flash", "main-model",
+                      "text-embedding"]
+    ok("backup the key cannot use is replaced by available models (stable alias first)",
+       _an._backups({"ai": {"fallback_model": "gemini-2.5-flash-lite"}}, "main-model")[:2]
+       == ["gemini-flash-lite-latest", "gemini-2.0-flash-lite"])
+    _keep_dead = set(_an._DEAD)
+    _an._DEAD.add("gemini-flash-lite-latest")
+    ok("a model that answered 404 is skipped", "gemini-flash-lite-latest" not in _an.models_for({"ai": {}}, True))
+    _an._DEAD.clear()
+    _an._DEAD.update(_keep_dead)
     _an._model, _an._AVAILABLE = _keep, _keep_av
     from . import analogs as _ag
     sz = _ag.size(100.0, 95.0, "up")

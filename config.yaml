@@ -29,6 +29,7 @@ brand:
 #   main channel  = infographic updates (briefs, data alerts) + important news (image + short explanation)
 #   admin channel = the raw news feed (every relevant headline) + warnings (TELEGRAM_ADMIN_CHAT_ID)
 raw_news_to_admin: true
+raw_news_admin_digest_minutes: 120   # raw headlines reach the bot chat as one digest this often (0 = one message each)
 
 # AI reading of important news (Google Gemini, free tier). Needs the GEMINI_API_KEY secret in GitHub.
 # The article is opened and read; summary, facts, impact and sectors come from its actual content.

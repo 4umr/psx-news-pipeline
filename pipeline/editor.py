@@ -108,11 +108,71 @@ def topic_gap_ok(state, topic: str, hours: float) -> bool:
 
 
 # ---------------------------------------------------------------- gates
+_STOP = set("the a an of to in on for and with by from as at is are be was were has have its it this that pakistan "
+            "pakistan's says said after over amid new more".split())
+
+
+def _words(t: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9$.]+", (t or "").lower()) if len(w) > 2 and w not in _STOP}
+
+
+def corroborate(it: NewsItem, cfg: dict, state) -> NewsItem | None:
+    """An important story seen only on an untrusted site: look for the same story from a trusted outlet (Google
+    News, last 2 days). Found -> that trusted article replaces it (the AI then reads the trusted version).
+    12 Nov 2026: 'Saudi Arabia rolls over $3 billion deposit to Pakistan' was dropped this way (OrissaPOST only).
+    At most `editor.corroborate_per_hour` searches an hour."""
+    import time as _t
+
+    import feedparser
+
+    from .common import clean_ws, http
+    ed = _cfg(cfg)
+    log_ = state.data.setdefault("corroborate", [])
+    now = _t.time()
+    log_[:] = [x for x in log_ if now - x < 3600]
+    if len(log_) >= int(ed.get("corroborate_per_hour", 6)):
+        return None
+    log_.append(now)
+    words = _words(it.title)
+    nums = set(re.findall(r"\d+(?:\.\d+)?", it.title))
+    key = " ".join(sorted(words, key=len, reverse=True)[:6])
+    if len(words) < 3:
+        return None
+    from urllib.parse import quote_plus
+    url = f"https://news.google.com/rss/search?q={quote_plus(key + ' when:2d')}&hl=en-PK&gl=PK&ceid=PK:en"
+    try:
+        feed = feedparser.parse(http().get(url, timeout=20).content)
+    except Exception as e:  # noqa: BLE001
+        log.info("corroboration search failed: %s", e)
+        return None
+    for e in feed.entries[:15]:
+        src = (e.get("source") or {}).get("title", "") if isinstance(e.get("source"), dict) else ""
+        title = re.sub(r"\s+-\s+[^-]{2,60}$", "", clean_ws(e.get("title", "")))
+        cand = NewsItem(title=title, url=e.get("link", ""), source=src, published=it.published, summary="", pk=it.pk)
+        if not trusted(cand, cfg):
+            continue
+        w2 = _words(title)
+        overlap = len(words & w2) / max(1, min(len(words), len(w2)))
+        if overlap >= 0.5 and (not nums or nums & set(re.findall(r"\d+(?:\.\d+)?", title))):
+            cand.score, cand.topic, cand.label, cand.why = it.score, it.topic, it.label, it.why
+            return cand
+    return None
+
+
 def before_ai(it: NewsItem, state, cfg: dict, view: list[dict]) -> str:
     """Checks that need no AI. '' = continue, else the reason to keep it off the main channel."""
     ed = _cfg(cfg)
     if not trusted(it, cfg):
-        return "source not on the trusted list"
+        alt = corroborate(it, cfg, state) if it.score >= int(ed.get("corroborate_min_score", 9)) else None
+        if not alt:
+            return "source not on the trusted list"
+        log.info("corroborated by %s: %s", alt.source, alt.title[:80])
+        it.title, it.url, it.source = alt.title, alt.url, alt.source
+    if ((cfg.get("official_data") or {}).get("fuel", True) and not it.official
+            and re.search(r"\b(petrol|diesel|hsd|kerosene|fuel)\b", it.title, re.I)
+            and re.search(r"\b(price|prices|rate|rates|cheaper|costlier|per litre|reduc\w*|cut|hike\w*|increase\w*|fixed)\b", it.title, re.I)):
+        # petrol and diesel prices change almost daily: the official fuel card (PSO) covers every change once
+        return "petrol and diesel price changes are covered by the official fuel card"
     if r := index_conflict(it, index_levels(state, view), float(ed.get("index_tolerance", 0.10))):
         return r
     cap = int(ed.get("max_per_topic_day", 3))
