@@ -429,6 +429,21 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   week card, monthly Lab auto switch-off, corroborate untrusted-source news (missed: Saudi $3bn rollover 12 Nov),
   one petrol post a day, bot-chat digest (~200-300 msgs/day), 17:00 reality check of posted numbers, audience.
 
+## Fixes 2026-11-18 (from live runs 14-18 Nov)
+- Stock of the Day failed 16 + 17 Nov (both 18:00 and 20:00) and Umer's FABL preview on 18 Nov: `prices.meta` asked PSX
+  for ~485 company pages 8 at a time every run; PSX answered 429 (Too Many Requests), ~90% failed, failed pages were
+  never stamped so every run repeated the burst, and the block then broke `index_members` / `profile`. Now max 60
+  oldest pages per run, 2 at a time, stops after 6 refusals in a row (`tried` stamp, never-seen first).
+  `sotd.members()` keeps the last good KMI-30 / KSE-100 list in state/sotd (45 days) when PSX does not answer;
+  no list at all -> admin note instead of a crash; profile retried once after 45 s.
+- Level alerts fired "in buy zone" for all 5 blue chips at 09:32 every morning (they CLOSED in their zones):
+  `levelwatch.fresh_events` = only levels reached since the report's close (self-test covers it).
+- Editor `official_covered`: news that repeats a figure our official cards post is kept for admin while that reader
+  is healthy (fails < 8): petrol/diesel price moves (wider words: down, drop, Rs 328...; fuel sales / imports /
+  subsidy / levy stay news), current account and remittance figures (forecasts stay news). Was: "Petrol Down 11th
+  Day in a Row" and the current account $39m news posted next to the official cards.
+- Wording: `common.count()` -> "1 stock moving sharply" (was "1 stock(s)").
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,

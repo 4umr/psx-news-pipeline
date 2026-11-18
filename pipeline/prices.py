@@ -99,26 +99,57 @@ def index_history(start: datetime) -> pd.Series:
 
 
 # ---------------------------------------------------------------- company facts
-def meta(symbols: list[str], max_age_days: int = 30, workers: int = 8) -> dict:
-    """Shares outstanding and free float per symbol (PSX company pages), refreshed monthly."""
+def meta(symbols: list[str], max_age_days: int = 30, workers: int = 2, per_run: int = 60) -> dict:
+    """Shares outstanding and free float per symbol (PSX company pages), refreshed monthly.
+
+    PSX answers a burst of page requests with HTTP 429 (Too Many Requests) and then refuses the runner for a
+    while. Until 18 Nov 2026 every run asked for all ~485 stale pages at 8 at a time; ~90% failed, failed pages
+    were never stamped, so the next run tried all of them again, and the block that followed broke whatever came
+    next (Stock of the Day 16-17 Nov: 'index member lists unavailable from PSX'). Now: at most `per_run` of the
+    oldest pages per run, 2 at a time, and it stops at the first sign of blocking. Shares outstanding change
+    rarely, so a stale figure is fine for a few more days; symbols never seen still get a page first."""
     try:
         m = json.loads(META_PATH.read_text(encoding="utf-8")) if META_PATH.exists() else {}
     except (OSError, json.JSONDecodeError):
         m = {}
     cut = (now_pkt() - timedelta(days=max_age_days)).strftime("%Y-%m-%d")
-    todo = [s for s in symbols if m.get(s, {}).get("asof", "") < cut]
+    stale = [s for s in symbols if m.get(s, {}).get("asof", "") < cut]
+    # never seen first, then the oldest; failed attempts are remembered so one bad page does not block the queue
+    stale.sort(key=lambda s: (s in m, m.get(s, {}).get("tried", ""), m.get(s, {}).get("asof", "")))
+    todo = stale[:per_run]
     if todo:
+        import threading
+        today = now_pkt().strftime("%Y-%m-%d")
+        ok = fail = 0
+        streak, lock = [0], threading.Lock()
+
         def one(s):
-            p = psx.company(s) or {}
-            return s, {k: p[k] for k in ("shares", "free_float", "free_float_pct") if k in p}
+            if streak[0] >= 6:  # PSX is refusing us: stop asking (the rest waits for the next run)
+                return s, "skip"
+            p = psx.company(s)
+            with lock:
+                streak[0] = streak[0] + 1 if p is None else 0
+            return s, None if p is None else {k: p[k] for k in ("shares", "free_float", "free_float_pct") if k in p}
 
         with ThreadPoolExecutor(workers) as ex:
             for s, info in ex.map(one, todo):
+                if info == "skip":
+                    continue
+                if info is None:
+                    fail += 1
+                    continue
+                ok += 1
                 if info:
-                    m[s] = {**info, "asof": now_pkt().strftime("%Y-%m-%d")}
+                    m[s] = {**info, "asof": today}
+                else:  # page answered but has no share data (funds, new listings): do not ask again for a month
+                    m[s] = {**m.get(s, {}), "asof": today}
+        for s in todo[:ok + fail]:  # only pages actually asked for count as tried
+            if m.get(s, {}).get("asof", "") < cut:
+                m.setdefault(s, {})["tried"] = today
         META_PATH.parent.mkdir(parents=True, exist_ok=True)
         META_PATH.write_text(json.dumps(m, separators=(",", ":")), encoding="utf-8")
-        log.info("company facts refreshed for %d symbols", len(todo))
+        log.info("company facts: %d refreshed, %d failed, %d still stale (of %d symbols)",
+                 ok, fail, len(stale) - ok, len(symbols))
     return m
 
 

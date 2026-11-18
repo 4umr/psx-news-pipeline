@@ -45,6 +45,11 @@ def http() -> requests.Session:
 PKT = ZoneInfo("Asia/Karachi")
 
 
+def count(n: int, word: str, many: str | None = None) -> str:
+    """'1 stock' / '3 stocks' (posts said '1 stock(s)')."""
+    return f"{n} {word if n == 1 else (many or word + 's')}"
+
+
 def now_pkt() -> datetime:
     return datetime.now(PKT)
 

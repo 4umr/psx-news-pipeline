@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from . import impact
 from . import watchers as w
-from .common import arrow, esc, fmt_num, fmt_pct, link, log, now_pkt, parse_hhmm
+from .common import arrow, count, esc, fmt_num, fmt_pct, link, log, now_pkt, parse_hhmm
 from .sources import forex, scs
 from .scoring import dedupe
 from .state import State
@@ -253,7 +253,7 @@ def week_review_block(state: State, now: datetime) -> str:
     if flows:
         tot = sum(flows)
         lines.append(f"🌍 Foreign investors this week: net {'buy' if tot > 0 else 'sell'} "
-                     f"<b>${abs(tot):.2f}m</b> over {len(flows)} session(s)")
+                     f"<b>${abs(tot):.2f}m</b> over {count(len(flows), 'session')}")
     return "\n".join(lines)
 
 
@@ -353,7 +353,7 @@ def glance_lines(idx: list[dict], state: State, mk: dict) -> list[str]:
     nxt = w.next_mpc(state, now_pkt())
     if nxt and (nxt - now_pkt().date()).days <= 7:
         days = (nxt - now_pkt().date()).days
-        out.append("SBP MPC decision due TODAY" if days == 0 else f"Next SBP MPC meeting {nxt:%a %d %b} ({days} day(s))")
+        out.append("SBP MPC decision due TODAY" if days == 0 else f"Next SBP MPC meeting {nxt:%a %d %b} ({count(days, 'day')})")
     if s.get("policy_rate") is not None and (m := s.get("mtb")):
         y3 = m["yields"].get("3-M")
         if y3:
@@ -411,7 +411,7 @@ def _agenda(state: State, n_board: int, n_bc: int) -> list[str]:
     if note := _mpc_note(state):
         out.append(note)
     if n_board or n_bc:
-        out.append(f"Today: {n_board} board meeting(s) · {n_bc} payout ex-date(s)")
+        out.append(f"Today: {count(n_board, 'board meeting')} · {count(n_bc, 'payout ex-date')}")
     if a := upcoming_auctions((state.snap("sbp") or {}).get("upcoming_auctions", "")):
         out.append(f"Next govt securities auctions: {a}")
     return out

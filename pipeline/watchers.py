@@ -5,7 +5,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 
-from .common import Alert, arrow, esc, fmt_num, fmt_pct, in_window, link, log, now_pkt, now_utc
+from .common import Alert, arrow, count, esc, fmt_num, fmt_pct, in_window, link, log, now_pkt, now_utc
 from .sources import scs
 from .state import State
 from .style import header
@@ -301,7 +301,7 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dic
         lines.append(f"<b>{esc(code)}</b>{tag} {period}: {' · '.join(bits) or 'see filing'}" + (f" · {doc}" if doc else ""))
     more = f"\n...and {len(fresh) - limit} more" if len(fresh) > limit else ""
     has_major = any(r.get("company_code") in kse100 for r in fresh)
-    text = (header("📊", "Corporate Results & Payouts", f"{len(fresh)} new announcement(s)") + "\n"
+    text = (header("📊", "Corporate Results & Payouts", f"{count(len(fresh), 'new announcement')}") + "\n"
             "EPS in Rs, compared with the same period last year\n\n" + "\n".join(lines) + more +
             f"\n\n{link(SCS_URL + 'MarketStatistics/MS_Announcements.aspx', 'SCS Trade')} · filings from PSX")
     rows_, links = [], []
@@ -325,7 +325,7 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dic
         if r.get("bm_PDFLink"):
             links.append((code, r["bm_PDFLink"]))
     card = {"theme": "psx", "kicker": "Corporate results & payouts",
-            "title": f"{len(fresh)} new result / payout announcement(s)",
+            "title": f"{count(len(fresh), 'new result / payout announcement')}",
             "rows_title": "Company · period · EPS (Rs) vs last year", "rows": rows_,
             "why": "Results and payouts move individual stocks and their sector peers. Open the filing for details.",
             "source": "PSX filings via SCS Trade", "links": links}
@@ -745,7 +745,7 @@ def stock_moves(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
     text = (header("⚡", "Big stock moves, and why", f"{now:%H:%M} PKT") + "\n" + "\n".join(lines) +
             "\n\nReasons come from PSX filings, today's results and news. When none is found, be careful with rumours.")
     card = {"theme": "psx", "kicker": f"Big stock moves · {now:%H:%M} PKT",
-            "title": f"{len(hits)} stock(s) moving sharply",
+            "title": f"{count(len(hits), 'stock')} moving sharply",
             "rows_title": "Stock · reason found · change", "rows": [
                 (code, (why.get(code) or "No filing or news found so far")[:150], f"{pct:+.2f}%", pct)
                 for code, pct, cur, mine, in_kse in hits],
@@ -1272,7 +1272,7 @@ def unusual_volume(now, state: State, cfg: dict, kse100: set[str]) -> list[Alert
             "\n\n💡 Volume spikes often come with news: check filings and headlines. On PSX a volume burst on its own "
             "has not predicted further gains (2010-2026 test), and after weak results it was followed by underperformance.")
     card = {"theme": "psx", "kicker": f"Unusual volume today · {now:%d %b}",
-            "title": f"{len(hits)} stock(s) trading far above normal volume",
+            "title": f"{count(len(hits), 'stock')} trading far above normal volume",
             "rows_title": "Stock · volume vs 10-day average · price", "rows": [
                 (code, f"{vol / 1e6:,.2f}m shares · {x:.1f}x average",
                  f"{chg / (close - chg) * 100:+.1f}%" if close and chg is not None and close - chg else "",

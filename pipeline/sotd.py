@@ -64,11 +64,27 @@ def _save(st: dict) -> None:
     tmp.replace(STATE)
 
 
+def members(st: dict, index: str, known: set[str]) -> list[str]:
+    """Index constituents from PSX; the last good list (kept in the state, up to 45 days old) when PSX does not
+    answer. Index members change twice a year, so yesterday's list is right on any normal day (16-17 Nov 2026
+    the report failed twice because PSX refused the request)."""
+    cache = st.setdefault("index_members", {})
+    syms = psx.index_members(index, known)
+    if len(syms) >= 20:
+        cache[index] = {"date": f"{now_pkt():%Y-%m-%d}", "syms": syms}
+        return syms
+    old = cache.get(index) or {}
+    if old.get("syms") and old.get("date", "") >= f"{now_pkt() - timedelta(days=45):%Y-%m-%d}":
+        log.warning("stock of the day: %s members from PSX unavailable, using the list of %s", index, old["date"])
+        return list(old["syms"])
+    return syms
+
+
 def queue(st: dict, known: set[str], mcap: dict[str, float], sectors: dict[str, str]) -> list[str]:
     """Companies still to cover this round, in the order they would be picked."""
     done = {c["sym"] for c in st["covered"] if c.get("round") == st["round"]}
-    kmi = [s for s in psx.index_members("KMI30", known) if s in known]
-    kse = [s for s in psx.index_members("KSE100", known) if s in known]
+    kmi = [s for s in members(st, "KMI30", known) if s in known]
+    kse = [s for s in members(st, "KSE100", known) if s in known]
     if not kmi and not kse:
         raise RuntimeError("index member lists unavailable from PSX")
     stage = [s for s in kmi if s not in done] or [s for s in kse if s not in done]
@@ -115,6 +131,10 @@ def collect(sym: str, cfg: dict, df: pd.DataFrame, v: pd.DataFrame, res: pd.Data
     """Everything the cards and the web page need, from official data. Raises if the basics are missing."""
     from .site import quick_facts
     prof = psx.profile(sym)
+    if not prof or not prof.get("name"):  # PSX may refuse for a minute after a burst: wait once and retry
+        import time
+        time.sleep(45)
+        prof = psx.profile(sym)
     if not prof or not prof.get("name"):
         raise RuntimeError(f"PSX profile for {sym} not available")
     min_adtv = float(cfg.get("swing", {}).get("min_adtv", 10e6))
@@ -362,11 +382,17 @@ def run(cfg: dict, dry: bool = False, force: str | None = None, preview: bool = 
     last = df[df["date"] == end].set_index("sym")
     mcap = last["mcap"].dropna().to_dict()
     sec = {k: (x or "").strip().title() for k, x in sectors.items()}
-    cands = [force] if force else pick(st, set(syms), mcap, sec, now)
+    try:
+        cands = [force] if force else pick(st, set(syms), mcap, sec, now)
+    except RuntimeError as e:  # PSX unreachable and no saved list: say so plainly, retry at the next run
+        s.send_admin(f"<b>Stock of the Day</b>\nNot published yet: {esc(str(e))}. It retries at the next run.")
+        _save(st)
+        return
+    kmi = set(members(st, "KMI30", set(syms)))
     final_try = tries >= 1 or force  # the 20:00 run publishes even if the annual report could not be read
     for sym in cands[:3]:
         try:
-            d = collect(sym, cfg, df, v, res, kse, sectors, kmi=set(psx.index_members("KMI30", set(syms))))
+            d = collect(sym, cfg, df, v, res, kse, sectors, kmi=kmi)
         except Exception as e:  # noqa: BLE001
             log.warning("stock of the day: %s skipped (%s)", sym, e)
             continue

@@ -181,6 +181,40 @@ def corroborate(it: NewsItem, cfg: dict, state, days: int = 2) -> NewsItem | Non
     return None
 
 
+_FUEL = re.compile(r"\b(petrol|diesel|hsd|kerosene|fuel)\b", re.I)
+_FUEL_MOVE = re.compile(r"\b(price|prices|rate|rates|cheaper|costlier|per lit(re|er)|litre|liter|reduc\w*|cut\w*|hike\w*|"
+                        r"increase\w*|fixed|down|up|drop\w*|fall\w*|fell|rise\w*|rose|lower\w*|rais\w*|slash\w*|"
+                        r"unchanged|revis\w*|relief)\b|\bRs\.?\s?\d", re.I)
+_BOP = re.compile(r"\bcurrent account\b", re.I)
+_REMIT = re.compile(r"\bremittances?\b", re.I)
+# not a price change: fuel sales / imports / subsidies / levies, and forecasts, stay news
+_FUEL_KEEP = re.compile(r"\b(sales|demand|import\w*|consumption|bill|levy|subsid\w*|smuggl\w*|shortage|stock\w*)\b", re.I)
+_OUTLOOK = re.compile(r"\b(expect\w*|forecast\w*|project\w*|target\w*|likely|estimat\w*|may|could|to reach)\b", re.I)
+_FIGURE = re.compile(r"\$\s?\d|\d\s?(m|mn|bn|b|million|billion)\b|\d+(\.\d+)?\s?(%|pc|percent)", re.I)
+
+
+def official_covered(it: NewsItem, state, cfg: dict) -> str:
+    """News that only repeats a figure one of our official data cards posts (from the source itself). The card
+    is the better post; the news copy came 10 minutes before it twice (17-18 Nov 2026: current account $39m,
+    'Petrol Down 11th Day in a Row'). Only while that card's reader is healthy, so nothing is lost if it breaks."""
+    if it.official:
+        return ""
+    od = cfg.get("official_data") or {}
+    health = (getattr(state, "data", None) or {}).get("official") or {}
+    ok = lambda name: od.get(name, True) and (health.get(name) or {}).get("fails", 0) < 8  # noqa: E731
+    t = it.title
+    if ok("fuel") and _FUEL.search(t) and _FUEL_MOVE.search(t) and not _FUEL_KEEP.search(t):
+        # petrol and diesel prices change almost daily: the official fuel card (PSO) covers every change once
+        return "petrol and diesel price changes are covered by the official fuel card"
+    if _OUTLOOK.search(t):
+        return ""
+    if ok("bop") and _BOP.search(t) and _FIGURE.search(t):
+        return "the monthly current account figure is covered by the official SBP card"
+    if ok("remit") and _REMIT.search(t) and _FIGURE.search(t):
+        return "the monthly remittances figure is covered by the official SBP card"
+    return ""
+
+
 def before_ai(it: NewsItem, state, cfg: dict, view: list[dict]) -> str:
     """Checks that need no AI. '' = continue, else the reason to keep it off the main channel."""
     ed = _cfg(cfg)
@@ -190,11 +224,8 @@ def before_ai(it: NewsItem, state, cfg: dict, view: list[dict]) -> str:
             return "source not on the trusted list"
         log.info("corroborated by %s: %s", alt.source, alt.title[:80])
         it.title, it.url, it.source = alt.title, alt.url, alt.source
-    if ((cfg.get("official_data") or {}).get("fuel", True) and not it.official
-            and re.search(r"\b(petrol|diesel|hsd|kerosene|fuel)\b", it.title, re.I)
-            and re.search(r"\b(price|prices|rate|rates|cheaper|costlier|per litre|reduc\w*|cut|hike\w*|increase\w*|fixed)\b", it.title, re.I)):
-        # petrol and diesel prices change almost daily: the official fuel card (PSO) covers every change once
-        return "petrol and diesel price changes are covered by the official fuel card"
+    if r := official_covered(it, state, cfg):
+        return r
     if r := index_conflict(it, index_levels(state, view), float(ed.get("index_tolerance", 0.10))):
         return r
     cap = int(ed.get("max_per_topic_day", 3))

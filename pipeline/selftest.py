@@ -198,6 +198,12 @@ def levels_tests() -> list[str]:
     sell = {"side": "sell", "sell_zone": (5.63, 5.80), "exit": 4.86}
     ok("level alert: sell zone at 5.70", [e for e, _ in lw.events(sell, 5.70)] == ["sell_zone"])
     ok("level alert: support broke at 4.80", [e for e, _ in lw.events(sell, 4.80)] == ["broke"])
+    ok("level alert: closed inside the zone -> no repeat next morning",
+       lw.fresh_events({**buy, "close": 99.5}, 100.0) == [])
+    ok("level alert: closed above the zone, falls into it -> in_zone",
+       [e for e, _ in lw.fresh_events({**buy, "close": 102.0}, 100.0)] == ["in_zone"])
+    ok("level alert: closed inside the zone, reaches target 1 -> target1 only",
+       [e for e, _ in lw.fresh_events({**buy, "close": 99.5}, 104.5)] == ["target1"])
     v = [{"company_code": f"S{i}", "CurrentPrice": 101.0, "LDCP": 100.0} for i in range(20)]
     ok("PSX screener live when it shows the live index prices",
        lw.screener_live(v, {f"S{i}": (101.0, 1.0) for i in range(20)}) is True

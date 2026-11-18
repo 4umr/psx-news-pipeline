@@ -1,7 +1,8 @@
 """Level alerts during the session (private, bot chat only): the stocks of last night's Research Lab report,
 watched against their levels with live prices.
 
-Events (each once per stock per report, so a price hovering at a level does not repeat itself):
+Events (each once per stock per report, so a price hovering at a level does not repeat itself; only levels
+reached SINCE the report's close, see fresh_events):
   buy side   in_zone   price inside the buy zone (support to support + 3%), above the fails-below line
              failed    price below the fails-below line (the chart setup is broken)
              target1   price at or above the first resistance; target2 the second
@@ -69,6 +70,18 @@ def events(it: dict, price: float) -> list[tuple[str, str]]:
     return out
 
 
+def fresh_events(it: dict, price: float) -> list[tuple[str, str]]:
+    """Events reached SINCE the close: a stock that already closed inside its zone (or above a target, below a
+    line) was described by the evening report; repeating it at 09:32 every morning is noise (16-18 Nov 2026: all
+    five blue chips sat in their zones and fired 'in_zone' at 09:32 each day, which also inflated the scoring)."""
+    now = events(it, price)
+    close = it.get("close")
+    if not close:
+        return now
+    before = {e for e, _ in events(it, float(close))}
+    return [(e, t) for e, t in now if e not in before]
+
+
 def check(now, state, cfg: dict, view: list[dict]) -> str | None:
     """One pass: returns the alert message (or None). Weekdays 09:32-16:35, only on days the market trades."""
     conf = cfg.get("level_alerts") or {}
@@ -91,7 +104,7 @@ def check(now, state, cfg: dict, view: list[dict]) -> str | None:
         p = px.get(it["sym"])
         if not p:
             continue
-        for ev, txt in events(it, p):
+        for ev, txt in fresh_events(it, p):
             key = f"{rep['session']}:{it['sym']}:{ev}"
             if key in done:
                 continue
