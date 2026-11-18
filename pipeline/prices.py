@@ -99,26 +99,36 @@ def index_history(start: datetime) -> pd.Series:
 
 
 # ---------------------------------------------------------------- company facts
-def meta(symbols: list[str], max_age_days: int = 30, workers: int = 8) -> dict:
-    """Shares outstanding and free float per symbol (PSX company pages), refreshed monthly."""
+def meta(symbols: list[str], max_age_days: int = 30, workers: int = 3) -> dict:
+    """Shares outstanding and free float per symbol (PSX company pages), refreshed monthly.
+
+    A page that fails is stamped 'tried' and not asked again the same day: without that, every
+    run re-downloaded all ~485 pages at once, PSX answered 429 and the next lookup (e.g. Stock of
+    the Day's own company page) failed too (18 Nov 2026)."""
     try:
         m = json.loads(META_PATH.read_text(encoding="utf-8")) if META_PATH.exists() else {}
     except (OSError, json.JSONDecodeError):
         m = {}
+    today = now_pkt().strftime("%Y-%m-%d")
     cut = (now_pkt() - timedelta(days=max_age_days)).strftime("%Y-%m-%d")
-    todo = [s for s in symbols if m.get(s, {}).get("asof", "") < cut]
+    todo = [s for s in symbols
+            if m.get(s, {}).get("asof", "") < cut and m.get(s, {}).get("tried", "") != today]
     if todo:
         def one(s):
             p = psx.company(s) or {}
             return s, {k: p[k] for k in ("shares", "free_float", "free_float_pct") if k in p}
 
+        ok = 0
         with ThreadPoolExecutor(workers) as ex:
             for s, info in ex.map(one, todo):
                 if info:
-                    m[s] = {**info, "asof": now_pkt().strftime("%Y-%m-%d")}
+                    m[s] = {**info, "asof": today}
+                    ok += 1
+                else:
+                    m[s] = {**m.get(s, {}), "tried": today}
         META_PATH.parent.mkdir(parents=True, exist_ok=True)
         META_PATH.write_text(json.dumps(m, separators=(",", ":")), encoding="utf-8")
-        log.info("company facts refreshed for %d symbols", len(todo))
+        log.info("company facts refreshed for %d of %d symbols", ok, len(todo))
     return m
 
 
