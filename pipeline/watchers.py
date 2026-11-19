@@ -274,7 +274,20 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dic
         act = {}
     yoy = _assess_all(fresh[:limit])
 
+    # the price move is shown only when it can be a REACTION: the result came out during today's session. A result
+    # announced after the close (or seen at night) sits next to a move that happened before anyone saw it.
+    now = now_pkt()
+    from .earnings import after_hours
+    try:
+        traded_today = view_session(scs.kse100_view_cached(), state, now) == "today"
+    except Exception:  # noqa: BLE001
+        traded_today = False
+    in_session = {r.get("company_code") for r in fresh if traded_today and r.get("date")
+                  and f"{r['date']:%Y-%m-%d}" == f"{now:%Y-%m-%d}" and not after_hours(r.get("bm_time") or "")}
+
     def move(code):
+        if code not in in_session:
+            return None
         r = act.get(code) or {}
         c, ch = r.get("trading_close"), r.get("trading_change")
         return ch / (c - ch) * 100 if c and ch is not None and c - ch else None
