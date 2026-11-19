@@ -418,9 +418,8 @@ def _daily_report(cfg: dict, state: State, sender: Sender, now: datetime) -> Non
              f"{(state.data.get('ai_usage') or {}).get(str(now.date()), 0)}"]
     if ed := editor.day_summary(state, now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()):
         lines.append(ed)
-    if day.get("runs", 0) < 30:
-        lines.append("ℹ️ Fewer runs than expected — GitHub's free scheduler may be slow today; "
-                     "the 2-minute cron-job.org trigger fixes this.")
+    from . import audit
+    lines += audit.lines(state, cfg, now)  # did today's expected outputs happen? (replaces the old runs<30 note)
     sender.send_admin("\n".join(lines))
 
 
@@ -495,8 +494,10 @@ def run_loop(cfg: dict, dry_run: bool = False, minutes: int | None = None) -> bo
             n += 1
             # next pass one interval after this one STARTED, but always at least 5 seconds of rest
             wake = min(max(t0 + (every if fast_window(cfg) else idle), time.time() + 5), stop_at)
+            from . import commands
             while time.time() < wake:
-                time.sleep(min(20.0, max(0.5, wake - time.time())))
+                if commands.wait(min(20.0, max(0.5, wake - time.time()))):
+                    break  # the owner sent a command: answer it now, not at the next scheduled pass
                 if not fast and fast_window(cfg):
                     break  # market hours just started: switch to the fast rhythm now
     except KeyboardInterrupt:
@@ -566,6 +567,7 @@ def _start_workflows(cfg: dict, state: State, now: datetime) -> None:
         log.warning("could not start %s (%s): %s, attempt %d", d["workflow"], d["command"], why, tries[key])
         if tries[key] >= 3:  # give up for today: the workflow's own (late) schedule still runs it
             state.set_flag(key)
+            state.set_flag(f"wfgaveup:{d['workflow']}:{d['command']}:{now:%Y-%m-%d}")  # for the 23:45 self-audit
             tries.pop(key, None)
     for k in [k for k in state.data.get("wf_tries", {}) if not k.endswith(f"{now:%Y-%m-%d}")]:
         del state.data["wf_tries"][k]
@@ -598,9 +600,21 @@ def _refresh_broker_notes(state: State, now: datetime) -> None:
         state.set_snap("broker_notes", notes[:10])
 
 
+def _night(cfg: dict, now: datetime) -> bool:
+    """Inside `silent_hours` (default 23:00-07:00 PKT): posts arrive without a notification sound."""
+    span = cfg.get("silent_hours", ["23:00", "07:00"]) or []
+    if len(span) != 2:
+        return False
+    a, b = (tuple(int(x) for x in str(t).split(":")) for t in span)
+    t = (now.hour, now.minute)
+    return (a <= t or t < b) if a > b else (a <= t < b)
+
+
 def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, force_brief, t0: float,
          light: bool = False) -> None:
     analysis.init(state, cfg)
+    night = _night(cfg, now)
+    sender.quiet = night
     if light and (state.is_new or force_brief or briefs.due(cfg, state, now)):
         light = False  # a brief needs the full data set (global markets, SBP)
     mpc_today = f"{now:%Y-%m-%d}" in (state.snap("mpc") or {}).get("dates", [])
@@ -616,6 +630,10 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
 
     def S(name, fn, *a, default=None):
         return _safe(state, errors, name, fn, *a, default=default)
+
+    if not bootstrap:  # the owner's commands from his private bot chat (STCL, /status, /note X)
+        from . import commands
+        S("owner commands", commands.handle, state, sender, cfg, now)
 
     with ThreadPoolExecutor(max_workers=5) as ex:
         f_news = ex.submit(S, "news feeds", news.collect, cfg, not light, default=[])
@@ -709,6 +727,7 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
 
     alerts.sort(key=lambda a: -a.priority)
     for a in alerts:
+        sender.quiet = night and a.priority < 10  # breaking items keep their sound at night
         if a.admin:
             sender.send_admin(a.text)
             continue
@@ -787,6 +806,7 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         _, topic = _split_label(it.label)
         when = to_pkt(it.published) or now
         breaking = it.score >= 10 and imp["level"] == "High"
+        sender.quiet = night and not breaking
         spec = {"theme": "alert" if breaking else TOPIC_THEME.get(it.topic, "economy"),
                 "kicker": f"{'Breaking' if breaking else 'Important'} · {topic}", "title": it.title,
                 "impact": imp, "why": imp["summary"], "source": f"{it.source} · {when:%H:%M} PKT"}
@@ -821,6 +841,7 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         sender.send_admin("<b>Gemini key problem:</b> Google refused the GEMINI_API_KEY secret, so important news "
                           "is using the backup rules today. Create a new key at aistudio.google.com/apikey and "
                           "update the secret in GitHub.")
+    sender.quiet = night
     _queue_digest(digest, state)
     if cfg.get("news_mode", "instant") == "instant":
         S("news posts", _flush_instant, cfg, state, sender, now)

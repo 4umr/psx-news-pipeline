@@ -345,6 +345,11 @@ def call(d: dict, cfg: dict) -> dict | None:
            "catalysts": [x for x in (chk(t) for t in (out.get("catalysts") or [])[:3]) if x],
            "valuation": chk(out.get("valuation")), "momentum": chk(out.get("momentum")),
            "technical": chk(out.get("technical")), "change_view_if": chk(out.get("change_view_if"))}
+    if view and not res["headline"] and len(res["thesis"]) >= 2:
+        # the AI's one-line headline had a number the dossier does not contain, but its reasons passed: keep the
+        # call with a plain headline (19 Nov 2026: OGDC was dropped twice for its headline alone)
+        log.info("lab: %s headline failed the number check; plain headline used", d["sym"])
+        res["headline"] = f"{view} vs the KSE-100 over the next month"
     if not view or not res["headline"] or len(res["thesis"]) < 2:
         log.warning("lab: %s call dropped (view %s, headline %s, %d thesis points passed the number check)",
                     d["sym"], view, bool(res["headline"]), len(res["thesis"]))

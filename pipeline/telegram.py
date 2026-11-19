@@ -47,6 +47,9 @@ class Sender:
         self.failed: list[dict] = []   # messages to retry next run (outbox)
         self.channel_attempts = 0      # posts attempted to the channel this run
         self.channel_ok = True         # False if Telegram refused (bot removed / token revoked)
+        # night hours: posts still arrive at once, but without a notification sound (the runner sets this per
+        # message; breaking news stays loud). 17-19 Nov 2026 the daily fuel card buzzed phones at 01:00-02:00.
+        self.quiet = False
         if self.dry:
             self.preview = ROOT / "out" / "preview.txt"
             self.preview.parent.mkdir(exist_ok=True)
@@ -178,7 +181,8 @@ class Sender:
             sent = False
             for attempt in range(3):
                 try:
-                    r = http().post(url, data={"chat_id": chat, "media": _json.dumps(media)}, files=files, timeout=60)
+                    r = http().post(url, data={"chat_id": chat, "media": _json.dumps(media), **self._quiet()},
+                                    files=files, timeout=60)
                     if r.status_code == 429:
                         time.sleep(min(r.json().get("parameters", {}).get("retry_after", 5), 60))
                         continue
@@ -213,11 +217,15 @@ class Sender:
             ok &= self._doc(chat, data, filename, caption)
         return ok
 
+    def _quiet(self) -> dict:
+        return {"disable_notification": "true"} if self.quiet else {}
+
     def _doc(self, chat: str, data: bytes, filename: str, caption: str) -> bool:
         url = f"https://api.telegram.org/bot{self.token}/sendDocument"
         for attempt in range(3):
             try:
-                r = http().post(url, data={"chat_id": chat, "caption": caption[:1024], "parse_mode": "HTML"},
+                r = http().post(url, data={"chat_id": chat, "caption": caption[:1024], "parse_mode": "HTML",
+                                           **self._quiet()},
                                 files={"document": (filename, data, "application/pdf")}, timeout=60)
                 if r.status_code == 429:
                     time.sleep(min(r.json().get("parameters", {}).get("retry_after", 5), 60))
@@ -237,7 +245,8 @@ class Sender:
         url = f"https://api.telegram.org/bot{self.token}/sendPhoto"
         for attempt in range(3):
             try:
-                r = http().post(url, data={"chat_id": chat, "caption": caption[:1024], "parse_mode": "HTML"},
+                r = http().post(url, data={"chat_id": chat, "caption": caption[:1024], "parse_mode": "HTML",
+                                           **self._quiet()},
                                 files={"photo": (f"{name}.png", png, "image/png")}, timeout=40)
                 if r.status_code == 429:
                     time.sleep(min(r.json().get("parameters", {}).get("retry_after", 5), 60))
@@ -256,6 +265,8 @@ class Sender:
     def _post(self, chat: str, text: str, preview: bool, html_mode: bool = True) -> bool:
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         payload = {"chat_id": chat, "text": text, "disable_web_page_preview": not preview}
+        if self.quiet:
+            payload["disable_notification"] = True
         if html_mode:
             payload["parse_mode"] = "HTML"
         for attempt in range(4):

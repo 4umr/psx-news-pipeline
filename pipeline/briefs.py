@@ -556,6 +556,7 @@ def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
         return None, None, ""
     if sess == "previous":
         # No trading session today -> market holiday; don't republish old numbers
+        state.set_flag(f"holiday_notice:{now:%Y-%m-%d}")  # the 23:45 self-audit cross-checks this
         cal, _, _ = calendar_block(nxt, 1)
         text = (header("🏖️", "PSX closed today", f"{now:%A, %d %B %Y}") + "\n"
                 f"No trading session today (public holiday / market closure). Last close data is unchanged.\n\n"

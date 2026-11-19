@@ -260,6 +260,13 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dic
     if not fresh:
         return []
     fresh.sort(key=lambda r: (r.get("company_code") not in kse100, r.get("company_code") or ""))
+    # the bare "Results filed on PSX" card for these companies is no longer needed (psx_filings checks this)
+    posted = state.data.setdefault("results_posted", {})
+    for k in [k for k, t in posted.items() if t < time.time() - 3 * 86400]:
+        del posted[k]
+    for r in fresh[:12]:  # the card shows 12 rows
+        if r.get("company_code"):
+            posted[r["company_code"]] = int(time.time())
     limit = 25
     try:  # today's move: live for every stock (KSE-100 view + PSX screener while it is live; full table after close)
         act = {r["company_code"]: r for r in scs.live_activity(wide=True)[0] if r.get("company_code")}
@@ -1221,11 +1228,28 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
                 alerts_fast.append(Alert(quickresults.message(rq, mv), 9, "fastresults", admin=True))
         for k in [k for k, v in done_q.items() if v[:10] < f"{now - timedelta(days=10):%Y-%m-%d}"]:
             del done_q[k]
-    # Material information and company RESULTS go out at once, on their own card (results are the tested
-    # edge: minutes matter). Everything else (insider dealing disclosures, routine notices) waits for ONE
-    # "Company filings today" card after the close: on 11-13 Nov one-filing cards were half of all posts.
-    urgent = [x for x in pend if _urgent_filing(x["f"]["title"])]
-    routine = [x for x in pend if not _urgent_filing(x["f"]["title"])]
+    # Material information goes out at once, on its own card. A RESULTS filing waits up to
+    # `results_filing_wait_minutes` for the full results card (EPS vs last year, payout, price move; from
+    # scstrade, usually 2-5 minutes later) and is dropped if that card covers the company: 17-19 Nov 2026 every
+    # result went out twice within minutes (AGIC 13:11 + 13:15, MWMP 15:15 + 15:17). The owner still gets the
+    # AI-read numbers privately at once (fast results above). Everything else (insider dealing disclosures,
+    # routine notices) waits for ONE "Company filings today" card after the close.
+    covered = state.data.get("results_posted") or {}
+    wait = float(cfg.get("results_filing_wait_minutes", 10)) * 60
+    urgent, held, routine = [], [], []
+    for x in pend:
+        title = x["f"]["title"]
+        if RESULTS_FILING.search(title):
+            if covered.get(x["sym"], 0) >= x["t"] - 6 * 3600:
+                log.info("results filing %s covered by the results card", x["sym"])
+            elif time.time() - x["t"] >= wait:
+                urgent.append(x)
+            else:
+                held.append(x)
+        elif _urgent_filing(title):
+            urgent.append(x)
+        else:
+            routine.append(x)
     out = list(alerts_fast)
     if urgent:
         out.append(_filings_alert([(x["sym"], x["f"]) for x in urgent], px, wl, kse_set, roundup=False))
@@ -1237,7 +1261,7 @@ def psx_filings(now, state: State, cfg: dict, view: list[dict], light: bool = Fa
         state.set_flag(flag)
         out.append(_filings_alert([(x["sym"], x["f"]) for x in routine], px, wl, kse_set, roundup=True))
         routine = []
-    state.data["filings_pending"] = routine
+    state.data["filings_pending"] = routine + held
     return out
 
 

@@ -39,7 +39,8 @@ ai:
   model: gemini-2.5-flash   # if Google retires this name, the newest available "flash" model is used
   max_per_run: 6            # important news items analysed per run (free tier limits)
   daily_limit: 200          # max AI requests per day (stays inside Google's free tier)
-  fallback_model: gemini-2.5-flash-lite   # backup when the main model is busy; if this key cannot use it, the newest
+  fallback_model: gemini-flash-lite-latest   # backup when the main model is busy (gemini-2.5-flash-lite answers 404
+                                          # on this key since 13 Nov 2026); if this key cannot use it, the newest
                                           # other "flash" model on the key is picked automatically. Research Lab and the
                                           # annual-report reader start on the backup, so news keeps the main quota
 
@@ -55,6 +56,8 @@ max_news_posts_per_run: 15     # Telegram channel limit safety; extra items go o
 digest_every_minutes: 30       # only used in digest mode
 # Hold lower-priority news during these hours (PKT), e.g. ["23:30", "07:30"]. Empty = 24/7.
 digest_quiet_hours: []
+# Posts in these hours (PKT) arrive WITHOUT a notification sound (breaking news keeps it). [] = always loud.
+silent_hours: ["23:00", "07:00"]
 
 # Ignore news older than this (stops old feed items flooding the channel)
 max_item_age_hours: 18
@@ -101,7 +104,9 @@ unusual_volume_x: 3.0
 psx_filings_per_run: 25
 psx_filings_per_pass_light: 8
 psx_filings_roundup: "17:30"    # routine filings (insider dealings, notices) -> ONE card after the close, Mon-Fri
-psx_filings_roundup_max: 40     # ...or earlier if this many pile up; material information + results post at once
+psx_filings_roundup_max: 40     # ...or earlier if this many pile up; material information posts at once
+results_filing_wait_minutes: 10 # a results filing waits this long for the full results card (EPS vs last year);
+                                # if that card covers the company, the bare filing card is not posted
 
 # Fast loop (market hours, Mon-Fri): one GitHub job stays open and checks every minute instead of waiting
 # for GitHub's schedule (which starts runs only every 35-80 minutes). A light pass = RSS news, PSX data,
@@ -161,6 +166,12 @@ fair_value:
 # buy zone reached, fails-below line broken, targets reached; sell zone / support for warnings.
 level_alerts:
   enabled: true
+
+# Commands from the owner's private bot chat: send a ticker (STCL) for a Research Lab card, /note FABL for a
+# Stock of the Day preview, /status, /help. Only TELEGRAM_ADMIN_CHAT_ID is answered.
+commands:
+  enabled: true
+  max_per_day: 12   # on-request workflow runs a day (protects the free GitHub minutes)
 
 start_workflows:
   - {workflow: swing.yml, command: "swing", time: "17:40", days: [0, 1, 2, 3, 4]}
