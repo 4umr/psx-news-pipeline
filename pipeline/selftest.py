@@ -281,6 +281,73 @@ def levels_tests() -> list[str]:
     return bad
 
 
+def session_tests() -> list[str]:
+    """Which session the live data is about (the 13 / 19 Nov 2026 'PSX closed today' mistake, the 09:15
+    pre-open 'stocks moving sharply' card), replayed with the real numbers of 18-20 Nov 2026."""
+    import tempfile
+    import time as _t
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    from unittest import mock
+
+    from . import watchers as w
+    from .state import State
+    bad = []
+
+    def ok(name, cond):
+        if not cond:
+            bad.append(name)
+
+    pkt = timezone(timedelta(hours=5))
+    hist = [("2026-11-17", 177517.73), ("2026-11-18", 176294.33), ("2026-11-19", 176772.18)]
+    st = State(Path(tempfile.gettempdir()) / "selftest-none.json")
+    # our own record was a day behind (the 16:50 table read was stale), the official history is right
+    st.data["kse_closes"] = {"2026-11-17": 177517.73, "2026-11-18": 176294.33}
+    st.set_snap("kse_last_close", 176294.33)
+    keep = dict(w._HIST)
+    w._HIST.update(at=_t.time(), rows=hist)
+    try:
+        fri_0915 = datetime(2026, 11, 20, 9, 15, tzinfo=pkt)
+        rolled = [{"CurrentIndex": 176772.18, "PreIndex": 176772.18}]       # rolled over, nothing traded yet
+        old = [{"CurrentIndex": 176772.18, "PreIndex": 176294.33}]          # still Thursday's session
+        trading = [{"CurrentIndex": 177100.0, "PreIndex": 176772.18}]
+        ok("rolled-over view = today, despite a stale own record", w.view_session(rolled, st, fri_0915) == "today")
+        ok("Thursday's view on Friday morning = previous session", w.view_session(old, st, fri_0915) == "previous")
+        ok("no trading before the index moves", not w.trading_started(fri_0915, rolled))
+        ok("Friday trading from 09:15 once the index moves", w.trading_started(fri_0915, trading))
+        thu_0915 = datetime(2026, 11, 19, 9, 20, tzinfo=pkt)
+        ok("Mon-Thu pre-open (before 09:30) is not trading",
+           not w.trading_started(thu_0915, [{"CurrentIndex": 176300.0, "PreIndex": 176294.33}]))
+        thu_close = datetime(2026, 11, 19, 16, 55, tzinfo=pkt)
+        ok("Thursday evening: the view shows today's session", w.view_session(old, st, thu_close) == "today")
+        w.sync_closes(st, thu_close)
+        ok("missing close filled from the official history", st.data["kse_closes"].get("2026-11-19") == 176772.18
+           and st.snap("kse_last_close") == 176772.18 and st.snap("kse_session_date") == "2026-11-19")
+        # the 16:50 recording takes the close from the live view, not from the late table
+        st2 = State(Path(tempfile.gettempdir()) / "selftest-none.json")
+        st2.data["kse_closes"] = {"2026-11-18": 176294.33}
+        w._HIST.update(at=_t.time(), rows=hist[:2])
+        with mock.patch.object(w.scs, "kse100_view", return_value=[{"CurrentIndex": 176772.18, "PreIndex": 176294.33,
+                                                                      "company_code": "UBL", "CurrentPrice": 427.66}]), \
+                mock.patch.object(w.scs, "daily_activity", return_value=[]):
+            w.record_close(thu_close, st2)
+        ok("close recorded from the live view", st2.data["kse_closes"].get("2026-11-19") == 176772.18
+           and st2.snap("kse_session_date") == "2026-11-19" and st2.data["daily"]["2026-11-19"]["px"]["UBL"] == 427.66)
+        ok("volumes wait for today's all-stock table", not st2.flag("volrec:2026-11-19"))
+        # a holiday: the view never rolls over -> no close, flag set, no session today
+        st3 = State(Path(tempfile.gettempdir()) / "selftest-none.json")
+        hol = datetime(2026, 11, 20, 17, 0, tzinfo=pkt)
+        w._HIST.update(at=_t.time(), rows=hist)
+        with mock.patch.object(w.scs, "kse100_view", return_value=old):
+            w.record_close(hol, st3)
+        ok("holiday: nothing recorded for today", "2026-11-20" not in st3.data["kse_closes"]
+           and st3.flag("closerec:2026-11-20") and st3.snap("kse_session_date") != "2026-11-20")
+    finally:
+        w._HIST.clear()
+        w._HIST.update(keep)
+    return bad
+
+
 def live() -> list[str]:
     """The sources still look the way the code expects (a changed website is caught here)."""
     from . import checks
@@ -307,7 +374,8 @@ def live() -> list[str]:
 
 def run(with_live: bool = True) -> list[str]:
     from .common import log
-    bad = [f"formula: {x}" for x in formulas()] + [f"scoring: {x}" for x in scoring()] +         [f"levels: {x}" for x in levels_tests()]
+    bad = [f"formula: {x}" for x in formulas()] + [f"scoring: {x}" for x in scoring()] + \
+        [f"levels: {x}" for x in levels_tests()] + [f"session: {x}" for x in session_tests()]
     if with_live:
         bad += [f"data: {x}" for x in live()]
     for b in bad:

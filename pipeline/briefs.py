@@ -546,9 +546,16 @@ def morning(cfg: dict, state: State, mk: dict, view=None, title: str = "Morning 
 def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
     now = now_pkt()
     nxt = now + timedelta(days=1 if now.weekday() < 4 else 7 - now.weekday())
-    session = state.snap("kse_session_date")
-    if session and session != f"{now:%Y-%m-%d}":
-        # No new trading session recorded today -> market holiday; don't republish old numbers
+    view = view or scs.kse100_view()
+    # Holiday only when the live view never rolled over to today (it still shows the last session). Before
+    # 20 Nov 2026 this read our own 16:50 record, which a late scstrade table left stale: "PSX closed today"
+    # went out on normal trading days (13 and 19 Nov) instead of the closing card.
+    sess = w.view_session(view, state, now)
+    if sess is None and state.snap("kse_session_date") != f"{now:%Y-%m-%d}":
+        log.warning("close brief: cannot tell yet whether PSX traded today; trying again next pass")
+        return None, None, ""
+    if sess == "previous":
+        # No trading session today -> market holiday; don't republish old numbers
         cal, _, _ = calendar_block(nxt, 1)
         text = (header("🏖️", "PSX closed today", f"{now:%A, %d %B %Y}") + "\n"
                 f"No trading session today (public holiday / market closure). Last close data is unchanged.\n\n"
@@ -556,7 +563,6 @@ def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
                 + footer(cfg, ["PSX"]))
         return text, None, ""
     idx = scs.indices()
-    view = view or scs.kse100_view()
     fipi_today = (state.snap("fipi_last") or {}).get("date") == f"{now:%Y-%m-%d}"
     cal, _, _ = calendar_block(nxt, 1)
     act = scs.daily_activity()
@@ -728,8 +734,7 @@ def midday(cfg: dict, state: State, mk: dict, view=None):
     if not view:
         return None, None, ""
     cur, pre = view[0].get("CurrentIndex"), view[0].get("PreIndex")
-    last = state.snap("kse_last_close")
-    if not cur or not pre or (last and abs(pre - last) > 1):
+    if not cur or not pre or w.view_session(view, state, now) == "previous":
         return None, None, ""  # market closed today (holiday) - skip
     # the all-stock table is yesterday's until about 16:15: breadth from the live KSE-100, no volume figures
     act, full = scs.live_activity(view)
@@ -777,8 +782,7 @@ def opening(cfg: dict, state: State, mk: dict, view=None):
     if not view:
         return None, None, ""
     cur, pre = view[0].get("CurrentIndex"), view[0].get("PreIndex")
-    last = state.snap("kse_last_close")
-    if not cur or not pre or (last and abs(pre - last) > 1):
+    if not cur or not pre or w.view_session(view, state, now) == "previous":
         return None, None, ""  # market closed today (holiday)
     act, full = scs.live_activity(view)  # KSE-100 live; the all-stock table is yesterday's until ~16:15
     chg = cur - pre

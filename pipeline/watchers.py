@@ -506,6 +506,86 @@ def contrib_line(rows: list[dict]) -> str:
     return " · ".join(f"{esc(r['company_code'])} {r['NetIndexPoint']:+.0f}" for r in rows) or "—"
 
 
+# ---------------------------------------------------------------- which session is the data about?
+# Until 20 Nov 2026 the pipeline judged "is the live view about today?" by comparing it with the close it had
+# recorded itself at 16:50 from scstrade's index table. That table is refreshed late (after 16:50 on 13 and
+# 19 Nov), so the stored close stayed a day behind and then: the 17:15 closing card was replaced by a "PSX
+# closed today" notice on a normal trading day, and the next day's opening bell, midday card, KSE-100 alerts
+# and intraday chart were all skipped as if it were a holiday. Now the reference is scstrade's daily index
+# HISTORY (last session before today), with our own record only as a fallback, and the close is read from the
+# live view (its final value equals the official close).
+_HIST: dict = {"at": 0.0, "rows": []}
+
+
+def official_closes(max_age: float = 3600.0) -> list[tuple[str, float]]:
+    """KSE-100 daily closes [(YYYY-MM-DD, close)] from scstrade's index history, oldest first (memo 1 hour)."""
+    if _HIST["rows"] and time.time() - _HIST["at"] < max_age:
+        return _HIST["rows"]
+    try:
+        rows = [(f"{r['date']:%Y-%m-%d}", float(r["kse_index_close"])) for r in scs.index_history(21)]
+    except Exception as e:  # noqa: BLE001
+        log.warning("KSE-100 history failed: %s", e)
+        rows = []
+    if rows:
+        _HIST.update(at=time.time(), rows=rows)
+    else:
+        _HIST["at"] = time.time() - max_age + 300  # try again in 5 minutes, not every pass
+    return _HIST["rows"]
+
+
+def prev_session_close(state: State, now) -> float | None:
+    """Close of the last session BEFORE today: official history first, our own record as a fallback."""
+    today = f"{now:%Y-%m-%d}"
+    off = [c for d, c in official_closes() if d < today]
+    if off:
+        return off[-1]
+    own = [c for d, c in sorted((state.data.get("kse_closes") or {}).items()) if d < today]
+    return own[-1] if own else None
+
+
+def view_session(view: list[dict] | None, state: State, now) -> str | None:
+    """Which session the live KSE-100 view shows: 'today' (it has rolled over: its previous close is the last
+    session's close), 'previous' (still the last session: before ~09:15 or on a holiday), None = cannot tell."""
+    if not view:
+        return None
+    cur, pre = view[0].get("CurrentIndex"), view[0].get("PreIndex")
+    ref = prev_session_close(state, now)
+    if not cur or not pre or not ref:
+        return None
+    if abs(pre - ref) <= 1:
+        return "today"
+    if abs(cur - ref) <= 1:
+        return "previous"
+    return None
+
+
+def trading_started(now, view: list[dict] | None) -> bool:
+    """Regular trading is under way. Before the open (Mon-Thu 09:30, Fri 09:15) the view shows PRE-OPEN order
+    prices (19 Nov 2026 09:15: UBL 429 vs a 429.97 close while the index stood still), which once produced a
+    '12 stocks moving sharply' card every morning. The index only moves once real trades happen."""
+    if not view or not in_window(now, "09:15" if now.weekday() == 4 else "09:30", "23:59"):
+        return False
+    cur, pre = view[0].get("CurrentIndex"), view[0].get("PreIndex")
+    return bool(cur and pre and abs(cur - pre) > 0.005)
+
+
+def sync_closes(state: State, now) -> None:
+    """Fill state['kse_closes'] from the official history (a missed or stale 16:50 reading no longer leaves a
+    hole: 13 and 19 Nov 2026 were missing), and keep kse_last_close / kse_session_date on the newest session."""
+    rows = official_closes()
+    if not rows:
+        return
+    closes = state.data.setdefault("kse_closes", {})
+    for d, c in rows:
+        if d not in closes or abs(closes[d] - c) > 0.01:
+            closes[d] = c
+    state.data["kse_closes"] = dict(sorted(closes.items())[-30:])
+    last_d, last_c = max(state.data["kse_closes"].items())
+    if last_d >= (state.snap("kse_session_date") or ""):
+        state.set_snap("kse_session_date", last_d)
+        state.set_snap("kse_last_close", last_c)
+
+
 def kse_moves(now, state: State, cfg: dict) -> tuple[list[Alert], list[dict]]:
     mh = cfg["market_hours"]
     if now.weekday() > 4 or not in_window(now, mh["start"], mh["end"]):
@@ -516,11 +596,13 @@ def kse_moves(now, state: State, cfg: dict) -> tuple[list[Alert], list[dict]]:
     cur, pre = view[0].get("CurrentIndex"), view[0].get("PreIndex")
     if not cur or not pre:
         return [], view
-    last_close = state.snap("kse_last_close")
-    if last_close and abs(pre - last_close) > 1:
-        return [], view  # data still shows a previous session (pre-open / holiday)
-    if not last_close and now.hour < 10:
+    sess = view_session(view, state, now)
+    if sess == "previous":
+        return [], view  # data still shows the last session (before the roll-over, or a holiday)
+    if sess is None and now.hour < 10:
         return [], view
+    if not trading_started(now, view):
+        return [], view  # pre-open: quoted prices are orders, not trades
     record_intraday(state, now, cur, pre)
     pct = (cur / pre - 1) * 100
     if abs(pct) > 12:  # PSX index halts long before this — almost certainly bad data
@@ -571,33 +653,43 @@ def record_intraday(state: State, now, cur: float, pre: float) -> None:
         pts["pts"].append([stamp, round(cur, 2)])
 
 
-def record_close(now, state: State) -> list[dict]:
-    """After the session, store the KSE-100 close (used for freshness checks & weekly change)."""
+def record_close(now, state: State) -> None:
+    """After the session, store the KSE-100 close (holiday check, weekly change, AI context), each KSE-100
+    stock's close (weekly review) and, once the all-stock table is today's, every stock's volume (history for
+    the unusual-volume detector). The close comes from the LIVE index view: scstrade's index table can still
+    show yesterday at 16:50 (13 and 19 Nov 2026). Nothing is marked done until the data is clearly today's."""
+    if now.weekday() < 5 and 8 <= now.hour <= 23:
+        sync_closes(state, now)  # hourly memo: fills days the live reading missed
     if now.weekday() > 4 or (now.hour, now.minute) < (16, 50):
-        return []
-    key = f"closerec:{now:%Y-%m-%d}"
-    if state.flag(key):
-        return []
-    idx = scs.indices()
-    k100 = next((r for r in idx if r["kse_index_type"].replace(" ", "") == "KSE100"), None)
-    if not k100:
-        return idx
-    state.set_flag(key)
-    close = k100["kse_index_close"]
-    closes = state.data["kse_closes"]
-    if not closes or abs(list(closes.values())[-1] - close) > 0.01:
-        closes[f"{now:%Y-%m-%d}"] = close
-        state.set_snap("kse_session_date", f"{now:%Y-%m-%d}")  # a new session actually traded today
-        # keep each session's KSE-100 constituent closes for the weekly review
-        px = {r["company_code"]: r["CurrentPrice"] for r in scs.kse100_view() if r.get("CurrentPrice")}
-        rec = daily_rec(state, f"{now:%Y-%m-%d}")
+        return
+    day = f"{now:%Y-%m-%d}"
+    view = None
+    if not state.flag(f"closerec:{day}"):
+        view = scs.kse100_view()
+        sess = view_session(view, state, now)
+        if sess is None:
+            return  # cannot tell yet: try again next pass
+        state.set_flag(f"closerec:{day}")
+        if sess == "previous":
+            log.info("no KSE-100 session today (holiday): close not recorded")
+            return
+        close = view[0]["CurrentIndex"]
+        state.data["kse_closes"][day] = close
+        state.set_snap("kse_session_date", day)  # a new session actually traded today
+        state.set_snap("kse_last_close", close)
+        px = {r["company_code"]: r["CurrentPrice"] for r in view if r.get("CurrentPrice")}
         if px:
-            rec["px"] = px
-        vol = {r["company_code"]: r["trading_vol"] for r in scs.daily_activity() if r.get("trading_vol")}
-        if vol:
-            rec["vol"] = vol  # history for the unusual-volume detector
-    state.set_snap("kse_last_close", close)
-    return idx
+            daily_rec(state, day)["px"] = px
+    if state.snap("kse_session_date") != day or state.flag(f"volrec:{day}"):
+        return
+    view = view or scs.kse100_view_cached()
+    act = scs.daily_activity()
+    if not scs.activity_is_today(act, view):
+        return  # the all-stock table still shows yesterday: volumes are stored once it is today's
+    state.set_flag(f"volrec:{day}")
+    vol = {r["company_code"]: r["trading_vol"] for r in act if r.get("trading_vol")}
+    if vol:
+        daily_rec(state, day)["vol"] = vol
 
 
 def daily_rec(state: State, day: str) -> dict:
@@ -1237,7 +1329,13 @@ def unusual_volume(now, state: State, cfg: dict, kse100: set[str]) -> list[Alert
     if now.weekday() > 4 or not in_window(now, "15:30", "18:00"):
         return []
     daily = state.data.get("daily", {})
-    hist = [daily[d]["vol"] for d in sorted(daily) if daily[d].get("vol") and d < f"{now:%Y-%m-%d}"][-10:]
+    hist = []
+    for d in sorted(daily):
+        v = daily[d].get("vol")
+        # a day stored from a stale table (before 20 Nov 2026) is an exact copy of the day before: count it once
+        if v and d < f"{now:%Y-%m-%d}" and (not hist or v != hist[-1]):
+            hist.append(v)
+    hist = hist[-10:]
     if len(hist) < 5:
         return []  # needs about a week of history first
     act, full = scs.live_activity()

@@ -90,6 +90,9 @@ def check(now, state, cfg: dict, view: list[dict]) -> str | None:
     moving = sum(1 for r in view or [] if r.get("CurrentPrice") and r.get("LDCP") and abs(r["CurrentPrice"] - r["LDCP"]) >= 0.006)
     if moving < 20:
         return None  # holiday, or the index view has not started moving yet
+    from . import watchers
+    if watchers.view_session(view, state, now) == "previous" or not watchers.trading_started(now, view):
+        return None  # a holiday shows the last session's moves; pre-open shows orders, not trades
     rep = _report()
     items = rep.get("items") or []
     if not items:
