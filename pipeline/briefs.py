@@ -847,8 +847,8 @@ def results(cfg: dict, state: State, mk: dict, view=None):
     # Same period last year from each company's results history (all companies, not only KSE-100)
     from . import earnings
     assessed = w._assess_all([b["raw"] for b in items if b["per"]][:40])
-    try:
-        act = {r["company_code"]: r for r in scs.daily_activity() if r.get("company_code")}
+    try:  # today's prices for every stock (the all-stock table only once it is today's; else the live sources)
+        act = {r["company_code"]: r for r in scs.live_activity(wide=True)[0] if r.get("company_code")}
     except Exception:  # noqa: BLE001
         act = {}
 
