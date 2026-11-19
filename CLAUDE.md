@@ -18,6 +18,7 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 
 ## Code map (`pipeline/`)
 - `__main__.py` CLI: `python -m pipeline run|loop|brief <name>|test [--admin-only]|chats|about [--dry-run]`.
+- Owner commands from his phone: send a ticker (STCL), /note X, /levels, /status, /help to the bot chat (`commands.py`).
   `--dry-run` writes messages to `out/preview.txt` and cards to `out/*.png` (no Telegram).
 - `runner.py` one pass: collect → watchers → news scoring → send. Every component wrapped in `_safe()`; state always
   saved in `finally`; component-error / source-health alerts to admin after 3 consecutive failures; daily 23:45 report.
@@ -443,6 +444,41 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   subsidy / levy stay news), current account and remittance figures (forecasts stay news). Was: "Petrol Down 11th
   Day in a Row" and the current account $39m news posted next to the official cards.
 - Wording: `common.count()` -> "1 stock moving sharply" (was "1 stock(s)").
+
+## System review 2026-11-20 (Umer: "analyze the system, improve, add beneficial things")
+- WORST BUG: on Thu 13 and Thu 19 Nov the 17:15 closing album was replaced by a "PSX closed today (public
+  holiday)" text on the main channel (log: briefs=['close'], no "album ... sent"). Cause: `record_close` at 16:50
+  read scstrade's index TABLE, which was still yesterday's -> kse_session_date / kse_last_close a day behind ->
+  holiday notice; and the NEXT day the view's PreIndex != the stale close, so opening bell, midday, KSE-100 alerts,
+  stock moves and the intraday chart were all skipped as a "holiday" (16 Nov and 20 Nov). Fix (`watchers`):
+  `official_closes()` (scstrade index HISTORY, memo 1 h), `prev_session_close`, `view_session(view)` = 'today' /
+  'previous' / None (reference = last official close before today, own record as fallback), `sync_closes` fills
+  gaps (13 and 19 Nov were missing), `record_close` takes the close from the LIVE view and stores volumes only once
+  the all-stock table is today's (`volrec:` flag; unusual-volume history skips duplicated stale days). Close,
+  opening, midday briefs and levelwatch use `view_session`; close waits (no notice) when it cannot tell.
+- Fake "12 stocks moving sharply" card at 09:15 every weekday: PRE-OPEN order prices (19 Nov 09:15 UBL 429 vs
+  429.97 close, index flat until 09:32; Friday the index moves from 09:16). `trading_started(now, view)` = past the
+  open (Mon-Thu 09:30, Fri 09:15) AND the index moved; kse_moves (stock moves, intraday recording) and level alerts
+  wait for it.
+- Every result went out twice (bare "Results filed on PSX" card, then the scstrade results card with EPS vs last
+  year 2-30 min later: AGIC, MWMP, GLOT). Now a results filing waits `results_filing_wait_minutes` (10) and is
+  dropped when `corporate_results` posted that company (`state.results_posted`, 3 days). Fast AI-read numbers still
+  go privately at once.
+- `silent_hours` ["23:00","07:00"]: posts arrive without a notification sound (`Sender.quiet` ->
+  disable_notification); breaking items (priority/score 10) stay loud. The daily fuel card came at 01:00-02:00.
+- Owner commands (`commands.py`): Umer's private bot chat (TELEGRAM_ADMIN_CHAT_ID only; others ignored, nothing
+  logged): a ticker "STCL" or "/analyse STCL,LUCK" -> dispatches lab.yml with the symbol (Lab card in 3-6 min),
+  "/note FABL" -> stock.yml `sotd --preview`, "/levels" -> last night's Lab levels with live prices, "/status",
+  "/help". getUpdates each pass (offset in state `tg_offset`, messages older than 30 min ignored); between passes
+  the loop long-polls (`commands.wait`) so a command is answered within seconds. Limit `commands.max_per_day` 12.
+- Self-audit (`audit.py`) at the end of the 23:45 report: loop gaps (passes vs ~690 weekday / 143 weekend),
+  workflow starts given up (`wfgaveup:` flag), holiday notice on a traded day (`holiday_notice:` flag), daily
+  briefs missing, close not recorded / differs from official, intraday line < 120 points, 3+ news items without AI.
+- News speed: news_log rows carry `pub` (publication time); the daily report shows the median delay of posts.
+- Lab: a call whose AI headline failed the number check but whose reasons passed is kept with a plain headline
+  (OGDC dropped twice on 19 Nov). `ai.fallback_model` -> gemini-flash-lite-latest (2.5-flash-lite 404s on this key).
+- Healthy in the review: all runs green 13-19 Nov, ~690 passes per weekday, AI 15 requests/day of 200, no
+  component errors, level alerts correct since the 18 Nov fix, SOTD on time (PAKT 19 Nov 18:03).
 
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.

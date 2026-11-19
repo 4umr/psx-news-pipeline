@@ -273,6 +273,8 @@ def log_decision(state, it: NewsItem, decision: str, reason: str = "", ai: dict 
            "d": decision, "why": reason[:120]}
     if ai:
         row.update(mat=ai.get("materiality"), conf=ai.get("confirmed"), kind=ai.get("kind"), lvl=ai.get("level"))
+    if getattr(it, "published", None):
+        row["pub"] = int(it.published.timestamp())  # publication time: lets the daily report measure our delay
     lg.append(row)
     state.data["news_log"] = lg[-400:]
     log.info("editor: %s%s | %s | %s", decision, f" ({reason})" if reason else "", it.source[:25], it.title[:90])
@@ -300,4 +302,9 @@ def day_summary(state, day_start: float) -> str:
     posted = sum(1 for r in rows if r["d"] == "posted")
     why = Counter(_bucket(r["why"]) for r in rows if r["d"] != "posted")
     top = ", ".join(f"{k} {v}" for k, v in why.most_common(6))
-    return f"Main channel news: {posted} posted, {len(rows) - posted} kept for you" + (f" ({esc(top)})" if top else "")
+    out = f"Main channel news: {posted} posted, {len(rows) - posted} kept for you" + (f" ({esc(top)})" if top else "")
+    # speed: minutes from the outlet's publication time to our post (feeds with a real timestamp only)
+    lag = sorted((r["ts"] - r["pub"]) / 60 for r in rows if r["d"] == "posted" and r.get("pub") and r["ts"] >= r["pub"])
+    if lag:
+        out += f". Posted a median {lag[len(lag) // 2]:.0f} min after publication (slowest {lag[-1]:.0f} min)"
+    return out

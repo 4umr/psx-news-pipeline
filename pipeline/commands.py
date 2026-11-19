@@ -3,6 +3,7 @@ used from the phone without opening GitHub:
 
   STCL   or   /analyse STCL,LUCK     Research Lab card(s) for any stock now (starts lab.yml, about 3-6 minutes)
   /note FABL                         Stock of the Day note preview for that company, to this chat only
+  /levels                            last night's Research Lab levels with live prices
   /status                            is everything running? today's numbers
   /help                              this list
 
@@ -25,6 +26,7 @@ _OFFSET: dict = {"next": None}   # next update id; also in state 'tg_offset' so 
 HELP = ("<b>Commands</b> (only this chat can use them)\n"
         "<b>STCL</b> or <b>/analyse STCL,LUCK</b>: Research Lab card for any stock, now (about 3-6 minutes)\n"
         "<b>/note FABL</b>: Stock of the Day note preview for that company, to this chat only (about 5 minutes)\n"
+        "<b>/levels</b>: last night's Research Lab levels with live prices\n"
         "<b>/status</b>: is everything running, today's numbers\n"
         "<b>/help</b>: this list")
 
@@ -122,6 +124,8 @@ def respond(text: str, state, cfg: dict, now: datetime) -> str:
         return HELP
     if cmd in ("status", "health"):
         return status(state, now)
+    if cmd in ("levels", "level", "zones"):
+        return levels(now)
     if cmd in ("analyse", "analyze", "a", "lab", "stock"):
         syms, what = _symbols(arg), "lab"
     elif cmd in ("note", "sotd"):
@@ -200,3 +204,41 @@ def status(state, now: datetime) -> str:
     if ed := editor.day_summary(state, start):
         lines.append(ed)
     return "\n".join(lines)
+
+
+def levels(now: datetime) -> str:
+    """Last night's Research Lab levels (buy zone, fails-below line, targets; sell zone for warnings) with the
+    live price and where it stands now. Read from the Lab's report (restored read-only by the news workflow)."""
+    from . import levelwatch
+    from .sources import scs
+    rep = levelwatch._report()
+    items = rep.get("items") or []
+    if not items:
+        return "No Research Lab levels yet (the evening run saves them after the close)."
+    px, src = levelwatch.live_prices(scs.kse100_view_cached(), {it["sym"] for it in items})
+    if now.weekday() > 4 or not (9, 15) <= (now.hour, now.minute) <= (16, 45):
+        src = "last traded prices, market closed"
+    f2 = lambda x: f"{x:,.2f}" if x else "n/a"  # noqa: E731
+    out = [f"<b>Levels</b> from the research after the close of {esc(rep.get('session', '?'))} ({esc(src)})"]
+    for it in items[:14]:
+        p = px.get(it["sym"]) or it.get("close")
+        now_s = f"Rs {p:,.2f}" if p else "no price"
+        label = esc((it.get("label") or "").lower())
+        if it.get("side") == "sell":
+            sz, ex = it.get("sell_zone") or [None, None], it.get("exit")
+            out.append(f"<b>{esc(it['sym'])}</b> {now_s} · {label} · sell zone {f2(sz[0])}-{f2(sz[1])}, "
+                       f"support {f2(ex)}")
+            continue
+        z, risk, r1 = it.get("zone") or [None, None], it.get("risk"), it.get("r1")
+        where = ""
+        if p and risk and p < risk:
+            where = " (below the fails-below line)"
+        elif p and z[0] and z[1] and z[0] <= p <= z[1]:
+            where = " (in the buy zone)"
+        elif p and r1 and p >= r1:
+            where = " (at or above target 1)"
+        out.append(f"<b>{esc(it['sym'])}</b> {now_s}{where} · {label} · buy zone {f2(z[0])}-{f2(z[1])}, "
+                   f"fails below {f2(risk)}, targets {f2(r1)} / {f2(it.get('r2'))}")
+    out.append("<i>Zones and targets are chart levels (not tested); the setup comes from tested signals. "
+               "Not investment advice.</i>")
+    return "\n".join(out)

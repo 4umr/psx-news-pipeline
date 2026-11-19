@@ -345,6 +345,21 @@ def session_tests() -> list[str]:
     finally:
         w._HIST.clear()
         w._HIST.update(keep)
+    # owner commands (offline: symbol list and workflow start are replaced)
+    from . import commands as cm
+    with mock.patch.object(cm, "_known", return_value={"STCL", "LUCK", "FFC"}), \
+            mock.patch.object(cm, "dispatch", return_value=(True, "204")) as disp:
+        st4 = State(Path(tempfile.gettempdir()) / "selftest-none.json")
+        now = datetime(2026, 11, 20, 11, 0, tzinfo=pkt)
+        ok("bare ticker starts the Lab", "Analysing <b>STCL</b>" in cm.respond("stcl", st4, {}, now)
+           and disp.call_args[0] == ("lab.yml", {"command": "lab", "symbol": "STCL"}))
+        ok("two tickers", "STCL, LUCK" in cm.respond("/analyse STCL, luck", st4, {}, now))
+        ok("unknown ticker is refused", "not a PSX symbol" in cm.respond("/analyse XYZQ", st4, {}, now))
+        ok("ordinary words get the help", "did not understand" in cm.respond("hi there", st4, {}, now))
+        ok("note preview goes to stock.yml", "Stock of the Day note on <b>FFC</b>" in cm.respond("/note ffc", st4, {}, now)
+           and disp.call_args[0] == ("stock.yml", {"command": "sotd --preview", "symbol": "FFC"}))
+        st4.data["tg_dispatch"] = {"d": "2026-11-20", "n": 12}
+        ok("daily limit", "limit" in cm.respond("STCL", st4, {}, now))
     return bad
 
 
