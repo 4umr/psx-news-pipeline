@@ -237,6 +237,11 @@ def update_live(now: datetime | None = None, keep_days: int = 800) -> pd.DataFra
                                  if r.get("trading_change") is not None and r.get("trading_close") else None)
                                 for r in act if r.get("company_code") and r.get("trading_close")], columns=COLS)
             new = new[new["sym"].isin(syms) & (pd.to_numeric(new["c"], errors="coerce") > 0)]
+            if scs.activity_is_today(act, scs.kse100_view()) is False:
+                # the all-stock table still shows the previous session (it is refreshed once, after the close):
+                # storing it would put yesterday's prices under today's date
+                log.warning("daily activity is not today's yet, using price history for %s", sess.date())
+                new = new.iloc[0:0]
             if len(new) < 0.6 * len(syms):  # partial table: take the session from the history endpoint instead
                 log.warning("daily activity has only %d rows, using price history for %s", len(new), sess.date())
                 new = fetch(syms, sess.to_pydatetime(), sess.to_pydatetime())
