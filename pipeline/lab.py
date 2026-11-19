@@ -107,8 +107,14 @@ def adjust_jumps(px: list[tuple]) -> list[tuple]:
     return out
 
 
+_IDX_OPEN: dict[str, float] = {}  # KSE-100 opening level by date (filled by _index), for like-for-like scoring
+
+
 def _index(days: int = 420) -> dict[str, float]:
-    return {r["date"].strftime("%Y-%m-%d"): r["kse_index_close"] for r in scs.index_history(days)
+    rows = scs.index_history(days)
+    _IDX_OPEN.update({r["date"].strftime("%Y-%m-%d"): r["kse_index_open"] for r in rows
+                      if r.get("date") and r.get("kse_index_open")})
+    return {r["date"].strftime("%Y-%m-%d"): r["kse_index_close"] for r in rows
             if r.get("date") and r.get("kse_index_close")}
 
 
@@ -416,11 +422,20 @@ def _baselines(d: dict) -> dict:
     return {"scs": {"Buy": "Outperform", "Sell": "Underperform"}.get(sg), "momentum": mom}
 
 
-def score(st: dict, idx: dict, px_cache: dict) -> None:
-    """Fill in 5- and 20-session results for open calls (entry = next session's open, vs KSE-100 close)."""
+def score(st: dict, idx: dict, px_cache: dict, idx_open: dict | None = None) -> None:
+    """Fill in 5- and 20-session results for open calls: the stock from the next session's OPEN to the close h
+    sessions after the call, minus the KSE-100 over exactly the same span (its open that morning, from scstrade's
+    index history). Until 20 Nov 2026 the index leg started at the previous close, so the overnight gap counted
+    for the index but not for the stock."""
+    idx_open = idx_open if idx_open is not None else _IDX_OPEN
     for c in st["calls"]:
-        if all(f"r{h}" in c for h in HORIZONS):
+        if all(f"r{h}" in c for h in HORIZONS) and c.get("sv") == 2:
             continue
+        if c.get("sv") != 2 and (c.get("r5") is not None or c.get("r20") is not None):
+            if not (px_cache.get(c["sym"]) and c["date"] in [p[0] for p in px_cache[c["sym"]]]):
+                continue  # cannot re-score it now: keep the old figures
+            for h in HORIZONS:  # scored before 20 Nov 2026 (index from the previous close): score again
+                c.pop(f"r{h}", None)
         px = px_cache.get(c["sym"]) or []
         dates = [p[0] for p in px]
         if c["date"] not in dates:
@@ -436,8 +451,10 @@ def score(st: dict, idx: dict, px_cache: dict) -> None:
             if ex[0] not in idx:
                 continue
             stock = (ex[2] / entry - 1) * 100
-            market = (idx[ex[0]] / idx[c["date"]] - 1) * 100
+            base = idx_open.get(px[i + 1][0]) or idx[c["date"]]  # the open of the entry day (else the close before)
+            market = (idx[ex[0]] / base - 1) * 100
             c[f"r{h}"] = round(stock - market, 2)
+            c["sv"] = 2
 
 
 def _hit(view: str | None, rel: float, band: float = 2.0) -> bool | None:
@@ -691,7 +708,8 @@ def level_record(idx: dict) -> str:
         px = hist[e["sym"]].get(exit_d)
         if not px:
             continue
-        rel = (px / e["px"] - 1) * 100 - (idx[exit_d] / idx[e["d"]] - 1) * 100
+        # the index from the moment of the alert (stored since 20 Nov 2026), else from that day's close
+        rel = (px / e["px"] - 1) * 100 - (idx[exit_d] / (e.get("kse") or idx[e["d"]]) - 1) * 100
         res.setdefault(e["ev"], []).append(rel)
     if not res:
         return f"Level alerts: {len(lg)} sent so far; the first are scored 5 sessions after they fire."

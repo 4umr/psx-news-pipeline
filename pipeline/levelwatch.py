@@ -115,7 +115,8 @@ def check(now, state, cfg: dict, view: list[dict]) -> str | None:
             # every alert is logged with its price so the Research Lab can score it later (5 and 20 sessions vs KSE-100)
             lg = state.data.setdefault("level_log", [])
             lg.append({"d": f"{now:%Y-%m-%d}", "t": f"{now:%H:%M}", "sym": it["sym"], "ev": ev, "px": round(p, 2),
-                       "label": it.get("label"), "kind": it.get("kind")})
+                       "label": it.get("label"), "kind": it.get("kind"),
+                       "kse": (view[0].get("CurrentIndex") if view else None)})  # index at the same moment, for scoring
             state.data["level_log"] = lg[-600:]
             from .watchers import log_price
             log_price(state, it["sym"], p, "level alert")

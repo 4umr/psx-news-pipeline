@@ -131,6 +131,13 @@ def scoring() -> list[str]:
         bad.append(f"5-session score {c.get('r5')} (expected 3.92)")
     if not _close(c.get("r20"), round((121 / 102 - 1) * 100, 2), 1e-2):
         bad.append(f"20-session score {c.get('r20')} (expected 18.63)")
+    # the index leg starts at the index OPEN of the entry day too: it opened at 1010 on 01-02 and closed at 1020 on
+    # 01-06 -> market +0.99%; stock +3.92% -> relative +2.93% (the old way, from the 01-01 close of 1000: +1.92%)
+    idx2 = {**idx, **{f"2026-01-{d:02d}": 1020.0 for d in range(2, 31)}}
+    st2 = {"calls": [{"id": "y", "sym": "T", "date": "2026-01-01", "view": "Outperform"}]}
+    lab.score(st2, idx2, {"T": px}, {"2026-01-02": 1010.0})
+    if not _close(st2["calls"][0].get("r5"), round((106 / 102 - 1) * 100 - (1020 / 1010 - 1) * 100, 2), 1e-2):
+        bad.append(f"5-session score with the index open {st2['calls'][0].get('r5')} (expected 2.93)")
     return bad
 
 
