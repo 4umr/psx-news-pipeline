@@ -322,7 +322,9 @@ def _ta_caption(d: dict) -> list[str]:
             lv = ""
         out.append(f"Setup: {su['label'].title()}" + (f" ({lv})" if lv else ""))
     if fv.get("fair"):
-        out.append(f"Fair value (model): Rs {fv['fair']:,.2f}, range {fv['low']:,.2f} to {fv['high']:,.2f}")
+        out.append(f"Fair value (model): Rs {fv['fair']:,.2f} if returns stay"
+                   + (f", Rs {fv['fade']:,.2f} if they fade to the required return over 10 years"
+                      if fv.get("fade") is not None else f", range {fv['low']:,.2f} to {fv['high']:,.2f}"))
     return out + ([""] if out else [])
 
 

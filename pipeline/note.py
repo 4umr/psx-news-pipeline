@@ -664,14 +664,18 @@ def _tech_page(p: Page, d: dict, t: dict, reserve: bool = False) -> None:
                  else DOWN if su.get("score", 0) <= -1 else GOLD]] + [[None, None]] * (len(rows) - 1)
         ly = p.table(M, ly, [half * 0.55, half * 0.45], rows, size=8.4, colors=cols)
         from .levels import lines as su_lines
-        ly, _ = p.bullets(M, ly, [clean(x) for x in su_lines(su)][:5], half, size=7.8, gap=4, max_y=ly + 330)
+        ly, _ = p.bullets(M, ly, [clean(x) for x in su_lines(su)][:3], half, size=7.8, gap=4, max_y=ly + 200)
     ry = p.section(M + half + GAP, y + 12, half, "Fair value (per share)")
     if fv:
-        rows = [[k_, f"{x:,.2f}"] for k_, x in (fv.get("methods") or {}).items()]
+        # the methods behind the first view, listed only when there are several (one method = the same number twice)
+        rows = [[k_, f"{x:,.2f}"] for k_, x in (fv.get("methods") or {}).items()] if len(fv.get("methods") or {}) > 1 else []
         if fv.get("fair"):
             many = len(fv.get("methods") or {}) > 1 or fv.get("fair_reported")
-            rows.append(["Fair value (median)" if len(fv.get("methods") or {}) > 1 else "Fair value (model)",
+            rows.append(["Returns stay" + (" (median)" if len(fv.get("methods") or {}) > 1 else ""),
                          f"{fv['fair']:,.2f} ({fv['upside']:+.0f}%)"])
+            if fv.get("fade") is not None:
+                rows.append([f"Returns fade ({fv.get('fade_years', 10)} years)",
+                             f"{fv['fade']:,.2f} ({fv['fade_upside']:+.0f}%)"])
             if many and fv["high"] > fv["low"] + 0.005:
                 rows.append(["Range", f"{fv['low']:,.2f} to {fv['high']:,.2f}"])
         if fv.get("epv") and not (fv.get("fair") and abs(fv["epv"] - fv["fair"]) < 0.005):
@@ -684,12 +688,13 @@ def _tech_page(p: Page, d: dict, t: dict, reserve: bool = False) -> None:
             rows.append([f"Assets / liabilities, FY{str(fv.get('bs_year', ''))[2:]}", f"{fv['assets']:,.2f} / {fv['liabilities']:,.2f}"])
         ry = p.table(M + half + GAP, ry, [half * 0.5, half * 0.5], rows, size=8.2)
         from .fairvalue import lines as fv_lines
-        notes = [clean(x) for x in fv_lines(fv) if "floor" in x or "one-off" in x or "latest quarter" in x][:1]
+        notes = [clean(x) for x in fv_lines(fv) if "% required return over" in x][:1]
+        notes += [clean(x) for x in fv_lines(fv) if "no-growth figures" in x or "one-off" in x or "latest quarter" in x][:1]
         notes += [clean(f_) for f_ in (fv.get("flags") or [])][:2]
         if not fv.get("agree", True):
             notes.append("The methods disagree: treat the range, not the point.")
         if notes:
-            ry, _ = p.bullets(M + half + GAP, ry, notes, half, size=7.8, gap=4, max_y=ry + 120)
+            ry, _ = p.bullets(M + half + GAP, ry, notes, half, size=7.8, gap=4, max_y=ry + 220)
     y = max(ly, ry) + 6
     from .analogs import lines as an_lines
     an = [clean(x) for x in an_lines(t.get("analog") or {}, t.get("breadth"))]

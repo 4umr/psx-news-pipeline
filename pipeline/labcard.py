@@ -104,11 +104,12 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
         from .underdogcard import fv_items
         y = c.tiles(y, fv_items(d["fv"], d.get("fv_rank")), title="Fair value and balance sheet", cols=4, tile_h=88)
         from .fairvalue import lines as fv_lines
-        odd = [x for x in fv_lines(d["fv"]) if "one-off" in x or "latest quarter" in x or "upper bound" in x
-               or "disagree" in x or "is a floor" in x]
-        if odd:  # an unusual quarter or disagreeing methods: say why the range is wide, on the card itself
+        # the two views explained (returns stay / fade), plus anything unusual: a one-off quarter, a floor, a boom
+        odd = [x for x in fv_lines(d["fv"]) if "% required return over" in x
+               or "one-off" in x or "latest quarter" in x or "upper bound" in x or "no-growth figures" in x]
+        if odd:
             y = c.highlights(y, [x.split("; the methods disagree")[0] if "one-off" in x else x for x in odd],
-                             title="Read the fair value with care", max_lines=6)
+                             title="How to read the fair value", max_lines=8)
 
     # 12-month chart: price, 50-day average, support / resistance, KSE-100 rebased
     px = d["px"][-250:]

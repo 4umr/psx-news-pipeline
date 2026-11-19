@@ -12,10 +12,15 @@ MONTHS = ["", "January", "February", "March", "April", "May", "June", "July", "A
 def fv_items(fv: dict, rank: float | None) -> list:
     """Tiles for the blue-chip cards: fair value, gap, rank, and assets against liabilities."""
     fair = fv.get("fair")
-    items = [("Fair value", "none (losses)" if not fair and (fv.get("eps_used") or 0) <= 0 else
-              ("not verified" if not fair else f"Rs {fair:,.2f}"), None),
-             ("Gap to price", "n/a" if fv.get("upside") is None else f"{fv['upside']:+.0f}%", None),
-             (("Range of methods", "n/a" if not fair else (f"{fv['low']:,.0f} to {fv['high']:,.0f}" if fv["high"] >= 100
+    if fair and fv.get("fade") is not None:  # the two views of the future side by side, each with its gap to the price
+        two = [(f"If returns stay ({fv['upside']:+.0f}%)", f"Rs {fair:,.2f}", None),
+               (f"If returns fade ({fv['fade_upside']:+.0f}%)", f"Rs {fv['fade']:,.2f}", None)]
+    else:
+        two = [("Fair value", "none (losses)" if not fair and (fv.get("eps_used") or 0) <= 0 else
+                ("not verified" if not fair else f"Rs {fair:,.2f}"), None),
+               ("Gap to price", "n/a" if fv.get("upside") is None else f"{fv['upside']:+.0f}%", None)]
+    items = two + [
+             (("Range if returns stay" if fv.get("fade") is not None else "Range of methods", "n/a" if not fair else (f"{fv['low']:,.0f} to {fv['high']:,.0f}" if fv["high"] >= 100
                                                            else f"{fv['low']:,.2f} to {fv['high']:,.2f}"), None)
               if len(fv.get("methods") or {}) > 1 or fv.get("fair_reported") else
               ("No-growth value", "n/a" if not fv.get("epv") else f"Rs {fv['epv']:,.2f}", None)),

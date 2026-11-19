@@ -31,6 +31,15 @@ def formulas() -> list[str]:
     ok("liabilities = 120 - 48 = 72", _close(f["liabilities"], 72.0))
     ok("liabilities % = 60", _close(f["liab_pct"], 60.0))
     ok("growth = 8%", _close(f["g"], 0.08))
+    # second view, returns fade: book 100, ROE 30% fading to the 20% required return over 2 years, no growth:
+    # year 1 (30% - 20%) x 100 / 1.2 = 8.333; year 2 ROE 25%: 5 / 1.44 = 3.472; value 111.81
+    ok("fade, 2 years: 111.81", _close(fairvalue._ri_fade(100.0, 0.30, 0.20, 0.0, 0.0, False, 2), 111.8056))
+    # with 10% book growth: year 2 excess return is on a book of 110: 5.5 / 1.44 = 3.819 -> 112.15
+    ok("fade with growth: 112.15", _close(fairvalue._ri_fade(100.0, 0.30, 0.20, 0.10, 0.10, False, 2), 112.1528))
+    ok("ROE equal to the required return: worth its book", _close(fairvalue._ri_fade(100.0, 0.2, 0.2, 0.08, 0.08, False), 100.0))
+    ok("high return: the fade view is below the steady view and above book", 50 < f["fade"] < f["fair"])
+    lo = fairvalue.compute({**snap, "values": {**snap["values"], "pr": 50.0}}, 0.17, 5.0, {})  # ROE 10% < 17%
+    ok("low return: the fade view is above the steady view and below book", lo["fair"] < lo["fade"] < 50)
     # payout 70%: natural growth 6% (not capped) -> E1 10.6, ROE1 21.2%; RI = 50 x 0.152 / 0.11 = 69.09;
     # DDM = 10.6 x 0.7 / 0.11 = 67.45; fair = median = 68.27
     fd = fairvalue.compute({**snap, "values": {**snap["values"], "pr": 70.0}}, 0.17, 10.0, {})

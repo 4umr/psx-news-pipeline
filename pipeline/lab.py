@@ -655,7 +655,7 @@ def note_analysis(sym: str, cfg: dict) -> dict:
     _size(d)
     fv = d.get("fv") or {}
     if (d.get("ver") or {}).get("problems"):
-        fv = {k: v for k, v in fv.items() if k not in ("fair", "methods", "low", "high", "upside")}
+        fv = {k: v for k, v in fv.items() if k not in ("fair", "methods", "low", "high", "upside", "fade", "fade_upside")}
     pt = dict(d.get("patterns") or {})
     long_px = _history(sym, 720) or d["px"]   # enough sessions for the 150 / 200-day averages over the whole chart
     return {"setup": su, "fv": fv, "chart": d.get("chart") or {}, "patterns": pt, "px": long_px[-460:],
@@ -751,7 +751,7 @@ def _report_item(d: dict, c: dict | None, it: dict | None) -> dict:
             "side": su.get("side"), "zone": su.get("zone"), "risk": su.get("risk"), "r1": su.get("r1"),
             "r2": su.get("r2"), "sell_zone": su.get("sell_zone"), "exit": su.get("exit"),
             "view": (c or {}).get("view"), "conf": (c or {}).get("confidence"),
-            "fair": (d.get("fv") or {}).get("fair")}
+            "fair": (d.get("fv") or {}).get("fair"), "fade": (d.get("fv") or {}).get("fade")}
 
 
 def morning(cfg: dict, dry: bool = False, force: bool = False) -> None:

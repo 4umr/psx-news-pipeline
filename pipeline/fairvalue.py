@@ -37,6 +37,15 @@ METHODS
   "growth" in one number (FFC came out at Rs 444 that way, against Rs 538 consistently valued).
   FAIR VALUE = median of the methods used; RANGE = lowest to highest; "agree" = range within 50% of fair.
 
+TWO VIEWS OF THE FUTURE (shown side by side since 20 Nov 2026, Umer's choice)
+  RETURNS STAY (the fair value above): the company earns today's return on equity (next year's, ROE1) for ever.
+  RETURNS FADE: competition pulls the return on equity in a straight line from ROE1 to the required return over
+  FADE_YEARS (10) years; after that new profit only earns its cost, so it adds nothing to value:
+       FADE = BV + sum over t = 1..10 of (ROE_t - COE) x B(t-1) / (1 + COE)^t,  ROE_t = ROE1 + (COE - ROE1)(t-1)/10
+  Book grows on the same path as in the first view (g, or the growth stage). In an abnormal year (the normalised
+  method is used) the fade starts from the normal ROE. A high-return company is worth less under the fade (FFC),
+  a low-return one more (OGDC): the gap between the two is how much rests on today's returns lasting.
+
   Tested measure (screens, backtest): the EPV gap. 2022-2026: big companies priced well above it lagged similar
   stocks by 4.8% over 60 sessions (every year); small and mid caps 50%+ below it beat them by 4.8% (every year).
   Cheap P/E did not work on PSX before 2023, so this is a current-market result, not a law.
@@ -60,6 +69,7 @@ G_CAP = 0.08            # long-run growth
 G_HIGH_MIN = 0.12       # a growth stage only when growth is clearly above the long run (1.5x)
 G_HIGH_CAP = 0.25
 STAGE_YEARS = 5
+FADE_YEARS = 10         # second view: ROE drifts to the required return over this many years
 
 
 def _ri_two_stage(bv: float, roe1: float, r: float, g1: float, gt: float, years: int = STAGE_YEARS) -> float:
@@ -71,6 +81,20 @@ def _ri_two_stage(bv: float, roe1: float, r: float, g1: float, gt: float, years:
         v += (roe1 - r) * b / disc
         b *= 1 + g1 - (g1 - gt) * (t - 1) / years
     return v + (roe1 - r) * b / (r - gt) / disc
+
+
+def _ri_fade(bv: float, roe1: float, r: float, g1: float, gt: float, stage: bool,
+             years: int = FADE_YEARS) -> float:
+    """Residual income with ROE moving in a straight line from roe1 (year 1) to r (year years + 1, when excess
+    returns end); book grows on the first view's path (g1 fading to gt over STAGE_YEARS when stage, else gt)."""
+    v, b, disc = bv, bv, 1.0
+    for t in range(1, years + 1):
+        roe_t = roe1 + (r - roe1) * (t - 1) / years
+        disc *= 1 + r
+        v += (roe_t - r) * b / disc
+        gr = (g1 - (g1 - gt) * (t - 1) / STAGE_YEARS) if stage and t <= STAGE_YEARS else gt
+        b *= 1 + gr
+    return v
 
 
 def history(ann: dict, bv_hist: dict | None) -> dict:
@@ -182,6 +206,7 @@ def compute(snap: dict, cost: float, ttm: float | None = None, bv_hist: dict | N
         out["epv"] = ttm / cost
         out["methods"]["Residual income"] = (_ri_two_stage(bv, e1 / bv, cost, g1, g) if stage
                                             else bv * (e1 / bv - g) / (cost - g))  # = no-growth value when g = 0
+        out["_fade_in"] = (bv, e1 / bv, cost, g1 if stage else g, g, stage)
         if pr is not None and pr >= 40 and natural is not None and natural <= G_CAP and g > 0:
             out["methods"]["Dividend discount"] = e1 * pr / 100 / (cost - g)
         if hst["boom"] and avg5 and avg5 > 0 and not hst["split"]:
@@ -195,6 +220,15 @@ def compute(snap: dict, cost: float, ttm: float | None = None, bv_hist: dict | N
             ratio = (roe / nroe) if nroe and nroe > 0 else (ttm / avg5 if avg5 and avg5 > 0 else None)
             if ratio is not None and not 0.5 <= ratio <= 1.5:
                 out["methods"]["Normalised earnings"] = norm_eps / cost
+    fin = out.pop("_fade_in", None)
+    if fin:
+        bv_, roe1_, r_, g1_, gt_, st_ = fin
+        if "Normalised earnings" in out["methods"] and out.get("norm_eps") and out["norm_eps"] > 0:
+            roe1_ = out["norm_eps"] * (1 + gt_) / bv_  # an abnormal year: fade from the normal return instead
+            out["fade_from_normal"] = True
+        out["fade"] = _ri_fade(bv_, roe1_, r_, g1_, gt_, st_)
+        out["fade_upside"] = (out["fade"] / p - 1) * 100 if p else None
+        out["fade_years"] = FADE_YEARS
     vals = list(out["methods"].values())
     if vals:
         out["fair"] = median(vals)
@@ -242,8 +276,15 @@ def lines(fv: dict) -> list[str]:
                  + f"required return {fv['coe'] * 100:.2f}%"
                  + (f", growth {fv['g1'] * 100:.0f}% a year fading to {fv['g'] * 100:.0f}% over {STAGE_YEARS} years"
                     if fv.get("g1") else (f", growth used {fv['g'] * 100:.1f}%" if fv.get("g") is not None else ""))
-                 + (f"; no-growth value (floor) Rs {fv['epv']:,.2f}" if fv.get("epv") and fv["epv"] < fv["fair"] * 0.98 else "")
+                 + (f"; no-growth value Rs {fv['epv']:,.2f}" if fv.get("epv") and fv["epv"] < fv["fair"] * 0.98 else "")
                  + ("" if fv["agree"] else "; the methods disagree, so treat the range, not the point"))
+        if fv.get("fade") is not None:
+            L.append((f"Rs {fv['fair']:,.2f} assumes today's return on equity ({fv['roe1'] * 100:.0f}% next year) lasts"
+                      if not fv.get("fade_from_normal") else f"Rs {fv['fair']:,.2f} rests on this year's unusual return")
+                     + (". If competition pulls it down" if fv["roe1"] >= fv["coe"] else
+                        ". If it rises (weak returns rarely last either)")
+                     + f" to the {fv['coe'] * 100:.2f}% required return over {fv.get('fade_years', FADE_YEARS)} years, "
+                     f"the value is Rs {fv['fade']:,.2f} ({fv['fade_upside']:+.0f}%)")
     elif fv.get("nav"):
         why = ("losses over the last 4 quarters" + (f" and over 5 years on average (EPS {fv['avg5']:.2f})"
                                                     if fv.get("avg5") is not None and fv["avg5"] <= 0 else "")
@@ -252,8 +293,8 @@ def lines(fv: dict) -> list[str]:
                  f"a share; the price is {fv.get('pb', 0):.2f}x that, and losses keep lowering it")
     if fv.get("fair") and fv.get("g_zero_why") and fv.get("g") == 0:
         L.append(f"Growth is set to zero because the company {fv['g_zero_why']} (this model grows a company only from "
-                 "profit it keeps), so the figure is a floor: profit that rises with prices or volumes would put the "
-                 "value higher")
+                 "profit it keeps), so both values are no-growth figures, too low if its profit keeps rising with prices "
+                 "or volumes")
     oo = fv.get("oneoff")
     if oo and fv.get("ttm_reported") is not None:
         q = f"FY{oo['key'][2:4]} Q{oo['key'][-1]}"

@@ -123,9 +123,13 @@ def setup(d: dict, call: dict | None, scan_item: dict | None, result: dict | Non
     elif not large and gap is not None and gap >= 50:
         votes.append((1, f"value: price {gap:.0f}% below its no-growth value Rs {fv['epv']:,.2f} (tested on mid and "
                          "small caps: +4.8% vs similar stocks over 3 months, every year 2022-26)"))
-    elif fv.get("fair") and up is not None and abs(up) >= 30:
-        info.append(f"Model fair value Rs {fv['fair']:,.2f} ({up:+.0f}% from the price): an estimate, not a tested signal, "
-                    "so it does not vote" + (" (value rules were tested on mid and small caps only)" if large else ""))
+    elif fv.get("fair") and up is not None and (abs(up) >= 30 or abs(fv.get("fade_upside") or 0) >= 30):
+        both = (f"Rs {fv['fair']:,.2f} ({up:+.0f}%) if returns stay, Rs {fv['fade']:,.2f} ({fv['fade_upside']:+.0f}%) "
+                "if they fade" if fv.get("fade") is not None else f"Rs {fv['fair']:,.2f} ({up:+.0f}% from the price)")
+        info.append(f"Model fair value {both}: "
+                    + ("estimates, not tested signals, so they do not vote" if fv.get("fade") is not None
+                       else "an estimate, not a tested signal, so it does not vote")
+                    + (" (value rules were tested on mid and small caps only)" if large else ""))
     # chart: only the tested reads vote (confirms / cancels good results; stage 4 and springs warn)
     from .ta import verdicts
     good_now = good or bool(scan_item and scan_item["kind"] != "warning")
