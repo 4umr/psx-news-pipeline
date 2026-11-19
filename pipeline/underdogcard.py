@@ -28,7 +28,7 @@ def fv_items(fv: dict, rank: float | None) -> list:
                   _pe_or_rank(fv, rank)]
     else:
         items += [("Earnings value gap", "n/a" if fv.get("epv_gap") is None else f"{fv['epv_gap']:+.0f}%", None),
-                  ("Required return", f"{fv['coe'] * 100:.1f}%", None),
+                  ("Required return", f"{fv['coe'] * 100:.2f}%", None),
                   ("Growth used", "n/a" if fv.get("g") is None else f"{fv['g'] * 100:.1f}%", None),
                   _pe_or_rank(fv, rank)]
     return items

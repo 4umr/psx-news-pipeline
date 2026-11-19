@@ -164,6 +164,12 @@ def compute(snap: dict, cost: float, ttm: float | None = None, bv_hist: dict | N
         keep = (1 - pr / 100) if pr is not None and 0 <= pr <= 100 else None
         natural = roe * keep if keep is not None else None
         g = max(0.0, min(natural, G_CAP, cost - 0.04)) if natural is not None else 0.0
+        # growth comes only from retained profit in this model: a company paying out everything (or with an
+        # unknown payout) gets none, so its value is a no-growth FLOOR. Said on the card (PAKT, 19 Nov 2026: payout
+        # over 100%, growth 0, 'fair value' -48% although its profit rises with prices).
+        out["g_zero_why"] = (None if g > 0 or roe <= cost else
+                             "payout unknown" if pr is None else
+                             f"pays out {pr:.0f}% of its profit" if pr >= 99 else None)
         # growth stage for real growers: the growth the company can fund (ROE x retention) AND has shown (EPS
         # growth over 5 years), if both are clearly above the long-run rate; it fades to g over 5 years
         hst = history(ann, bv_hist)
@@ -233,7 +239,7 @@ def lines(fv: dict) -> list[str]:
         meth = "; ".join(f"{k} Rs {x:,.2f}" for k, x in fv["methods"].items())
         L.append(f"Fair value Rs {fv['fair']:,.2f} ({fv['upside']:+.0f}% from Rs {fv['price']:,.2f}), "
                  + ("median of " if len(fv["methods"]) > 1 else "from ") + f"{meth}; "
-                 + f"required return {fv['coe'] * 100:.1f}%"
+                 + f"required return {fv['coe'] * 100:.2f}%"
                  + (f", growth {fv['g1'] * 100:.0f}% a year fading to {fv['g'] * 100:.0f}% over {STAGE_YEARS} years"
                     if fv.get("g1") else (f", growth used {fv['g'] * 100:.1f}%" if fv.get("g") is not None else ""))
                  + (f"; no-growth value (floor) Rs {fv['epv']:,.2f}" if fv.get("epv") and fv["epv"] < fv["fair"] * 0.98 else "")
@@ -244,6 +250,10 @@ def lines(fv: dict) -> list[str]:
                if fv.get("eps_used") is not None and fv["eps_used"] <= 0 else "earnings could not be verified")
         L.append(f"No fair value from earnings or dividends ({why}). The only anchor is book value Rs {fv['nav']:,.2f} "
                  f"a share; the price is {fv.get('pb', 0):.2f}x that, and losses keep lowering it")
+    if fv.get("fair") and fv.get("g_zero_why") and fv.get("g") == 0:
+        L.append(f"Growth is set to zero because the company {fv['g_zero_why']} (this model grows a company only from "
+                 "profit it keeps), so the figure is a floor: profit that rises with prices or volumes would put the "
+                 "value higher")
     oo = fv.get("oneoff")
     if oo and fv.get("ttm_reported") is not None:
         q = f"FY{oo['key'][2:4]} Q{oo['key'][-1]}"

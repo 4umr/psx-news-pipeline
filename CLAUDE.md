@@ -228,8 +228,8 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   Fixed: weekly MACD used numpy 'W' weeks (Thursday-Wednesday) -> ISO weeks (`levels.weekly_closes`); annual
   result lines now show the fourth quarter (the basis of good/weak) then the full year (`earnings.eps_line`,
   also main-channel results posts). Self-test `levels_tests`: RSI 71.43 by hand, weeks, swing levels, setup
-  votes, risk line 93.10, reward to risk, split adjustment, result wording. Known by design: Lab scoring
-  measures the stock from the next open but the KSE-100 from the call day's close (no index open in the data).
+  votes, risk line 93.10, reward to risk, split adjustment, result wording. (Lab scoring now uses the KSE-100
+  open of the entry day too: fixed 20 Nov 2026, see "Research Lab and data audit".)
 
 ## Fair value v3 (2026-11-13) — Umer: "FFC fair value seems inaccurate, maybe 540-545; adjust it (on principle)"
 - Old: median(EPV no growth, RI, DDM on last year's DPS) at COE = policy 12 + 5 -> FFC Rs 444. Three flaws: a
@@ -480,6 +480,48 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 - Healthy in the review: all runs green 13-19 Nov, ~690 passes per weekday, AI 15 requests/day of 200, no
   component errors, level alerts correct since the 18 Nov fix, SOTD on time (PAKT 19 Nov 18:03).
 
+## Research Lab and data audit 2026-11-20 (Umer: "check each factor, every number authentic and accurate")
+- EPS PARSER (`earnings._num`): scstrade appends notes to EPS ('12.23 Restated', '-0.75 (Restated)', '0.14
+  Consolidated', '41.98 un', 'B-53.87 D- 31.07', typos 'Restaed', '-0..11'); 2,321 of 43,036 values (248 companies)
+  used to be read as missing, so many results had no year-ago figure (FFC 1Q26, HY26). Rows keep `restated`.
+- SPLITS / BONUS (`earnings.share_events`, applied in `earnings.company` = every live consumer: results posts,
+  scan, Lab, SOTD): a price move beyond the daily limit that does not reverse in 10 sessions = ex-date; factor
+  snapped to the exact ratio (1/2, 1/2.5, 1/3, 1/4, 1/5, 1/10 or 100/(100+bonus%)); rows announced before it (not
+  marked restated) are scaled. LUCK HY26 read -79% (vs pre-split 73.17), now +1.3%. SYS 2025 and BNL 2025 found.
+  NOT applied to the bulk backtest data (`fetch_all`): split years there can still look like big drops.
+- `earnings.change_word`: sign changes in words ("turned to a loss", "back to profit", "loss narrowed/widened"),
+  never "-1300%". Used by results lines, scan, Lab dossier, card chart.
+- QUARTERS (`checks.pick_quarter`): announced figure when within 15% of the snapshot (company's own, restated),
+  snapshot when far apart (split-adjusted). FFC 2025 Q3 16.63 snapshot vs 17.24 announced: card said +19% while
+  the results post said +14%. `trailing()` returns `all_quarters` (card chart and AI dossier use the same set).
+- ONE-OFF QUARTER (`checks.oneoff`): a trailing quarter 2x+ the median of the other three, not the latest, and
+  not seasonal (same quarter a year earlier also 1.6x+ its year) -> fair value uses the typical level and the
+  card shows the range with and without it (`fv.fair_reported`). OGDC FY26 Q4 29.55: 157 to 371.
+- VOTES (`levels.setup`) only where tested: P/B <= 1.2 + good results and the EPV gap >= 50% vote for mid / small
+  caps only (`tier`, else market cap < Rs 150bn); the model fair value never votes (info line). Buy zone capped
+  below target 1. Asset zone line only for non-large caps. PAKT's published SOTD "Leaning Sell" came from the
+  untested fair value vote.
+- ZERO GROWTH (`fairvalue.g_zero_why`): payout >= 99% or unknown and ROE > COE -> growth 0 -> the value is a FLOOR,
+  said on the cards and the note (PAKT payout 128%: 779 vs price 1,511). Known model choice, unchanged: with ROE
+  below COE the growth assumption LOWERS the value (OGDC one-off-adjusted ROE 11% -> 157 rather than 231).
+- CARD CONSISTENCY (labcard / underdogcard): probe canvas 9000 px (long cards were cut off under the footer),
+  52-week high from intraday highs everywhere, P/B on the checked book value, our 1-year beta everywhere,
+  EV/EBITDA negative -> n/a, "beat it by / lagged by x%", trailing P/E tile (checked EPS), last session's date
+  instead of "today" at night, year-end book value in the year-end panel, basis "group (consolidated) figures"
+  (scstrade uses consolidated where a company has subsidiaries; PSX's page is standalone: ENGROH 46.20 vs 0.21),
+  required-return source on the card (`fairvalue.rf_source`), PSX cross-check of the quarters (`lab.psx_check`,
+  standalone names only). On-request Lab dated by `watchers.view_session`. Lab fetches SBP's 10-year PIB itself
+  when the state lacks it.
+- SCORING like for like: Lab calls' KSE-100 leg from the index OPEN of the entry day (`lab._IDX_OPEN`, scstrade
+  index history has opens); calls scored the old way re-scored once (`sv` = 2). Level alerts store `kse` at the
+  moment they fire.
+- SOURCES: PSX added "Face Value" to the equity box -> shares / free float stopped parsing (meta kept old values,
+  SOTD showed blanks). `psx.equity()` reads label/value pairs, incl. `face_value` (stored in meta) -> payouts card
+  shows "Dividend Rs 5.00 (3.3%)". The News feed /rss/1/8 had been stuck on 29 May 2026 -> /rss/1/4 (business,
+  mostly world, pk false). `news.FEED_STATS` -> state `feeds` -> self-audit warns after 5 days without a new story.
+- Self-test mutes its own log lines (made-up data looked like real events in the public log).
+- Not done (needs the scratch scripts): rebuild `analog_stats.json` and the backtests with the new parser.
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,
@@ -620,7 +662,8 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   Built in swing.yml after each scan; deployed by the `deploy` job (actions/deploy-pages, continue-on-error) to
   https://4umr.github.io/psx-news-pipeline/ once Pages is enabled (Settings > Pages > Source: GitHub Actions).
   Build raises on bad data -> previous site stays; admin told. Local preview: .claude/launch.json "site" (port 8765).
-- Face value is not on PSX pages, so dividend YIELD is deliberately not computed (dividends shown as % of face value).
+- Face value IS on PSX pages since Nov 2026 (`psx.equity`, stored in meta): the Sunday payouts card shows rupees and
+  yield; the website still shows dividends as % of face value.
 
 ## Phase 4 (built 2026-10-16): research round 2 with a design/test split
 - Verdicts now require the rule to work in BOTH 2018-22 (design) and 2023-26 (test) (`backtest.SPLIT`); report cards

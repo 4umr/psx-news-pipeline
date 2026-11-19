@@ -167,8 +167,9 @@ def setup(d: dict, call: dict | None, scan_item: dict | None, result: dict | Non
     elif out.get("zone") and price <= out["zone"][1]:
         out["now"] = f"Price is inside the buy zone (Rs {out['zone'][0]:,.2f} to {out['zone'][1]:,.2f})."
     elif out.get("zone"):
-        out["now"] = (f"Price is {(price / out['zone'][1] - 1) * 100:.0f}% above the buy zone: closer to support "
-                      f"means less to lose if the setup fails.")
+        above = (price / out["zone"][1] - 1) * 100
+        out["now"] = ((f"Price is {above:.0f}% above the buy zone" if above >= 1 else "Price is just above the buy zone")
+                      + ": closer to support means less to lose if the setup fails.")
     else:
         out["now"] = "No support level below the price in the last 120 sessions (at a new high)."
     if out.get("risk") and price and price < out["risk"]:

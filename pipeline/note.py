@@ -416,7 +416,7 @@ def build(d: dict) -> tuple[list[bytes], bytes]:
     kd = [["Price (Rs)", f"{d['price']:,.2f}"],
           ["Market value (Rs bn)", f"{d['mcap'] / 1e9:,.1f}" if d.get("mcap") else "-"],
           ["Shares (m)", f"{shares / 1e6:,.1f}" if shares else "-"],
-          ["Free float", f"{prof['free_float_pct']:.0f}%" if prof.get("free_float_pct") else "-"],
+          ["Free float", f"{prof['free_float_pct']:.1f}%" if prof.get("free_float_pct") else "-"],
           ["12M high / low (Rs)", f"{d['hi']:,.0f} / {d['lo']:,.0f}"],
           ["Daily value (Rs m)", f"{d['adtv'] / 1e6:,.0f}" if d.get("adtv") else "-"],
           [f"EPS {_fy(ey)} (Rs)", f"{d['eps']:,.2f}" if d.get("eps") is not None else "-"],
@@ -669,18 +669,23 @@ def _tech_page(p: Page, d: dict, t: dict, reserve: bool = False) -> None:
     if fv:
         rows = [[k_, f"{x:,.2f}"] for k_, x in (fv.get("methods") or {}).items()]
         if fv.get("fair"):
-            rows.append(["Fair value (median)", f"{fv['fair']:,.2f} ({fv['upside']:+.0f}%)"])
-            rows.append(["Range of methods", f"{fv['low']:,.2f} to {fv['high']:,.2f}"])
-        if fv.get("epv"):
+            many = len(fv.get("methods") or {}) > 1 or fv.get("fair_reported")
+            rows.append(["Fair value (median)" if len(fv.get("methods") or {}) > 1 else "Fair value (model)",
+                         f"{fv['fair']:,.2f} ({fv['upside']:+.0f}%)"])
+            if many and fv["high"] > fv["low"] + 0.005:
+                rows.append(["Range", f"{fv['low']:,.2f} to {fv['high']:,.2f}"])
+        if fv.get("epv") and not (fv.get("fair") and abs(fv["epv"] - fv["fair"]) < 0.005):
             rows.append(["No-growth value", f"{fv['epv']:,.2f}"])
-        rows.append(["Required return", f"{fv['coe'] * 100:.1f}%" + (f", growth {fv['g1'] * 100:.0f}% fading to {fv['g'] * 100:.0f}%"
+        rows.append(["Required return", f"{fv['coe'] * 100:.2f}%" + (f", growth {fv['g1'] * 100:.0f}% fading to {fv['g'] * 100:.0f}%"
                                                                      if fv.get("g1") else (f", growth {fv['g'] * 100:.1f}%" if fv.get("g") is not None else ""))])
         if fv.get("nav"):
             rows.append(["Book value", f"{fv['nav']:,.2f} (price {fv.get('pb', 0):.2f}x)"])
         if fv.get("assets") and not fv.get("financial"):
             rows.append([f"Assets / liabilities, FY{str(fv.get('bs_year', ''))[2:]}", f"{fv['assets']:,.2f} / {fv['liabilities']:,.2f}"])
         ry = p.table(M + half + GAP, ry, [half * 0.5, half * 0.5], rows, size=8.2)
-        notes = [clean(f_) for f_ in (fv.get("flags") or [])][:2]
+        from .fairvalue import lines as fv_lines
+        notes = [clean(x) for x in fv_lines(fv) if "floor" in x or "one-off" in x or "latest quarter" in x][:1]
+        notes += [clean(f_) for f_ in (fv.get("flags") or [])][:2]
         if not fv.get("agree", True):
             notes.append("The methods disagree: treat the range, not the point.")
         if notes:
