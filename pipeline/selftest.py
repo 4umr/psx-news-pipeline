@@ -166,7 +166,29 @@ def levels_tests() -> list[str]:
     ok("reward to risk 0.58", _close(su["rr"], 4 / 6.9))
     d2 = {"snap": {"values": {"price": 100.0}}, "px": px, "fv": {"fair": 60.0, "upside": -40.0}}
     su2 = levels.setup(d2, None, {"kind": "warning", "tested": "t"}, {"cls": "big_down", "label": "1Q27", "line": "x"})
-    ok("setup: warning + 40% above fair value = SELL SIDE (-3)", su2["score"] == -3 and su2["side"] == "sell")
+    ok("setup: warning -2; the model fair value (40% above) does not vote = LEANING SELL",
+       su2["score"] == -2 and su2["side"] == "sell" and any("does not vote" in x for x in su2["info"]))
+    # value votes only where tested: a large cap at 0.8x book with good results gets no value vote
+    d3 = {"snap": {"values": {"price": 100.0}}, "px": px, "tier": "Large", "fv": {"pb": 0.8, "fair": 150.0, "upside": 50.0}}
+    su3 = levels.setup(d3, None, None, good)
+    ok("large cap: results vote only (value rules were tested on mid and small caps)", su3["score"] == 1)
+    d4 = {"snap": {"values": {"price": 100.0}}, "px": px, "tier": "Small", "fv": {"pb": 2.0, "epv": 160.0, "epv_gap": 60.0}}
+    ok("small cap 60% below its no-growth value: tested value vote", levels.setup(d4, None, None, None)["score"] == 1)
+    # the buy zone stops below the first target (support 98, resistance 99.5 -> zone top 98.5, not 100.94)
+    px5 = px[:-1] + [("2026-02-11", 98.6, 98.6, 0, 99.5, 98.0)]
+    su5 = levels.setup({"snap": {"values": {"price": 98.6}}, "px": px5, "fv": {}}, None, None, None)
+    ok("buy zone below target 1", su5.get("r1") is None or su5["zone"][1] < su5["r1"])
+    from . import checks as _ck, earnings as _ea
+    ok("EPS with notes: '12.23 Restated' 12.23, '(0.45)' -0.45, 'B-53.87 D- 31.07' -53.87, '-0..11' -0.11",
+       _ea._num("12.23 Restated") == 12.23 and _ea._num("(0.45)") == -0.45 and _ea._num("B-53.87 D- 31.07") == -53.87
+       and _ea._num("-0..11") == -0.11)
+    ok("sign changes are words, not percentages", _ea.change_word(-0.24, 0.02) == " (turned to a loss)"
+       and _ea.change_word(0.44, -0.24) == " (back to profit)" and _ea.change_word(19.72, 17.24) == " (+14%)")
+    ok("pre-split EPS is not used next to post-split EPS", _ck.pick_quarter(14.63, 73.17) == 14.63
+       and _ck.pick_quarter(16.63, 17.24) == 17.24)
+    oo = _ck.oneoff([("2026 Q2", 8.07), ("2026 Q3", 9.82), ("2026 Q4", 29.55), ("2027 Q1", 13.6)])
+    ok("one-off quarter: OGDC FY26 Q4", oo and oo["key"] == "2026 Q4" and not oo["latest"] and _close(oo["typical"], 9.82))
+    ok("no one-off in a steady year", _ck.oneoff([("a", 15.14), ("b", 13.62), ("c", 15.43), ("d", 19.72)]) is None)
     # a 10-for-1 split: 100 -> opens at 10; earlier prices become 10, volume x10
     adj = lab.adjust_jumps([("2026-01-01", 100.0, 100.0, 1000, 101.0, 99.0), ("2026-01-02", 100.0, 100.0, 1000, 101.0, 99.0),
                             ("2026-01-05", 10.0, 10.2, 10000, 10.5, 9.9)])
@@ -388,9 +410,17 @@ def live() -> list[str]:
 
 
 def run(with_live: bool = True) -> list[str]:
+    import logging
+
     from .common import log
-    bad = [f"formula: {x}" for x in formulas()] + [f"scoring: {x}" for x in scoring()] + \
-        [f"levels: {x}" for x in levels_tests()] + [f"session: {x}" for x in session_tests()]
+    # the tests use made-up data: their own log lines ('price history adjusted', 'owner command started') would
+    # look like real events in the public run log, so they are muted while the tests run
+    logging.disable(logging.INFO)
+    try:
+        bad = [f"formula: {x}" for x in formulas()] + [f"scoring: {x}" for x in scoring()] + \
+            [f"levels: {x}" for x in levels_tests()] + [f"session: {x}" for x in session_tests()]
+    finally:
+        logging.disable(logging.NOTSET)
     if with_live:
         bad += [f"data: {x}" for x in live()]
     for b in bad:

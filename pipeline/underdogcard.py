@@ -17,7 +17,7 @@ def fv_items(fv: dict, rank: float | None) -> list:
              ("Gap to price", "n/a" if fv.get("upside") is None else f"{fv['upside']:+.0f}%", None),
              (("Range of methods", "n/a" if not fair else (f"{fv['low']:,.0f} to {fv['high']:,.0f}" if fv["high"] >= 100
                                                            else f"{fv['low']:,.2f} to {fv['high']:,.2f}"), None)
-              if len(fv.get("methods") or {}) > 1 else
+              if len(fv.get("methods") or {}) > 1 or fv.get("fair_reported") else
               ("No-growth value", "n/a" if not fv.get("epv") else f"Rs {fv['epv']:,.2f}", None)),
              ("Book value", "n/a" if fv.get("nav") is None else f"Rs {fv['nav']:,.2f}", None)]
     if fv.get("assets") and not fv.get("financial"):
@@ -25,17 +25,26 @@ def fv_items(fv: dict, rank: float | None) -> list:
         items += [(f"Assets / share, FY{y[2:]}", f"Rs {fv['assets']:,.2f}", None),
                   (f"Liabilities / share, FY{y[2:]}", f"Rs {fv['liabilities']:,.2f}", None),
                   ("Liabilities / assets", f"{fv['liab_pct']:.0f}%", None),
-                  ("Cheaper than", "n/a" if rank is None else f"{rank:.0f}% of stocks", None)]
+                  _pe_or_rank(fv, rank)]
     else:
         items += [("Earnings value gap", "n/a" if fv.get("epv_gap") is None else f"{fv['epv_gap']:+.0f}%", None),
                   ("Required return", f"{fv['coe'] * 100:.1f}%", None),
                   ("Growth used", "n/a" if fv.get("g") is None else f"{fv['g'] * 100:.1f}%", None),
-                  ("Cheaper than", "n/a" if rank is None else f"{rank:.0f}% of stocks", None)]
+                  _pe_or_rank(fv, rank)]
     return items
 
 
+def _pe_or_rank(fv: dict, rank: float | None) -> tuple:
+    """The radar's 'cheaper than x% of stocks' when there is one; else the trailing P/E on the checked EPS."""
+    if rank is not None:
+        return ("Cheaper than", f"{rank:.0f}% of stocks", None)
+    e, p = fv.get("eps_used"), fv.get("price")
+    lab = "Trailing P/E, one-off out" if fv.get("fair_reported") else "Trailing P/E (checked EPS)"
+    return (lab, f"{p / e:.1f}x" if e and e > 0 and p else "n/a (losses)" if e is not None else "n/a", None)
+
+
 def _two_pass(cfg: dict, draw, *args) -> bytes:
-    probe = Card(cfg, "research", height=3400)
+    probe = Card(cfg, "research", height=9000)  # tall: a short probe dropped lines and under-measured long cards
     need = draw(probe, *args)
     plt.close(probe.fig)
     c = Card(cfg, "research", height=int(need + 190))
@@ -132,7 +141,11 @@ def _watch(c: Card, w: dict, session: str) -> int:
         y = c.highlights(y, [f"{x}" for x in w["problems"]] + ["Figures that depend on it are not shown."],
                          title="Data check did not pass", max_lines=6)
 
-    y = c.tiles(y, [("Book value / share", rs(w["bv"]), None), ("Assets / share", rs(fv.get("assets")), None),
+    # the panel is AT THE YEAR END: book value from that date too (assets - liabilities); today's estimate, if the
+    # latest results changed it, is labelled as such (STCL 20 Nov 2026: 6.10 now vs 7.72 at the FY26 year end)
+    bv_y = fv.get("bv_year")
+    bv_tile = ("Book value / share", rs(bv_y if bv_y else w["bv"]), None)  # assets - liabilities = this figure
+    y = c.tiles(y, [bv_tile, ("Assets / share", rs(fv.get("assets")), None),
                     ("Liabilities / share", rs(fv.get("liabilities")), None),
                     ("Liabilities / assets", "n/a" if fv.get("liab_pct") is None else f"{fv['liab_pct']:.0f}%", None),
                     ("Debt to equity", "n/a" if fv.get("tde") is None else f"{fv['tde'] / 100:.1f}x", None),
@@ -159,7 +172,7 @@ def _watch(c: Card, w: dict, session: str) -> int:
         hist.append(f"{MONTHS[w['season_month']]} in past years: average {sx['avg']:+.1f}%, up in {sx['up']} of {sx['n']}")
     ig = w.get("ignition") or {}
     if ig.get("x") is not None:
-        hist.append(f"Value traded today {ig['x']:.1f}x its 60-day average; last 5 days {ig.get('x5') or 0:.1f}x")
+        hist.append(f"Value traded on the last session {ig['x']:.1f}x its 60-day average; last 5 sessions {ig.get('x5') or 0:.1f}x")
     y = c.highlights(y, hist, title="Price history, season and volume", max_lines=9)
     if w.get("flags"):
         y = c.highlights(y, w["flags"], title="Red flags", max_lines=7)

@@ -309,7 +309,9 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dic
     more = f"\n...and {len(fresh) - limit} more" if len(fresh) > limit else ""
     has_major = any(r.get("company_code") in kse100 for r in fresh)
     text = (header("📊", "Corporate Results & Payouts", f"{count(len(fresh), 'new announcement')}") + "\n"
-            "EPS in Rs, compared with the same period last year\n\n" + "\n".join(lines) + more +
+            "EPS in Rs, compared with the same period last year (group figures where a company reports "
+            "consolidated results; earlier figures put on today's share count after splits and bonus issues)\n\n"
+            + "\n".join(lines) + more +
             f"\n\n{link(SCS_URL + 'MarketStatistics/MS_Announcements.aspx', 'SCS Trade')} · filings from PSX")
     rows_, links = [], []
     for r in fresh[:12]:
@@ -334,7 +336,8 @@ def corporate_results(rows: list[dict], state: State, kse100: set[str], cfg: dic
     card = {"theme": "psx", "kicker": "Corporate results & payouts",
             "title": f"{count(len(fresh), 'new result / payout announcement')}",
             "rows_title": "Company · period · EPS (Rs) vs last year", "rows": rows_,
-            "why": "Results and payouts move individual stocks and their sector peers. Open the filing for details.",
+            "why": "Results and payouts move individual stocks and their sector peers. EPS: group (consolidated) "
+                   "figures where the company reports them. Open the filing for details.",
             "source": "PSX filings via SCS Trade", "links": links}
     out = [Alert(text, 8 if has_major else 7, "results", tags=["Results", "Dividends", "Corporate"],
                  extra={"card": card})]

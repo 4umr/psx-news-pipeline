@@ -36,11 +36,28 @@ BAD = ("big_down", "to_loss")
 _LABEL = re.compile(r"^\s*([A-Za-z0-9]*?[A-Za-z])(\d{2})\s*$")
 
 
+_NUM = re.compile(r"(\(?)\s*(-?)\s*(\d+(?:\.\d+)?)\s*(\)?)")
+
+
 def _num(s) -> float | None:
-    try:
-        return float(str(s).replace(",", "").replace("(", "-").replace(")", "").strip())
-    except (TypeError, ValueError):
+    """EPS as scstrade writes it. Plain numbers, '(1.23)' = -1.23, and the notes it appends: '12.23 Restated',
+    '-0.75 (Restated)', '0.14 Consolidated', '41.98 un', '12.17 Basic 8.03 Diluted' (basic is taken),
+    'B-53.87 D- 31.07' (basic), typos like '-0..11' and 'Restaed'. Until 20 Nov 2026 every value with such a note
+    was read as missing: 2,321 of 43,036 EPS figures (248 companies), so many results had no year-ago comparison
+    (FFC 1Q26 and HY26 among them)."""
+    t = str(s if s is not None else "").replace(",", "").strip()
+    if not t or t in ("-", "--", "N/A", "n/a"):
         return None
+    t = re.sub(r"(\d)\.\.+(\d)", r"\1.\2", t)  # '-0..11'
+    try:
+        return float(t.replace("(", "-").replace(")", ""))
+    except ValueError:
+        pass
+    m = _NUM.search(t)
+    if not m:
+        return None
+    v = float(m.group(3))
+    return -v if m.group(2) or (m.group(1) and m.group(4)) else v
 
 
 def _pct(s) -> float | None:
@@ -58,7 +75,28 @@ def rows_for(symbol: str) -> list[dict]:
         out.append({"sym": symbol, "date": r["date"].strftime("%Y-%m-%d"), "time": t, "label": lab,
                     "kind": m.group(1) if m else "", "yy": int(m.group(2)) if m else None,
                     "eps_q": _num(r.get("bm_eps_quarter")), "eps_cum": _num(r.get("bm_eps_cum")),
-                    "div": _pct(r.get("bm_dividend")), "bonus": _pct(r.get("bm_bonus"))})
+                    "div": _pct(r.get("bm_dividend")), "bonus": _pct(r.get("bm_bonus")),
+                    # scstrade rewrote this row on today's share basis (after a split, merger or correction)
+                    "restated": bool(re.search(r"rest|retat", f"{r.get('bm_eps_quarter')} {r.get('bm_eps_cum')}", re.I))})
+    return out
+
+
+def share_events(sym: str, days: int = 800) -> list[tuple[pd.Timestamp, float]]:
+    """Splits and bonus issues seen in the price: a move between two sessions beyond PSX's daily limit (10%, or
+    Rs 1 for cheap stocks) that does not reverse within 10 sessions. [(ex-date, factor)], factor = first open /
+    last close before (LUCK 5-for-1: about 0.2; a 25% bonus: about 0.8)."""
+    from datetime import datetime, timedelta
+    rows = sorted(scs.price_history(sym, datetime.now() - timedelta(days=days), datetime.now()), key=lambda r: r["date"])
+    out = []
+    for i in range(1, len(rows)):
+        c0, c1 = rows[i - 1]["trading_close"], rows[i]["trading_close"]
+        if not c0 or not c1 or abs(c1 - c0) <= max(0.105 * c0, 1.05):
+            continue
+        f = (rows[i].get("trading_open") or c1) / c0
+        back = any(abs(rows[j]["trading_close"] - rows[j - 1]["trading_close"]) > max(0.105 * rows[j - 1]["trading_close"], 1.05)
+                   for j in range(i + 1, min(i + 11, len(rows))))
+        if 0.05 <= f <= 0.95 and not back:
+            out.append((pd.Timestamp(rows[i]["date"].replace(tzinfo=None)), f))
     return out
 
 
@@ -222,6 +260,31 @@ def company(sym: str) -> pd.DataFrame | None:
     """Classified results history of one company (cached for this run)."""
     if sym not in _COMPANY:
         rows = rows_for(sym)
+        # EPS announced before a split or bonus is per OLD share: put it on today's share count, or a result is
+        # compared with a figure 5x too big (LUCK HY26 15.44 vs HY25 73.17 announced before its 5-for-1 split).
+        # Rows scstrade already restated are on today's basis and are left alone.
+        try:
+            events = share_events(sym) if rows else []
+        except Exception as e:  # noqa: BLE001
+            log.warning("share events %s: %s", sym, e)
+            events = []
+        exact = []
+        for d, fac in events:  # the price ratio includes that day's market move: use the exact split / bonus ratio
+            cands = [1 / k for k in (2, 2.5, 3, 4, 5, 10)] + [
+                100 / (100 + r["bonus"]) for r in rows if r.get("bonus") and
+                0 <= (d - pd.Timestamp(r["date"])).days <= 150]
+            best = min(cands, key=lambda c: abs(fac / c - 1))
+            exact.append((d, best if abs(fac / best - 1) <= 0.06 else fac))
+        events = exact
+        for r in rows:
+            f = 1.0
+            for d, fac in events:
+                if pd.Timestamp(r["date"]) < d and not r["restated"]:
+                    f *= fac
+            if f != 1.0:
+                r["eps_q"] = r["eps_q"] * f if r["eps_q"] is not None else None
+                r["eps_cum"] = r["eps_cum"] * f if r["eps_cum"] is not None else None
+                r["split_adj"] = round(f, 4)
         _COMPANY[sym] = classify(pd.DataFrame(rows)) if rows else None
     return _COMPANY[sym]
 
@@ -246,11 +309,25 @@ def assess(sym: str, label: str = "") -> dict | None:
             "turnaround": bool(both and now_ > 0 > ly), "to_loss": bool(both and now_ < 0 < ly)}
 
 
+def change_word(now, ly, yoy=None) -> str:
+    """' (+14%)', ' (back to profit)', ' (turned to a loss)', ' (loss narrowed)', ' (loss widened)' or ''.
+    A sign change is never shown as a percentage (STCL: 0.02 to -0.24 used to read '-1300%')."""
+    if now is None or ly is None or now != now or ly != ly:
+        return ""
+    if now > 0 > ly:
+        return " (back to profit)"
+    if now < 0 < ly:
+        return " (turned to a loss)"
+    if now < 0 and ly < 0:
+        return " (loss narrowed)" if now > ly else (" (loss widened)" if now < ly else "")
+    if ly > 0:
+        g = yoy if yoy is not None else now / ly - 1
+        return f" ({g * 100:+.0f}%)"
+    return ""
+
+
 def _q_part(q, q_ly, yoy) -> str:
-    s = f"fourth-quarter EPS {q:.2f} vs {q_ly:.2f} a year ago"
-    if yoy is not None:
-        return s + f" ({yoy * 100:+.0f}%)"
-    return s + (" (back to profit)" if q > 0 > q_ly else " (turned to a loss)" if q < 0 < q_ly else "")
+    return f"fourth-quarter EPS {q:.2f} vs {q_ly:.2f} a year ago" + change_word(q, q_ly, yoy)
 
 
 def eps_line(a: dict) -> str:
@@ -264,11 +341,4 @@ def eps_line(a: dict) -> str:
         return "EPS not given"
     if pd.isna(a["eps_ly"]):
         return f"{what} {a['eps']:.2f}"
-    s = f"{what} {a['eps']:.2f} vs {a['eps_ly']:.2f} a year ago"
-    if a["yoy"] is not None:
-        s += f" ({a['yoy'] * 100:+.0f}%)"
-    elif a["eps"] > 0 > a["eps_ly"]:
-        s += " (back to profit)"
-    elif a["eps"] < 0 < a["eps_ly"]:
-        s += " (turned to a loss)"
-    return s
+    return f"{what} {a['eps']:.2f} vs {a['eps_ly']:.2f} a year ago" + change_word(a["eps"], a["eps_ly"], a["yoy"])

@@ -108,14 +108,24 @@ def setup(d: dict, call: dict | None, scan_item: dict | None, result: dict | Non
     if scan_item and result and scan_item["kind"] != "warning":
         votes[-1] = (votes[-1][0], votes[-1][1] + f"; {result['label']}: {result['line']}")
     fv = d.get("fv") or {}
-    pb, up = fv.get("pb"), fv.get("upside")
-    if pb is not None and 0 < pb <= 1.2 and good:
-        votes.append((1, f"value: {pb:.2f}x book value with results improving (tested)"
-                         + (f"; fair value Rs {fv['fair']:,.2f}" if fv.get("fair") else "")))
-    elif fv.get("fair") and up is not None and up >= 30:
-        votes.append((1, f"value: price {up:.0f}% below its fair value Rs {fv['fair']:,.2f}"))
-    elif fv.get("fair") and up is not None and up <= -30:
-        votes.append((-1, f"value: price {-up:.0f}% above its fair value Rs {fv['fair']:,.2f}"))
+    pb, up, gap = fv.get("pb"), fv.get("upside"), fv.get("epv_gap")
+    # VALUE votes only where the test was run (20 Nov 2026 audit: the P/B rule had been applied to large caps, and
+    # the model's 30% fair value gap voted although the TESTED measure is the no-growth (EPV) gap):
+    #   mid / small caps: P/B <= 1.2 with good results +5.1% vs similar over 3 months (4 of 5 years, 2022-26);
+    #                     price 50%+ below the no-growth value +4.8% (every year 2022-26)
+    #   large caps: neither was tested; the model fair value is shown, it does not vote
+    # size tier from the price database; without it, a market cap of Rs 150bn+ counts as large (top-30 territory)
+    large = d.get("tier") == "Large" or (d.get("tier") is None and (v.get("mktcap") or 0) >= 150)
+    info = []
+    if not large and pb is not None and 0 < pb <= 1.2 and good:
+        votes.append((1, f"value: {pb:.2f}x book value with results improving (tested on mid and small caps: "
+                         "+5.1% vs similar stocks over 3 months)"))
+    elif not large and gap is not None and gap >= 50:
+        votes.append((1, f"value: price {gap:.0f}% below its no-growth value Rs {fv['epv']:,.2f} (tested on mid and "
+                         "small caps: +4.8% vs similar stocks over 3 months, every year 2022-26)"))
+    elif fv.get("fair") and up is not None and abs(up) >= 30:
+        info.append(f"Model fair value Rs {fv['fair']:,.2f} ({up:+.0f}% from the price): an estimate, not a tested signal, "
+                    "so it does not vote" + (" (value rules were tested on mid and small caps only)" if large else ""))
     # chart: only the tested reads vote (confirms / cancels good results; stage 4 and springs warn)
     from .ta import verdicts
     good_now = good or bool(scan_item and scan_item["kind"] != "warning")
@@ -138,10 +148,12 @@ def setup(d: dict, call: dict | None, scan_item: dict | None, result: dict | Non
     else:
         score_side = score
     lv = swing_levels(d.get("px") or [], price)
-    out = {"score": score, "label": label, "votes": votes, "price": price, **lv}
+    out = {"score": score, "label": label, "votes": votes, "price": price, "info": info, **lv}
     if price and lv.get("s1"):
         s1 = lv["s1"]
-        out["zone"] = (s1, round(s1 * 1.03, 2))
+        # the zone never reaches the first target (FFC 20 Nov 2026: zone to 579.99 with target 1 at 579.80)
+        top = min(round(s1 * 1.03, 2), round(lv["r1"] * 0.99, 2)) if lv.get("r1") else round(s1 * 1.03, 2)
+        out["zone"] = (s1, max(top, s1))
         # the next support if it is close (within 8%); otherwise 5% under the first support, so the risk stays small
         risk = lv["s2"] if lv.get("s2") and lv["s2"] >= s1 * 0.92 else round(s1 * 0.95, 2)
         out["risk"] = risk
@@ -170,8 +182,11 @@ def setup(d: dict, call: dict | None, scan_item: dict | None, result: dict | Non
         out["now"] = ("Weak setup: " + (f"rallies toward Rs {out['sell_zone'][0]:,.2f} to {out['sell_zone'][1]:,.2f} are where "
                                          "holders can lighten" if out.get("sell_zone") else "the price is at a high")
                       + (f"; a close below Rs {lv['s1']:,.2f} breaks support." if lv.get("s1") else "."))
-    if fv.get("nav") and fv["nav"] > 0:
+    if fv.get("nav") and fv["nav"] > 0 and not large:  # the asset-zone method is for mid and small caps
         out["asset_zone"] = (round(0.8 * fv["nav"], 2), round(1.2 * fv["nav"], 2))
+    if lv.get("s1") and lv.get("r1") and lv["r1"] < lv["s1"] * 1.03:
+        out["info"].append(f"Support Rs {lv['s1']:,.2f} and resistance Rs {lv['r1']:,.2f} are less than 3% apart: "
+                           "the levels leave little room either way")
     return out
 
 
@@ -181,4 +196,4 @@ def lines(su: dict) -> list[str]:
     L += [("For: " if s > 0 else "Against: ") + t for s, t in su["votes"]]
     if not su["votes"]:
         L.append("No tested signal points either way today.")
-    return L
+    return L + list(su.get("info") or [])

@@ -107,6 +107,22 @@ def risk_free(sbp: dict | None) -> float | None:
     return float(pr) if pr and 3 < pr < 40 else None
 
 
+def rf_source(sbp: dict | None, cfg: dict) -> str:
+    """Where the required return comes from, in words (shown on the cards)."""
+    sbp = sbp or {}
+    erp = float((cfg.get("fair_value") or {}).get("erp", 5.0))
+    pib = sbp.get("pib") or {}
+    y10 = (pib.get("yields") or {}).get("10-Y")
+    if y10 and 3 < y10 < 40:
+        return (f"required return {y10 + erp:.2f}% = 10-year PIB yield {y10:.2f}% (SBP, {pib.get('as_on', 'latest')}) "
+                f"+ {erp:.0f}% equity risk premium")
+    pr = sbp.get("policy_rate")
+    if pr and 3 < pr < 40:
+        return f"required return {pr + erp:.2f}% = SBP policy rate {pr:.2f}% (10-year PIB yield not available) + {erp:.0f}%"
+    rf = float((cfg.get("fair_value") or {}).get("risk_free", 12.0))
+    return f"required return {rf + erp:.2f}% = assumed risk-free {rf:.2f}% (SBP figures not available) + {erp:.0f}%"
+
+
 def coe(cfg: dict, rf: float | None) -> float:
     fv = cfg.get("fair_value") or {}
     rf = rf if rf else float(fv.get("risk_free", 12.0))
@@ -228,6 +244,18 @@ def lines(fv: dict) -> list[str]:
                if fv.get("eps_used") is not None and fv["eps_used"] <= 0 else "earnings could not be verified")
         L.append(f"No fair value from earnings or dividends ({why}). The only anchor is book value Rs {fv['nav']:,.2f} "
                  f"a share; the price is {fv.get('pb', 0):.2f}x that, and losses keep lowering it")
+    oo = fv.get("oneoff")
+    if oo and fv.get("ttm_reported") is not None:
+        q = f"FY{oo['key'][2:4]} Q{oo['key'][-1]}"
+        if not oo["latest"] and fv.get("eps_used") is not None:
+            L.append(f"{q} EPS {oo['eps']:,.2f} was {oo['eps'] / oo['typical']:.1f}x the other recent quarters (possibly a "
+                     f"one-off): counted at their typical {oo['typical']:,.2f}, trailing EPS is {fv['eps_used']:,.2f} and the "
+                     f"fair value Rs {fv['fair']:,.2f}"
+                     + (f"; if that quarter's level repeats (reported trailing EPS {fv['ttm_reported']:,.2f}) it is Rs "
+                        f"{fv['fair_reported']:,.2f}" if fv.get("fair_reported") else ""))
+        elif oo["latest"]:
+            L.append(f"The latest quarter ({q}, EPS {oo['eps']:,.2f}) is {oo['eps'] / oo['typical']:.1f}x the three before "
+                     "it: if it does not repeat, the fair value above is too high")
     if fv.get("assets") and not fv["financial"]:
         L.append(f"At the {fv['bs_year']} year end, per share: assets Rs {fv['assets']:,.2f}, liabilities Rs "
                  f"{fv['liabilities']:,.2f} ({fv['liab_pct']:.0f}% of assets), book value Rs {fv['bv_year']:,.2f}")

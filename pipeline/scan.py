@@ -72,9 +72,7 @@ def _last_result(sym: str, session: str) -> dict | None:
     q, q_ly = r.get("eps_q"), r.get("eps_q_ly")
     which = "fourth-quarter" if r.get("kind") in ("FY", "CY") else "quarterly"
     if q == q and q is not None and q_ly == q_ly and q_ly is not None:
-        tail = (f" ({(q / q_ly - 1) * 100:+.0f}%)" if q_ly > 0 else (" (back to profit)" if q > 0 > q_ly else
-                                                                     (" (turned to a loss)" if q < 0 < q_ly else "")))
-        line = f"{which} EPS {q:.2f} vs {q_ly:.2f} a year ago{tail}"
+        line = f"{which} EPS {q:.2f} vs {q_ly:.2f} a year ago{earnings.change_word(q, q_ly)}"
     else:
         a = earnings.assess(sym, r["label"])
         line = earnings.eps_line(a) if a else ""

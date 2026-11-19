@@ -30,8 +30,11 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
     chg = v.get("chg_pct")
     c.text(c.R, y + 40, f"Rs {v.get('price', 0):,.2f}", 34, CREAM, bold=True, ha="right")
     if chg is not None:
-        c.text(c.R, y + 84, f"{_tri(chg)} {chg:+.2f}% today", 15, _col(chg), bold=True, ha="right")
-    c.text(c.L + 4, y + 146, sp(clean(d["sector"]).title()[:44]), 11.5, t["muted"])
+        from .common import now_pkt
+        when = "today" if session == now_pkt().strftime("%Y-%m-%d") else             "on " + datetime.strptime(session, "%Y-%m-%d").strftime("%a %d %b")  # the last session's move at night
+        c.text(c.R, y + 84, f"{_tri(chg)} {chg:+.2f}% {when}", 15, _col(chg), bold=True, ha="right")
+    basis = " · group (consolidated) figures" if "consolidated" in (d.get("name") or "").lower() else ""
+    c.text(c.L + 4, y + 146, sp(clean(d["sector"]).title()[:44] + basis.upper()), 11.5, t["muted"])
     y += 176
 
     # the call
@@ -78,17 +81,34 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
     # key numbers
     a20, b20 = d["rel"].get(20) or (None, None)
     rel20 = a20 - b20 if a20 is not None and b20 is not None else None
-    hi52 = max((p[2] for p in d["px"][-250:]), default=None) or v.get("52high")  # adjusted for bonus / split
+    # 52-week high = highest intraday HIGH (as SCS and the chart read measure it; adjusted for bonus / split).
+    # Until 20 Nov 2026 this tile used the highest close, so one card showed -15.1% here and "17% below" below.
+    hi52 = max((p[4] or p[2] for p in d["px"][-250:] if len(p) > 4), default=None) or v.get("52high")
     off_hi = (v["price"] / hi52 - 1) * 100 if hi52 and v.get("price") else None
-    y = c.tiles(y, [("Expected P/E (SCS)", _f(v.get("epe")), None), ("Price to book", _f(v.get("pbv"), "x", 2), None),
-                    ("Expected dividend yield", _f(v.get("edy"), "%"), None), ("Return on equity", _f(v.get("roe"), "%"), None),
-                    ("Beta", _f(v.get("beta"), "", 2), None), ("EV to EBITDA", _f(v.get("eve")), None),
-                    ("1 month vs KSE-100", "n/a" if rel20 is None else f"{rel20:+.1f} pts", None),
+    fv = d.get("fv") or {}
+    pb = fv.get("pb") if fv.get("pb") else v.get("pbv")  # on the checked (and updated) book value, as the fair value panel
+    eve = v.get("eve")
+    y = c.tiles(y, [("Expected P/E (SCS)", _f(v.get("epe")) if (v.get("epe") or 0) > 0 else "n/a", None),
+                    ("Price to book", _f(pb, "x", 2), None),
+                    ("Expected dividend yield (SCS)", _f(v.get("edy"), "%"), None),
+                    ("ROE, last full year", _f(v.get("roe"), "%"), None),
+                    # one beta on the card: ours (1 year of daily returns vs the KSE-100, as in the maths line)
+                    (("Beta, 1 year", _f((d.get("patterns") or {}).get("beta"), "", 2), None)
+                     if (d.get("patterns") or {}).get("beta") is not None else ("Beta (SCS)", _f(v.get("beta"), "", 2), None)),
+                    ("EV to EBITDA", _f(eve) if eve is not None and eve > 0 else ("n/a (negative)" if eve is not None else "n/a"), None),
+                    ("1 month vs KSE-100", "n/a" if rel20 is None else (f"beat it by {rel20:.1f}%" if rel20 >= 0
+                                                                       else f"lagged by {-rel20:.1f}%"), None),
                     ("From 52-week high", "n/a" if off_hi is None else f"{off_hi:+.1f}%", None)],
                 cols=4, tile_h=90)
     if d.get("fv"):
         from .underdogcard import fv_items
         y = c.tiles(y, fv_items(d["fv"], d.get("fv_rank")), title="Fair value and balance sheet", cols=4, tile_h=88)
+        from .fairvalue import lines as fv_lines
+        odd = [x for x in fv_lines(d["fv"]) if "one-off" in x or "latest quarter" in x or "upper bound" in x
+               or "disagree" in x]
+        if odd:  # an unusual quarter or disagreeing methods: say why the range is wide, on the card itself
+            y = c.highlights(y, [x.split("; the methods disagree")[0] if "one-off" in x else x for x in odd],
+                             title="Read the fair value with care", max_lines=6)
 
     # 12-month chart: price, 50-day average, support / resistance, KSE-100 rebased
     px = d["px"][-250:]
@@ -179,7 +199,9 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
 
     # quarterly EPS vs the same quarter a year earlier
     # the snapshot can be a quarter behind: add the quarters checked against the results announcements
-    q = {**(d["snap"].get("eps_quarters") or {}), **((d.get("ver") or {}).get("quarters") or {})}
+    # one set of quarters for the whole card: the same figures as the trailing EPS and the results posts
+    q = (d.get("ver") or {}).get("all_quarters") or {**(d["snap"].get("eps_quarters") or {}),
+                                                     **((d.get("ver") or {}).get("quarters") or {})}
     keys = sorted(q, key=lambda k: (k[:4], k[-1]))[-5:]
     pairs = [(k, q[k], q.get(f"{int(k[:4]) - 1} {k[-2:]}")) for k in keys]
     pairs = [p for p in pairs if p[2] is not None]
@@ -195,12 +217,11 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
         top = max(max(p[1], p[2]) for p in pairs) or 1
         ax.set_ylim(min(0, min(min(p[1], p[2]) for p in pairs)) * 1.2, top * 1.08)
         ax.set_xlim(-0.6, len(pairs) - 0.4)
+        from .earnings import change_word
         for i, (k, now_, ly) in enumerate(pairs):
             fx = c.L + 40 + 920 * (i + 0.6) / (len(pairs) + 0.2)
-            g = (now_ / ly - 1) * 100 if ly and ly > 0 else None
-            tag = f" ({g:+.0f}%)" if g is not None else (" (to profit)" if now_ > 0 > ly else "")
-            c.text(fx, y + 76, f"{now_:.2f}" + tag, 11.5, _col(g) if g is not None else (UP if tag else CREAM),
-                   bold=True, ha="center")
+            tag = change_word(now_, ly).replace("back to profit", "to profit").replace("turned to a loss", "to a loss")
+            c.text(fx, y + 76, f"{now_:.2f}" + tag, 11.5, _col(now_ - ly) if tag else CREAM, bold=True, ha="center")
             c.text(fx, y + ph - 26, f"FY{k[2:4]} {k[-2:]}", 10.5, t["muted"], ha="center")
         y += ph + 16
 
@@ -241,8 +262,10 @@ def _draw(c: Card, d: dict, call: dict, sb: dict, session: str) -> int:
     chk = ("Data checks passed: price matches the exchange, the last 4 quarters match the results announcements, "
            "book value and price to book cross-checked." if not ver.get("problems") else
            "Data check problem (no fair value shown): " + "; ".join(ver["problems"][:2]))
-    chk += "".join(f" {n[0].upper()}{n[1:]}." for n in (ver.get("notes") or [])[:2])
-    lines = _wrap(chk, 930, 12.5)[:4] + _wrap("Lab record: " + record_line(sb), 930, 12.5)[:3]
+    chk += "".join(f" {n[0].upper()}{n[1:]}." for n in (ver.get("notes") or [])[:3])
+    if d.get("coe_note"):
+        chk += f" Fair value: {d['coe_note']}."
+    lines = _wrap(chk, 930, 12.5)[:7] + _wrap("Lab record: " + record_line(sb), 930, 12.5)[:3]
     ph = 40 + 26 * len(lines)
     c.panel(c.L, y, 1000, ph, fill=t["tile"])
     for j, ln in enumerate(lines):
@@ -262,7 +285,9 @@ def lab_card(cfg: dict, d: dict, call: dict, sb: dict, session: str) -> bytes:
             last = idx.get(p[0], last)
             reb.append(last / base * px[0][2])
         d["_index_rebased"] = np.array(reb)
-    probe = Card(cfg, "research", height=3400)
+    # measured on a tall canvas: on a 3400 px one, long cards dropped lines near the bottom and came out too short,
+    # so the last panels ran into the footer (OGDC, 20 Nov 2026)
+    probe = Card(cfg, "research", height=9000)
     need = _draw(probe, d, call, sb, session)
     plt.close(probe.fig)
     c = Card(cfg, "research", height=int(need + 190))

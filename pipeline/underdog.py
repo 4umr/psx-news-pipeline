@@ -237,11 +237,25 @@ def verify(sym: str, snap: dict, close: float | None, cost: float) -> dict:
         bv_note = (f"book value updated for {', '.join(a['key'] for a in t['added'])}: Rs {v['bv']:,.2f} "
                    f"{'+' if change >= 0 else '-'} Rs {abs(change):,.2f} = Rs {bv_now:,.2f} (estimate until the next balance sheet)")
     snap_now = {**snap, "values": {**v, "bv": bv_now}} if bv_now != v.get("bv") else snap
-    fv = fairvalue.compute(snap_now, cost, None if (t["problems"] or probs) else t["ttm"], bvh)
+    # an unusual earlier quarter (one-off gain) is counted at the typical level of the other three, so it does not
+    # inflate the fair value (OGDC FY26 Q4 29.55 vs about 9-14): the card states both figures
+    oo, ttm_fv = t.get("oneoff"), t["ttm"]
+    if oo and not oo["latest"] and ttm_fv is not None:
+        ttm_fv = ttm_fv - oo["eps"] + oo["typical"]
+    fv = fairvalue.compute(snap_now, cost, None if (t["problems"] or probs) else ttm_fv, bvh)
+    fv["ttm_reported"], fv["oneoff"] = t["ttm"], oo
+    if ttm_fv != t["ttm"] and fv.get("fair") and not (t["problems"] or probs):
+        # whether the quarter was a one-off is a judgment: the range covers both readings
+        alt = fairvalue.compute(snap_now, cost, t["ttm"], bvh)
+        if alt.get("fair"):
+            fv["fair_reported"] = alt["fair"]
+            fv["low"], fv["high"] = min(fv["low"], alt["low"]), max(fv["high"], alt["high"])
+            fv["agree"] = False
     if bv_now is not None and bv_now <= 0:
         probs.append(f"book value is negative after the latest results (Rs {bv_now:,.2f})")
     return {"fv": fv, "problems": probs + t["problems"], "notes": t["notes"] + ([bv_note] if bv_note else []),
-            "quarters": dict(t["quarters"]), "ttm": t["ttm"], "bv_hist": bvh, "bv_now": bv_now}
+            "quarters": dict(t["quarters"]), "ttm": t["ttm"], "bv_hist": bvh, "bv_now": bv_now,
+            "all_quarters": t.get("all_quarters") or {}}
 
 
 def watch_detail(sym: str, snap: dict, ver: dict, meetings: list[dict], session: str) -> dict:

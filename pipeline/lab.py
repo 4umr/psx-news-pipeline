@@ -141,6 +141,30 @@ def _news(query: str, days: int = 14, n: int = 8) -> list[dict]:
     return out
 
 
+def psx_check(snap: dict, pc: dict, ours: dict | None = None) -> dict:
+    """Third source: the exchange's own company page. It shows STANDALONE figures, so it is compared only when
+    scstrade's are standalone too (its company name then lacks 'Consolidated'). Returns {matched, differ, note}."""
+    out = {"matched": [], "differ": [], "note": ""}
+    qe = pc.get("quarterly_eps") or {}
+    if isinstance(qe, list):
+        qe = dict(qe)
+    if not qe:
+        return out
+    if "consolidated" in (snap.get("name") or "").lower():
+        out["note"] = "PSX's page shows standalone figures; these are group figures, so they are not compared"
+        return out
+    ours = dict(ours or snap.get("eps_quarters") or {})
+    for k, e in qe.items():
+        m = re.match(r"Q(\d)\s+(\d{4})", str(k))
+        if not m or e is None:
+            continue
+        key = f"{m.group(2)} Q{m.group(1)}"
+        if key in ours:
+            (out["matched"] if abs(ours[key] - e) <= max(0.02, abs(e) * 0.02) else out["differ"]).append(
+                (key, ours[key], float(e)))
+    return out
+
+
 def dossier(sym: str, shared: dict, cfg: dict) -> dict | None:
     """Everything about one company, as structured data plus the text the AI reads."""
     from . import flows
@@ -184,9 +208,10 @@ def dossier(sym: str, shared: dict, cfg: dict) -> dict | None:
         for x in shared["xdates"] if (x.get("company_code") or "").strip() == sym and x.get("date")
         and f"{x['date']:%Y-%m-%d}" >= today]
     try:
-        d["filings"] = [f"{f['date']}: {f['title'][:110]}" for f in (psx.company(sym) or {}).get("filings", [])[:6]]
+        pc = psx.company(sym) or {}
+        d["filings"] = [f"{f['date']}: {f['title'][:110]}" for f in pc.get("filings", [])[:6]]
     except Exception:  # noqa: BLE001
-        d["filings"] = []
+        pc, d["filings"] = {}, []
     terms = (_cfg(cfg).get("news_terms") or {}).get(sym) or f'"{sym}"'
     d["news"] = _news(f"{terms} Pakistan")
     words = [w.lower() for w in re.findall(r"[A-Za-z]{4,}", terms)] + [sym.lower()]
@@ -198,6 +223,15 @@ def dossier(sym: str, shared: dict, cfg: dict) -> dict | None:
     ver = underdog.verify(sym, snap, ((shared.get("act") or {}).get(sym) or {}).get("trading_close"),
                           shared.get("coe") or fairvalue.coe(cfg, None))
     d["fv"], d["ver"] = ver["fv"], ver
+    d["coe_note"] = shared.get("coe_note") or ""
+    d["psx_check"] = pck = psx_check(snap, pc, ver.get("all_quarters"))
+    if pck["differ"]:
+        ver["notes"].append("PSX's own page differs: " + "; ".join(
+            f"{k} {a:.2f} here vs {b:.2f} on PSX" for k, a, b in pck["differ"][:2]))
+    elif pck["matched"]:
+        ver["notes"].append(f"the last {len(pck['matched'])} quarters also match PSX's own company page")
+    elif pck["note"]:
+        ver["notes"].append(pck["note"])
     extra = "\nFAIR VALUE AND BALANCE SHEET: " + " ".join(fairvalue.lines(d["fv"]))
     if ver["quarters"]:
         extra += "\nTRAILING 4 QUARTERS EPS (checked against the results announcements): " + ", ".join(
@@ -248,7 +282,9 @@ def dossier(sym: str, shared: dict, cfg: dict) -> dict | None:
 
 def _text(d: dict, shared: dict) -> str:
     s, v, p = d["snap"], d["snap"]["values"], d["snap"]["period"]
-    L = [f"COMPANY: {d['sym']} {d['name']} | sector: {d['sector']} | as of {shared['session']}",
+    basis = ("group (consolidated) figures: EPS, book value and ratios include subsidiaries"
+             if "consolidated" in (d.get("name") or "").lower() else "company figures")
+    L = [f"COMPANY: {d['sym']} {d['name']} | sector: {d['sector']} | as of {shared['session']} | basis: {basis}",
          f"PRICE: Rs {_f(v.get('price'))} ({_f(v.get('chg_pct'))}% today) | market cap Rs {_f(v.get('mktcap'))} bn | "
          f"beta {_f(v.get('beta'))} | free float {_f(v.get('freefloat'))} mn of {_f(v.get('nos'))} mn shares"]
     rel = d["rel"]
@@ -271,8 +307,9 @@ def _text(d: dict, shared: dict) -> str:
              f"expected Rs {_f(v.get('ed'))} (yield {_f(v.get('edy'))}%); payout {_f(v.get('pr'))}%")
     if s.get("eps_annual"):
         L.append("EPS BY YEAR: " + ", ".join(f"{y} {e:.2f}" for y, e in s["eps_annual"].items()))
-    if s.get("eps_quarters"):
-        q = sorted(s["eps_quarters"].items(), key=lambda kv: (kv[0][:4], kv[0][-1]))[-8:]
+    allq = (d.get("ver") or {}).get("all_quarters") or s.get("eps_quarters")  # the same quarters the card shows
+    if allq:
+        q = sorted(allq.items(), key=lambda kv: (kv[0][:4], kv[0][-1]))[-8:]
         L.append("EPS BY QUARTER (fiscal year, quarter): " + ", ".join(f"{k} {e:.2f}" for k, e in q))
     if d["results"]:
         parts = []
@@ -280,7 +317,7 @@ def _text(d: dict, shared: dict) -> str:
             if r["eps"] is not None:
                 txt = f"{r['date']} {r['label']}: quarter EPS {_f(r['eps'])}"
                 if r["eps_ly"] is not None:
-                    txt += f" vs {_f(r['eps_ly'])} a year ago" + (f" ({r['yoy']:+.0f}%)" if r["yoy"] is not None else "")
+                    txt += f" vs {_f(r['eps_ly'])} a year ago" + earnings.change_word(r["eps"], r["eps_ly"])
             elif r["cum"] is not None:
                 txt = f"{r['date']} {r['label']}: year-to-date EPS {_f(r['cum'])}" + (
                     f" vs {_f(r['cum_ly'])} a year ago" if r["cum_ly"] is not None else "")
@@ -588,7 +625,8 @@ def note_analysis(sym: str, cfg: dict) -> dict:
     act = {r["company_code"].strip(): r for r in scs.daily_activity() if r.get("company_code")}
     shared = {"index": idx, "session": max(idx) if idx else now_pkt().strftime("%Y-%m-%d"), "tech": scs_deep.technicals(),
               "opinions": {}, "meetings": scs.board_meetings(), "xdates": scs.book_closures(), "brokers": [], "flows": [],
-              "act": act, "context": "", "coe": fairvalue.coe(cfg, fairvalue.risk_free(sbp_snap)), "rs": _try(_rs_ranks) or {},
+              "act": act, "context": "", "coe": fairvalue.coe(cfg, fairvalue.risk_free(sbp_snap)),
+              "coe_note": fairvalue.rf_source(sbp_snap, cfg), "rs": _try(_rs_ranks) or {},
               "regime": _try(_regime, idx) or {}}
     d = dossier(sym, shared, cfg)
     if not d:
@@ -835,8 +873,10 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
         log.warning("lab: no index data")
         return
     session = max(idx)
-    if only:  # on request during the day: today's live figures, dated today
-        session = now_pkt().strftime("%Y-%m-%d")
+    if only:  # on request: dated today only if PSX trades today (at night or at the weekend: the last session)
+        from . import watchers
+        if watchers.view_session(scs.kse100_view(), State(), now_pkt()) == "today":
+            session = now_pkt().strftime("%Y-%m-%d")
     if not only:
         if st.get("last") == session and not force:
             log.info("lab: session %s already done", session)
@@ -847,14 +887,22 @@ def run(cfg: dict, dry: bool = False, force: bool = False, symbols: list[str] | 
     syms = symbols or conf.get("symbols") or ["FFC", "UBL", "MEBL", "ENGROH", "OGDC"]
     view = scs.kse100_view()
     analysis.init(State(), cfg)
-    policy = fairvalue.risk_free(State().snap("sbp"))  # 10-year PIB yield, else the policy rate
+    sbp_snap = State().snap("sbp")
+    if not (sbp_snap or {}).get("pib"):
+        try:  # no news-pipeline state (or no PIB in it): read the 10-year PIB yield from SBP directly
+            from .sources import sbp
+            sbp_snap = sbp.fetch()[0] or sbp_snap
+        except Exception:  # noqa: BLE001
+            pass
+    policy = fairvalue.risk_free(sbp_snap)  # 10-year PIB yield, else the policy rate
     end = now_pkt().replace(tzinfo=None)
     act = {r["company_code"].strip(): r for r in scs.daily_activity() if r.get("company_code")}
     shared = {"index": idx, "session": session, "tech": scs_deep.technicals(), "opinions": scs_deep.opinions(),
               "meetings": scs.board_meetings(), "xdates": scs.book_closures(), "brokers": brokers.reports(),
               "flows": flows.week(end - timedelta(days=28), end), "act": act,
               "context": context.build(State(), view, (State().snap("mk_last") or {})),
-              "coe": fairvalue.coe(cfg, policy), "rs": _try(_rs_ranks), "regime": _try(_regime, idx)}
+              "coe": fairvalue.coe(cfg, policy), "coe_note": fairvalue.rf_source(sbp_snap, cfg),
+              "rs": _try(_rs_ranks), "regime": _try(_regime, idx)}
     with ThreadPoolExecutor(3) as ex:
         dossiers = dict(zip(syms, ex.map(lambda x: _try(dossier, x, shared, cfg), syms)))
     if not only:

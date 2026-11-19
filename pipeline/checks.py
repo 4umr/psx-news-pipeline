@@ -81,14 +81,46 @@ def ann_quarters(h) -> dict[str, float]:
     return out
 
 
+def pick_quarter(snap_v: float | None, ann_v: float | None) -> float | None:
+    """One quarter's EPS from the two scstrade datasets. Close to each other (within 15%): the announced figure,
+    which is what the company published (restated where it restated). Far apart: the snapshot, which SCS
+    restates for splits and bonus issues while old announcements keep the old share count (LUCK HY25: 73.17
+    announced before its 5-for-1 split, 14.63 on the snapshot)."""
+    if snap_v is None:
+        return ann_v
+    if ann_v is None:
+        return snap_v
+    return ann_v if abs(ann_v - snap_v) <= max(0.02, 0.15 * abs(snap_v)) else snap_v
+
+
+def oneoff(quarters: list[tuple[str, float]]) -> dict | None:
+    """An unusual quarter inside the trailing four: positive, at least 2x the median of the other three (which
+    must be profitable) and not the latest one (a jump in the LATEST quarter may be the new normal: flagged only).
+    OGDC FY26 Q4 (Rs 29.55 against 8-14 in the other quarters) made its trailing EPS 61 instead of about 41.
+    Returns {key, eps, typical, latest} or None."""
+    from statistics import median
+    if len(quarters) != 4:
+        return None
+    best = None
+    for i, (k, e) in enumerate(quarters):
+        rest = [x for j, (_, x) in enumerate(quarters) if j != i]
+        med = median(rest)
+        if med > 0 and e > 2 * med and e - med >= 0.5 and (best is None or e / med > best["eps"] / best["typical"]):
+            best = {"key": k, "eps": e, "typical": med, "latest": i == 3}
+    return best
+
+
 def trailing(sym: str, snap: dict) -> dict:
-    """Trailing 12-month EPS from the last 4 consecutive quarters, the results announcements taking priority
-    for quarters the snapshot does not have yet (it can be a quarter behind) and every overlapping quarter
-    cross-checked. Returns {ttm, quarters, problems, notes}."""
+    """Trailing 12-month EPS from the last 4 consecutive quarters. The company's own results announcements come
+    first (they carry the figures the company published, restated where it restated them); the snapshot fills
+    quarters the announcements lack, and every quarter both have is cross-checked. Before 20 Nov 2026 the snapshot
+    came first: its split of restated years can differ (FFC 2025 Q3: 16.63 on the snapshot, 17.24 announced), so a
+    card could show +19% for a quarter the results post called +14%.
+    Returns {ttm, quarters, all_quarters, oneoff, problems, notes}."""
     import pandas as pd
 
     from . import earnings
-    out = {"ttm": None, "quarters": [], "problems": [], "notes": []}
+    out = {"ttm": None, "quarters": [], "problems": [], "notes": [], "all_quarters": {}, "oneoff": None}
     snap_q = dict(snap.get("eps_quarters") or {})
     try:
         h = earnings.company(sym)
@@ -96,10 +128,8 @@ def trailing(sym: str, snap: dict) -> dict:
         h = None
         out["notes"].append(f"results history unavailable ({type(e).__name__})")
     ann = ann_quarters(h) if h is not None and len(h) else {}
-    merged = dict(snap_q)
-    for k, e in ann.items():
-        if k not in merged:
-            merged[k] = e
+    merged = {k: pick_quarter(snap_q.get(k), ann.get(k)) for k in set(snap_q) | set(ann)}
+    out["all_quarters"] = merged
     used, _ = last4(merged)
     for k in used:  # only the quarters we use: older ones differ where the snapshot restated EPS for splits
         if k not in ann or k not in snap_q:
@@ -123,6 +153,7 @@ def trailing(sym: str, snap: dict) -> dict:
     if len(keys) == 4 and ok:
         out["ttm"] = sum(merged[k] for k in keys)
         out["quarters"] = [(k, merged[k]) for k in keys]
+        out["oneoff"] = oneoff(out["quarters"])
     else:
         out["problems"].append("no 4 consecutive quarters of EPS")
     if h is not None and len(h) and "bonus" in h:

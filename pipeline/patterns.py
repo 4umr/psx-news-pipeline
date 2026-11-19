@@ -343,7 +343,7 @@ def read(px: list[tuple], idx: dict[str, float] | None = None) -> dict:
             rr = np.diff(np.log(c[ok]))[-250:]
             rk = np.diff(np.log(k[ok]))[-250:]
             if rk.std() > 0:
-                out["beta"] = float(np.cov(rr, rk)[0, 1] / rk.var())
+                out["beta"] = float(np.cov(rr, rk, ddof=0)[0, 1] / rk.var())  # same divisor top and bottom
                 out["corr"] = float(np.corrcoef(rr, rk)[0, 1])
     return out
 
