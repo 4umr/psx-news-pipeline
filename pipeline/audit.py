@@ -23,6 +23,13 @@ def problems(state, cfg: dict, now: datetime) -> list[str]:
         if k.startswith("wfgaveup:") and k.endswith(day):
             wf = k.split(":")[1:-1]
             out.append(f"Could not start {' '.join(wf)} on time (GitHub refused 3 times); its own late schedule ran it.")
+    now_ts = now.timestamp()
+    for url, f in sorted((state.data.get("feeds") or {}).items()):
+        if f.get("newest") and now_ts - f["newest"] > 5 * 86400:
+            out.append(f"News feed '{f.get('name')}' has had no new story for {(now_ts - f['newest']) / 86400:.0f} days "
+                       f"(its address may have changed): {url}")
+        elif f.get("ok") and now_ts - f["ok"] > 2 * 86400:
+            out.append(f"News feed '{f.get('name')}' has not answered for {(now_ts - f['ok']) / 86400:.0f} days: {url}")
     if not weekday:
         return out
     official = dict(watchers.official_closes())

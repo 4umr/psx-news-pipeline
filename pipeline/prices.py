@@ -129,7 +129,8 @@ def meta(symbols: list[str], max_age_days: int = 30, workers: int = 2, per_run: 
             p = psx.company(s)
             with lock:
                 streak[0] = streak[0] + 1 if p is None else 0
-            return s, None if p is None else {k: p[k] for k in ("shares", "free_float", "free_float_pct") if k in p}
+            return s, None if p is None else {k: p[k] for k in ("shares", "free_float", "free_float_pct", "face_value")
+                                              if k in p}
 
         with ThreadPoolExecutor(workers) as ex:
             for s, info in ex.map(one, todo):

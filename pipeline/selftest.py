@@ -189,6 +189,9 @@ def levels_tests() -> list[str]:
     oo = _ck.oneoff([("2026 Q2", 8.07), ("2026 Q3", 9.82), ("2026 Q4", 29.55), ("2027 Q1", 13.6)])
     ok("one-off quarter: OGDC FY26 Q4", oo and oo["key"] == "2026 Q4" and not oo["latest"] and _close(oo["typical"], 9.82))
     ok("no one-off in a steady year", _ck.oneoff([("a", 15.14), ("b", 13.62), ("c", 15.43), ("d", 19.72)]) is None)
+    seas = {"2025 Q1": 1.0, "2025 Q2": 6.0, "2025 Q3": 1.2, "2025 Q4": 0.9}
+    ok("a quarter that is big every year is seasonal, not a one-off",
+       _ck.oneoff([("2026 Q1", 1.1), ("2026 Q2", 6.5), ("2026 Q3", 1.3), ("2026 Q4", 1.0)], seas) is None)
     # a 10-for-1 split: 100 -> opens at 10; earlier prices become 10, volume x10
     adj = lab.adjust_jumps([("2026-01-01", 100.0, 100.0, 1000, 101.0, 99.0), ("2026-01-02", 100.0, 100.0, 1000, 101.0, 99.0),
                             ("2026-01-05", 10.0, 10.2, 10000, 10.5, 9.9)])

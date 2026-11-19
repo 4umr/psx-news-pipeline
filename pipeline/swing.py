@@ -754,11 +754,24 @@ def _payouts(cfg, last: pd.DataFrame, min_adtv: float, now) -> bytes | None:
     from .cards import payouts_card
     s0 = pd.Timestamp(now.strftime("%Y-%m-%d"))
     rows = []
+    from .earnings import _pct
+    try:  # face value per share from PSX's company pages (prices.meta), so the payout can be shown in rupees
+        faces = {k: v.get("face_value") for k, v in json.loads(prices.META_PATH.read_text(encoding="utf-8")).items()}
+    except Exception:  # noqa: BLE001
+        faces = {}
+    n_rs = 0
     for b in scs.book_closures():
         sym = (b.get("company_code") or "").strip()
         if not b.get("date") or not (s0 <= pd.Timestamp(b["date"]) < s0 + pd.Timedelta(days=15)):
             continue
-        pay = " ".join(x for x in (f"Dividend {b['bm_dividend'].strip()}" if (b.get("bm_dividend") or "").strip() else "",
+        div = (b.get("bm_dividend") or "").strip()
+        dtxt = f"Dividend {div}" if div else ""
+        pct, fvl = _pct(div), faces.get(sym)
+        if div and pct and fvl and sym in last.index and last.at[sym, "c"]:
+            rs = pct / 100 * fvl  # % of face value -> rupees per share, and as a yield on today's price
+            dtxt = f"Dividend Rs {rs:,.2f} ({rs / last.at[sym, 'c'] * 100:.1f}%)"
+            n_rs += 1
+        pay = " ".join(x for x in (dtxt,
                                     f"Bonus {b['bm_bonus'].strip()}" if (b.get("bm_bonus") or "").strip() else "",
                                     f"Right {b['bm_right_per'].strip()}" if (b.get("bm_right_per") or "").strip() else "") if x)
         if not pay:
@@ -771,8 +784,8 @@ def _payouts(cfg, last: pd.DataFrame, min_adtv: float, now) -> bytes | None:
     rows.sort(key=lambda r: (r[0], r[1]))
     shown = rows[:15]
     n_more = len(rows) - len(shown)
-    notes = ["Payouts are % of face value as announced (Rs 10 for most companies, not all).",
-             "On the ex-date the price usually drops by about the payout."]
+    notes = (["Cash dividends in rupees a share and as % of the price, from the announced % of face value and each "
+              "company's face value on PSX."] if n_rs else []) +         (["Others: % of face value as announced (face value Rs 10 for most companies, not all)."] if n_rs < len(rows) else []) +         ["On the ex-date the price usually drops by about the payout."]
     if n_more:
         notes.insert(0, f"{n_more} more payouts (thinly traded stocks) are not shown.")
     return payouts_card(cfg, {"label": f"Next two weeks from {s0:%d %b %Y}",

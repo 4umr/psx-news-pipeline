@@ -242,7 +242,7 @@ feeds:
   - {name: "Business Recorder Markets", url: "https://www.brecorder.com/feeds/markets", pk: false}
   - {name: "Dawn Business", url: "https://www.dawn.com/feeds/business", pk: true}
   - {name: "Express Tribune", url: "https://tribune.com.pk/feed/business", pk: true}
-  - {name: "The News", url: "https://www.thenews.com.pk/rss/1/8", pk: true}
+  - {name: "The News", url: "https://www.thenews.com.pk/rss/1/4", pk: false}   # business (mostly world); /rss/1/8 stuck on 29 May 2026
   - {name: "ProPakistani", url: "https://propakistani.pk/category/business/feed/", pk: true}
   - {name: "Arab News PK", url: "https://www.arabnews.pk/rss.xml", pk: false}
   - {name: "PBS", url: "https://www.pbs.gov.pk/feed/", pk: true, official: true}

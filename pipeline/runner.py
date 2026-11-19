@@ -648,6 +648,14 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
         news_items = f_news.result()
     if not light and mk:
         state.set_snap("mk_last", mk)  # light passes reuse the last global snapshot (card tiles, context)
+    # feed freshness (the 23:45 self-audit reports a feed with nothing new for days)
+    fs = state.data.setdefault("feeds", {})
+    for url, (name, n, newest) in news.FEED_STATS.items():
+        old = fs.get(url) or {}
+        fs[url] = {"name": name, "n": n, "newest": max(newest or 0, old.get("newest") or 0) or None,
+                   "ok": int(time.time()) if n else old.get("ok")}
+    for url in [u for u in fs if u not in {f["url"] for f in cfg.get("feeds", [])}]:
+        del fs[url]  # a feed removed from the config
     if intraday.session_open(now) and not bootstrap:
         S("intraday record", lambda: intraday.record(now, scs.live_activity(view_now)[0], view_now))
     S("intraday housekeeping", intraday.housekeeping, now)

@@ -37,6 +37,37 @@ def _doc_url(a) -> str:
     return ""
 
 
+def equity(soup) -> dict:
+    """The 'Equity Profile' box as label/value pairs: market cap (Rs 000), shares, face value, free float (shares and
+    %). Read item by item: in Nov 2026 PSX added 'Face Value' between 'Shares' and 'Free Float', which broke the
+    old one-line pattern (shares and free float stopped updating; Stock of the Day showed them blank)."""
+    out: dict = {}
+    box = soup.find(id="equity") or soup
+    ff = []
+    for it in box.select("div.stats_item"):
+        lab, val = it.select_one(".stats_label"), it.select_one(".stats_value")
+        if not lab or not val:
+            continue
+        k, v = clean_ws(lab.get_text(" ")).lower(), clean_ws(val.get_text(" "))
+        n = _num(v.replace("%", ""))
+        if n is None:
+            continue
+        if k.startswith("market cap"):
+            out["mcap_000"] = n
+        elif k == "shares":
+            out["shares"] = int(n)
+        elif k.startswith("face value"):
+            out["face_value"] = n
+        elif k.startswith("free float"):
+            ff.append((v.endswith("%"), n))
+    for pct, n in ff:
+        if pct:
+            out["free_float_pct"] = n
+        else:
+            out["free_float"] = int(n)
+    return out
+
+
 def company(symbol: str) -> dict | None:
     try:
         r = http().get(f"{BASE}/company/{symbol}", timeout=25)
@@ -46,12 +77,7 @@ def company(symbol: str) -> dict | None:
         return None
     soup = BeautifulSoup(r.content, "lxml")
     out: dict = {"symbol": symbol, "filings": [], "annual_eps": {}, "quarterly_eps": {}}
-    # Equity profile: "Market Cap (000's) 31,173,170.66 Shares 923,649,501 Free Float 508,007,226 Free Float 55.00%"
-    prof = clean_ws(soup.get_text(" "))
-    if m := re.search(r"Shares\s+([\d,]+)\s+Free Float\s+([\d,]+)\s+Free Float\s+([\d.]+)%", prof):
-        out["shares"] = int(m.group(1).replace(",", ""))
-        out["free_float"] = int(m.group(2).replace(",", ""))
-        out["free_float_pct"] = float(m.group(3))
+    out.update({k: v for k, v in equity(soup).items() if k != "mcap_000"})
     ann_tables = []
     for t in soup.find_all("table"):
         head = [clean_ws(th.get_text(" ")) for th in t.find_all("tr")[0].find_all(["th", "td"])] if t.find("tr") else []
@@ -136,11 +162,7 @@ def profile(symbol: str) -> dict | None:
             out["quarterly" if any(c.startswith("Q") for c in cols) else "annual"] = data
         elif any("Margin" in lb for lb in labels):
             out["ratios"] = data
-    prof = clean_ws(soup.get_text(" "))
-    if m := re.search(r"Market Cap \(000'\s*s\s*\)\s*([\d,.]+)", prof):
-        out["mcap_000"] = _num(m.group(1))
-    if m := re.search(r"Shares\s+([\d,]+)\s+Free Float\s+([\d,]+)\s+Free Float\s+([\d.]+)%", prof):
-        out["shares"], out["free_float_pct"] = int(m.group(1).replace(",", "")), float(m.group(3))
+    out.update(equity(soup))
     return out
 
 

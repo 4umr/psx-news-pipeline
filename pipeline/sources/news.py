@@ -19,12 +19,19 @@ def _entry_time(e) -> datetime | None:
     return None
 
 
+# per RSS feed in this run: {url: (name, items, newest publication time)}; the runner keeps a history so a feed that
+# silently stops (The News business feed: nothing new from 29 May to 20 Nov 2026) shows up in the daily self-audit
+FEED_STATS: dict[str, tuple[str, int, float | None]] = {}
+
+
 def _fetch_feed(name: str, url: str, pk: bool, official: bool, google: bool = False) -> list[NewsItem]:
     try:
         r = http().get(url, timeout=25)
         r.raise_for_status()
     except Exception as e:  # noqa: BLE001
         log.warning("feed %s failed: %s", name, e)
+        if not google:
+            FEED_STATS[url] = (name, 0, None)
         return []
     parsed = feedparser.parse(r.content)
     items = []
@@ -44,6 +51,9 @@ def _fetch_feed(name: str, url: str, pk: bool, official: bool, google: bool = Fa
         items.append(NewsItem(title=title, url=e.get("link", ""), source=source,
                               published=_entry_time(e), summary=summary[:400],
                               pk=pk, official=official))
+    if not google:
+        newest = max((i.published.timestamp() for i in items if i.published), default=None)
+        FEED_STATS[url] = (name, len(items), newest)
     return items
 
 

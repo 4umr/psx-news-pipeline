@@ -93,7 +93,7 @@ def pick_quarter(snap_v: float | None, ann_v: float | None) -> float | None:
     return ann_v if abs(ann_v - snap_v) <= max(0.02, 0.15 * abs(snap_v)) else snap_v
 
 
-def oneoff(quarters: list[tuple[str, float]]) -> dict | None:
+def oneoff(quarters: list[tuple[str, float]], allq: dict[str, float] | None = None) -> dict | None:
     """An unusual quarter inside the trailing four: positive, at least 2x the median of the other three (which
     must be profitable) and not the latest one (a jump in the LATEST quarter may be the new normal: flagged only).
     OGDC FY26 Q4 (Rs 29.55 against 8-14 in the other quarters) made its trailing EPS 61 instead of about 41.
@@ -107,6 +107,15 @@ def oneoff(quarters: list[tuple[str, float]]) -> dict | None:
         med = median(rest)
         if med > 0 and e > 2 * med and e - med >= 0.5 and (best is None or e / med > best["eps"] / best["typical"]):
             best = {"key": k, "eps": e, "typical": med, "latest": i == 3}
+    if best and allq:
+        # seasonal, not one-off: the same quarter a year earlier also stood well above that year's other quarters
+        # (sugar mills' crushing quarter, for example)
+        y, q = int(best["key"][:4]) - 1, best["key"][-2:]
+        prev = allq.get(f"{y} {q}")
+        others = [allq.get(f"{y} Q{n}") for n in range(1, 5) if f"Q{n}" != q]
+        others = [x for x in others if x is not None]
+        if prev is not None and len(others) >= 2 and median(others) > 0 and prev >= 1.6 * median(others):
+            return None
     return best
 
 
@@ -153,7 +162,7 @@ def trailing(sym: str, snap: dict) -> dict:
     if len(keys) == 4 and ok:
         out["ttm"] = sum(merged[k] for k in keys)
         out["quarters"] = [(k, merged[k]) for k in keys]
-        out["oneoff"] = oneoff(out["quarters"])
+        out["oneoff"] = oneoff(out["quarters"], merged)
     else:
         out["problems"].append("no 4 consecutive quarters of EPS")
     if h is not None and len(h) and "bonus" in h:
