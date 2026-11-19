@@ -24,6 +24,15 @@ def _kse(idx: list[dict], name: str = "KSE 100") -> dict | None:
     return next((r for r in idx if r["kse_index_type"] == name), None)
 
 
+def fresh_indices(view: list[dict] | None, idx: list[dict] | None = None) -> list[dict]:
+    """scstrade's index table (KSE-30, KMI-30, All Share...) only when it is TODAY's: its KSE-100 equals the live
+    view's level. It is refreshed once a day after the close, so during the session it holds yesterday's numbers
+    (the midday 'movers and sectors' card showed them as current until 20 Nov 2026). Else []."""
+    idx = scs.indices() if idx is None else idx
+    k, cur = _kse(idx), (view[0].get("CurrentIndex") if view else None)
+    return idx if k and cur and abs(k["kse_index_close"] - cur) <= 1 else []
+
+
 def psx_block(idx: list[dict]) -> str:
     lines = []
     for name, label in (("KSE 100", "KSE-100"), ("KSE 30", "KSE-30"), ("KMI 30", "KMI-30"), ("KSE ALL", "All Share")):
@@ -563,10 +572,16 @@ def close(cfg: dict, state: State, mk: dict, view: list[dict] | None = None):
                 f"{section('📅', f'Next session · {nxt:%a %d %b}')}\n{cal}"
                 + footer(cfg, ["PSX"]))
         return text, None, ""
-    idx = scs.indices()
+    # the closing numbers (index closes, breadth, volume) come from scstrade's end-of-day tables, refreshed once
+    # after the close (13 and 19 Nov 2026: still yesterday's at 16:50). Wait until both are today's: no card is
+    # better than yesterday's numbers presented as today's. The brief retries every pass for 3 hours.
+    act = scs.daily_activity()
+    idx = fresh_indices(view)
+    if not idx or not scs.activity_is_today(act, view):
+        log.info("close brief waits: scstrade's end-of-day tables still show the previous session")
+        return None, None, ""
     fipi_today = (state.snap("fipi_last") or {}).get("date") == f"{now:%Y-%m-%d}"
     cal, _, _ = calendar_block(nxt, 1)
-    act = scs.daily_activity()
     st = state if fipi_today else _NoFipi(state)
     g = glance(idx, st, mk)
     text = (header("🔔", "PSX Closing Wrap", f"{now:%A, %d %B %Y}") + "\n"
@@ -761,7 +776,7 @@ def midday(cfg: dict, state: State, mk: dict, view=None):
     if cfg.get("brand", {}).get("cards", True):
         from .cards import midday_cards
         hl = [x for x in (_sector_line(view, act), _movers_line(view), _volume_line(act) if full else "") if x]
-        ctx = {"view": view, "act": act if full else [], "idx": scs.indices(), "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"),
+        ctx = {"view": view, "act": act if full else [], "idx": fresh_indices(view), "sbp": state.snap("sbp") or {}, "cpi": state.snap("cpi"),
                "hist": scs.index_history(45),
                "mk": mk, "intraday": (state.data.get("intraday") or {}).get(f"{now:%Y-%m-%d}"),
                "sectors": _sector_rows_for_card(view, act), "headlines": card_headlines(cfg, state, hours, 8),
@@ -800,7 +815,7 @@ def opening(cfg: dict, state: State, mk: dict, view=None):
     cards = None
     if cfg.get("brand", {}).get("cards", True):
         from .cards import opening_cards
-        ctx = {"view": view, "act": act if full else [], "idx": scs.indices(), "intraday": intra, "hist": scs.index_history(45),
+        ctx = {"view": view, "act": act if full else [], "idx": fresh_indices(view), "intraday": intra, "hist": scs.index_history(45),
                "highlights": hl}
         cards = _safe_card(opening_cards, cfg, now, ctx)
     return text, cards, brief_caption(cfg, f"<b>PSX Opening Bell</b> · {now:%A %d %b} · {now:%H:%M} PKT", state, 4, 2)
