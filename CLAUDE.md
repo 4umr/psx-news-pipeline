@@ -521,6 +521,17 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   mostly world, pk false). `news.FEED_STATS` -> state `feeds` -> self-audit warns after 5 days without a new story.
 - Self-test mutes its own log lines (made-up data looked like real events in the public log).
 - Not done (needs the scratch scripts): rebuild `analog_stats.json` and the backtests with the new parser.
+- TWO FAIR VALUES (Umer chose "show both models", 20 Nov 2026): `fairvalue._ri_fade` = residual income with ROE
+  moving in a straight line from ROE1 to COE over `FADE_YEARS` (10), book on the same growth path; from the normal
+  ROE in an abnormal year. `fv.fade`, `fv.fade_upside`. Cards: tiles "If returns stay (x%)" / "If returns fade
+  (y%)" + "How to read the fair value" line; note page 3 rows "Returns stay" / "Returns fade (10 years)"; levels
+  info line names both; neither votes. 20 Nov: FFC 538 / 323, MEBL 544 / 292, OGDC 157 / 290, PPL 177 / 253,
+  PAKT 779 / 521, MCB 267 / 266. "Floor" wording removed (the fade value can sit below the no-growth value).
+- Live check Fri 20 Nov on the new code: opening, midday and closing cards all sent, close 177,382.57 recorded
+  from the live view, no holiday notice, 442 intraday points, all feeds fresh. BUT 09:17 posted Thursday's 13 big
+  movers again: in the first minutes the view's stock rows still show the previous session and 'agreed' with the
+  stale table. Fixed: `scs.activity_is_today` is False before 16:00 on weekdays; `stock_moves` drops any quote
+  showing exactly yesterday's close and move (self-test replays the 09:17 case).
 
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
