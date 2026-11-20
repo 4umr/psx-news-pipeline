@@ -386,6 +386,20 @@ def session_tests() -> list[str]:
     finally:
         w._HIST.clear()
         w._HIST.update(keep)
+    # 20 Nov 2026 09:17: the view's rows still showed Thursday (PGLC +10% then) while a real move happened today
+    act = [{"company_code": "PGLC", "trading_close": 22.43, "trading_change": 2.04, "company_name": "x"},
+           {"company_code": "ABC", "trading_close": 50.0, "trading_change": 0.1, "company_name": "y"}]
+    view5 = [{"company_code": "PGLC", "CurrentPrice": 22.43, "LDCP": 20.39, "CurrentIndex": 176600.0, "PreIndex": 176772.0},
+             {"company_code": "ABC", "CurrentPrice": 55.0, "LDCP": 50.0, "CurrentIndex": 176600.0, "PreIndex": 176772.0}]
+    st5 = State(Path(tempfile.gettempdir()) / "selftest-none.json")
+    with mock.patch.object(w.scs, "daily_activity", return_value=act), \
+            mock.patch.object(w, "avg_values", return_value={"PGLC": 2e7, "ABC": 2e7}), \
+            mock.patch.object(w.scs, "activity_is_today", return_value=False), \
+            mock.patch.object(w.scs, "live_activity", return_value=([], False)), \
+            mock.patch.object(w, "move_reasons", return_value={}):
+        w.stock_moves(datetime(2026, 11, 20, 9, 17, tzinfo=pkt), st5, {"big_stock_move_pct": 7.5}, view5)
+    moved = [k for k in st5.data["flags"] if k.startswith("stk:")]
+    ok("yesterday's move still on screen is not posted again; today's real move is", moved == ["stk:2026-11-20:ABC:up"])
     # owner commands (offline: symbol list and workflow start are replaced)
     from . import commands as cm
     with mock.patch.object(cm, "_known", return_value={"STCL", "LUCK", "FFC"}), \

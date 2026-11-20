@@ -103,6 +103,13 @@ def activity_is_today(act: list[dict], view: list[dict]) -> bool | None:
     the intraday recorder: no change between 09:15 and 16:13). Until then it holds the PREVIOUS session.
     Test: for KSE-100 stocks that moved today (live index view: price != previous close), does the table
     show today's price (True) or yesterday's close (False)? None = cannot tell."""
+    from ..common import now_pkt
+    t = now_pkt()
+    if t.weekday() < 5 and (t.hour, t.minute) < (16, 0):
+        # it is refreshed only after the close: before 16:00 it can never be today's. In the first minutes of a
+        # session the index view's stock rows can still show the previous session and then 'agree' with it
+        # (20 Nov 2026 09:17: Thursday's 13 big movers posted again as 'moving sharply')
+        return False
     a = {(r.get("company_code") or "").strip(): r.get("trading_close") for r in act}
     n = cur = 0
     for r in view or []:

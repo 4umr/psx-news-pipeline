@@ -803,6 +803,14 @@ def stock_moves(now, state: State, cfg: dict, view: list[dict]) -> list[Alert]:
     for r in view:
         if r.get("company_code") and r.get("CurrentPrice") and r.get("LDCP"):
             quotes[r["company_code"]] = (r["CurrentPrice"], r["LDCP"])
+    if not today_ok:
+        # during the session the all-stock table is yesterday's: a quote that still shows exactly yesterday's close
+        # and yesterday's move comes from a source that has not rolled over yet (first minutes after the open)
+        for c, (cur, ldcp) in list(quotes.items()):
+            y = act.get(c) or {} if "act" in locals() else {}
+            yc, ych = y.get("trading_close"), y.get("trading_change")
+            if yc and ych is not None and abs(ych) > 0.006 and abs(cur - yc) < 0.006 and abs(ldcp - (yc - ych)) < 0.006:
+                del quotes[c]
     hits = []
     for code, (cur, ldcp) in quotes.items():
         if not ldcp:
