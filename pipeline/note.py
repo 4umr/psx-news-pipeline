@@ -688,19 +688,24 @@ def _tech_page(p: Page, d: dict, t: dict, reserve: bool = False) -> None:
     y = max(ly, ry) + 6
     from .analogs import lines as an_lines
     an = [clean(x) for x in an_lines(t.get("analog") or {}, t.get("breadth"))]
-    if an:
-        y = p.section(M, y, full, "Similar past cases, market and position size")
-        y, _ = p.bullets(M, y, an, full, size=8.2, gap=4, max_y=end - 330)
     from .ta import TESTED as TT, lines as ch_lines
     from .patterns import lines as pt_lines
     rd = [clean(x) for x in ch_lines(ch)]
-    if rd:
-        y = p.section(M, y, full, "Chart read")
-        y, _ = p.bullets(M, y, rd, full, size=8.2, gap=4, max_y=end - 260)
     pl = [clean(x) for x in pt_lines(pt)]
-    if pl:
-        y = p.section(M, y + 6, full, "Patterns and price mathematics")
-        y, _ = p.bullets(M, y, pl, full, size=8.2, gap=4, max_y=end - 120)
+
+    def block(y, title, items, max_y):
+        """A section heading only when at least its first line fits under it (EFERT 20 Nov 2026: a long
+        setup column left the 'Similar past cases' heading drawn with nothing below it)."""
+        if not items or y + 36 + len(wrap(items[0], full - 20, 8.2)) * px(8.2) * 1.42 > max_y:
+            return y
+        y = p.section(M, y, full, title)
+        return p.bullets(M, y, items, full, size=8.2, gap=4, max_y=max_y)[0] + 4
+
+    # the similar-cases line is the decision support: it gets room before the descriptive chart lines
+    y = block(y, "Similar past cases, market and position size", an,
+              end - 120 - (90 if rd else 0) - (60 if pl else 0))
+    y = block(y, "Chart read", rd, end - 120 - (60 if pl else 0))
+    y = block(y, "Patterns and price mathematics", pl, end - 120)
     ev = ("What PSX data 2012-2026 says (against similar stocks, after costs): chart patterns alone had no reliable edge; "
           "good results with a strong chart (stage 2 or top-30% relative strength) beat similar stocks by 6.5-8.1% over "
           "3 months, with a weak chart by about 0%; stage 4 downtrends, Wyckoff springs, head and shoulders tops and "
