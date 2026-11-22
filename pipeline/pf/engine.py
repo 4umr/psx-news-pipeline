@@ -70,7 +70,7 @@ def positions(hold: list[dict], cash, mode: str, D: dict) -> dict:
             "missing": missing, "notes": notes, "mode": mode}
 
 
-def analyse(hold: list[dict], cash, mode: str, D: dict, cfg: dict) -> dict:
+def analyse(hold: list[dict], cash, mode: str, D: dict, cfg: dict, prof: dict | None = None) -> dict:
     from .. import fairvalue
     P = positions(hold, cash, mode, D)
     if not P["rows"]:
@@ -287,6 +287,18 @@ def analyse(hold: list[dict], cash, mode: str, D: dict, cfg: dict) -> dict:
         R["lab"] = {}
     R["rules"] = rules.book(R)
     R["findings"] = findings(R)
+    from . import advice
+    style = "Core defensive" if prof and (prof["level"] <= 2 or prof.get("goal") in ("income", "preserve")) else "Core growth"
+    try:
+        R["exposure"] = advice.exposures(R, style)
+        R["advice"] = advice.suggestions(R, prof, style)
+    except Exception as e:  # noqa: BLE001  (a recommendation problem must not stop the review)
+        from ..common import log
+        log.warning("portfolio: suggestions failed (%s)", type(e).__name__)
+        R["exposure"], R["advice"] = {}, []
+    if R["advice"]:
+        n = sum(1 for a in R["advice"] if a["action"] in ("Trim", "Replace", "Add", "Rebalance"))
+        R["findings"].insert(1, f"Suggested changes: {n} (page 9), each with its reason and the PSX test behind it.")
     return R
 
 

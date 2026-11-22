@@ -28,7 +28,7 @@ on:
         required: false
         default: ""
       portfolio:
-        description: "Portfolio review: filled in by the bot (encrypted). 'saved' = the last one again, 'sample' = a made-up example"
+        description: "Portfolio review / plan: filled in by the bot (encrypted). 'saved' = last review again, 'sample' = example review, 'sample-plan' = example investment plan"
         required: false
         default: ""
 

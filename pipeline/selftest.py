@@ -403,6 +403,66 @@ def portfolio_tests() -> list[str]:
     return bad
 
 
+def plan_tests() -> list[str]:
+    """Investment plan rules against hand-worked numbers (pipeline/pf/profile, cma, select, advice)."""
+    import numpy as np
+    import pandas as pd
+
+    from .pf import advice, cma, profile, select
+    bad = []
+
+    def ok(name, cond):
+        if not cond:
+            bad.append(name)
+
+    a, _, _ = profile.parse("/plan\namount: 10 lakh\nyears: 8\nmax loss: 25\nif market falls 20%: buy more\n"
+                            "experience: experienced\nincome: stable\nage: 30\ngoal: growth")
+    pr = profile.score(a)
+    ok("profile: ability 4.25, willingness 4.25 -> Growth", _close(a["amount"], 1e6) and _close(pr["capacity"], 4.25)
+       and _close(pr["tolerance"], 4.25) and pr["name"] == "Growth")
+    a2, _, _ = profile.parse("amount: 500000\nyears: 0.5\nmax loss: 40\ngoal: aggressive")
+    ok("money needed within a year -> Conservative", profile.score(a2)["level"] == 1)
+    a3, _, _ = profile.parse("amount: 1m\nyears: 20\nmax loss: 5\nif market falls: sell all\ngoal: growth\nincome: stable")
+    ok("bold ability, cautious willingness -> the cautious one wins", profile.score(a3)["level"] <= 2)
+    ok("horizon caps 4 years -> 50%, 6 months -> 0%", cma.horizon_cap(4) == 0.5 and cma.horizon_cap(0.5) == 0.0)
+    sims = np.zeros((10, 24, 3))
+    sims[:, :, 0], sims[:, :, 2] = -0.02, 0.01
+    al = cma.allocate({"level": 4, "years": 10, "max_loss": 0.05}, False, sims)
+    ok("loss check: equity cut from 70% to 45% (12 months -4.1% vs limit -5%)", _close(al["w"]["equity"], 0.45)
+       and al["cut_for_loss"])
+    sims2 = np.zeros((10, 12, 3))
+    sims2[:, :, 0] = 0.01
+    pj = cma.project({"equity": 1.0, "gold": 0.0, "tbill": 0.0}, sims2, 1000, 100, 1, 0.0)
+    ok("projection: 1,000 + 100 a month at 1% a month = 2,395.08", _close(pj["pct"][50], 2395.075, 1e-6))
+    u = pd.DataFrame({"sym": list("ABCDEFGH"), "price": [100.0] * 8, "adv": [1e9] * 8,
+                      "sector": ["X", "X", "X", "X", "Y", "Y", "Z", "Z"], "name": list("ABCDEFGH"),
+                      "ttm": [1.0] * 7 + [-1.0], "gro": [0.5] * 8, "mom": [0.1] * 8, "vol": [0.2] * 8, "dy": [0.03] * 8,
+                      "Core growth": [8, 7, 6, 5, 4, 3, 2, 9], "Core growth rank": [i / 8 for i in (8, 7, 6, 5, 4, 3, 2, 9)]
+                      }).set_index("sym")
+    u.attrs["date"] = pd.Timestamp("2026-11-20")
+    saved = dict(select._U)
+    select._U.clear()
+    select._U["u"] = u
+    try:
+        b = select.build(30_000, "Core growth", False, set(), n=4)
+        ok("model: loss-maker H dropped, max 1 of 4 per sector, Rs 30,000 / 3 = 100 shares each",
+           [r["sym"] for r in b["rows"]] == ["A", "E", "G"] and all(r["qty"] == 100 for r in b["rows"]))
+        b2 = select.build(40_000, "Core growth", False, set(), n=4, keep=["D"])
+        ok("a holding in the better half is kept first", b2["rows"][0]["sym"] == "D")
+        R = {"pos": {"rows": [{"sym": "A", "w": 0.30, "weq": 0.30, "price": 100.0},
+                              {"sym": "G", "w": 0.70, "weq": 0.70, "price": 100.0}]},
+             "total": 1_000_000, "kse_w": {}, "weights": {"A": 0.3, "G": 0.7}, "risk": {}, "fund": [], "liq": {}}
+        sg = advice.suggestions(R)
+        trim = [x for x in sg if x["action"] == "Trim" and x["sym"] == "A"]
+        ok("trim 30% -> 10%: sell 2,000 shares", trim and "2,000 shares" in trim[0]["detail"])
+        ok("bottom-30% holding G replaced by the best of its sector? none in the top 30% -> review",
+           any(x["sym"] == "G" and x["action"] in ("Replace", "Review", "Trim") for x in sg))
+    finally:
+        select._U.clear()
+        select._U.update(saved)
+    return bad
+
+
 def session_tests() -> list[str]:
     """Which session the live data is about (the 13 / 19 Nov 2026 'PSX closed today' mistake, the 09:15
     pre-open 'stocks moving sharply' card), replayed with the real numbers of 18-20 Nov 2026."""
@@ -533,7 +593,7 @@ def run(with_live: bool = True) -> list[str]:
     try:
         bad = [f"formula: {x}" for x in formulas()] + [f"scoring: {x}" for x in scoring()] + \
             [f"levels: {x}" for x in levels_tests()] + [f"session: {x}" for x in session_tests()] + \
-            [f"portfolio: {x}" for x in portfolio_tests()]
+            [f"portfolio: {x}" for x in portfolio_tests()] + [f"plan: {x}" for x in plan_tests()]
     finally:
         logging.disable(logging.NOTSET)
     if with_live:

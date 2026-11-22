@@ -18,7 +18,7 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 
 ## Code map (`pipeline/`)
 - `__main__.py` CLI: `python -m pipeline run|loop|brief <name>|test [--admin-only]|chats|about [--dry-run]`.
-- Owner commands from his phone: send a ticker (STCL), /note X, /portfolio + holdings (or a CSV/Excel file), /levels,
+- Owner commands from his phone: send a ticker (STCL), /note X, /portfolio + holdings (or a CSV/Excel file), /plan, /levels,
   /status, /help to the bot chat (`commands.py`).
   `--dry-run` writes messages to `out/preview.txt` and cards to `out/*.png` (no Telegram).
 - `runner.py` one pass: collect → watchers → news scoring → send. Every component wrapped in `_safe()`; state always
@@ -578,6 +578,45 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   Omega, VaR/ES/CF, risk contributions, DR, ENB, HHI, active share, LW, ERC 1/3-2/3, min variance 20/80,
   episodes, correlated shock -33%, bootstrap, dividend vs split series, policy rate in force, cycles, spike
   cleaning, parsing, CSV).
+
+## Investment plan + recommendations (built 2026-11-22) - `pf/plan.py`, `profile.py`, `cma.py`, `select.py`, `advice.py`
+- Umer: "industry-grade portfolio recommendations and portfolio creation by customer needs, time frame, investor type".
+  Research + every test number: `docs/portfolio-planning.md`.
+- PSX FACTOR TEST (scratchpad factor_test*.py idea; data/history_long + data/results; 2010-2026, monthly top 120 by
+  60-day median value traded, equal weight, total returns, point in time): best fifth vs universe: EARNINGS GROWTH
+  (last result vs a year ago) +8.8%/yr t 3.67 14/16 yrs halves +8.3/+8.5; MOMENTUM 12-1 +4.7% t 1.70; low vol /
+  low beta / dividend yield ~0 return but volatility 18-21% vs 26% and worst fall -34..-39% vs -57%; cheap P/E +1.2%
+  t 0.3 (no edge); reversal none. 20-stock portfolios every 3 months: "Core growth" (growth+momentum+low vol)
+  +5.7%/yr t 1.81 14/17 halves +4.7/+6.6 vol 21% mdd -32% Sharpe 0.85 (monthly +7.0% t 2.30; top-60 liquid +7.3% t
+  2.85), cost ~1.4%/yr; "Core defensive" (growth+low vol+yield) +2.4% vol 19% mdd -27%. Bottom 30% of Core growth
+  -3.5%/yr (4/17 yrs), top 30% +5.9% (13/17). Survivorship in the price file flatters all equal-weight numbers.
+- ASSET CLASSES 2008-2026 monthly in PKR: KSE-100 14.3%/yr vol 23% worst -64%; gold (Comex x USD/PKR) 16.8% vol 20%
+  worst -34%, +3.2% avg in the KSE-100's worst 15% of months (corr -0.12); USD 8.2%; T-bills (policy rate) 11.2%.
+- `/plan` (bot) -> template (`profile.HELP`); answers (amount, monthly, years, goal, max loss, reaction to a 20% fall,
+  experience, income, age, cash needed in a year, shariah, gold, optional `holdings:` lines = switch plan, then amount =
+  NEW money) -> encrypted -> lab.yml `portfolio` input (`pf.run` routes text starting /plan to `_plan`). Profile =
+  lower of capacity (horizon, income, age, liquidity) and tolerance (loss, reaction, experience, goal), 5 levels
+  (SECP-style Low..Very high). SAA (`cma.py`): equity base 20/35/50/70/85% capped by horizon (<1y 0, 1-2 15, 2-3 30,
+  3-5 50, 5-7 70), gold 5-10% if allowed, rest T-bills; loss check cuts equity 5 points at a time until the 1-in-20
+  12-month result >= -max loss. CMAs: T-bills = policy rate, equity = 10y PIB + ERP, gold = 6% + 1%; risk from a
+  monthly stationary bootstrap of 2008-2026 (block 6, 5,000 paths, re-centred). Projection with monthly additions,
+  5-mix comparison, plan in past crises. Equity sleeve (`select.py`): universe as tested, Core growth (Balanced+) or
+  Core defensive (Conservative / Mod. conservative / income / preserve), screens (no defaulters, no TTM loss-makers),
+  KMI All Share if Shariah, <= 30% of names per sector, position <= 20% of a day's value, equal weight, whole shares;
+  20/15/10 names by size; equity < Rs 200k -> ETF advice (MZNPETF Shariah, NBPGETF / UBLPETF; HBLTETF for T-bills).
+  Holdings in the better half of the score are kept first (`keep`) to cut trades and tax. Switch plan: sells/buys,
+  CGT estimate, gold and T-bill rows, money in = money out. Report (`planreport.py`) 5 pages + the 9-page review of
+  the proposed portfolio (PDF merged with pypdf); album = 5 plan pages + review page 1. The plan is saved encrypted
+  (state/lab/plan.enc) and its profile feeds later /portfolio suggestions (loss limit, style).
+- Review page 9 (`advice.py`): style percentiles (earnings growth, momentum, steadiness, yield, score) per holding +
+  suggested changes in priority order (limits -> quality -> bottom-30% score replaced by the best same-sector top-30%
+  stock -> diversification adds -> loss limit vs saved plan -> liquidity), each with its evidence. Findings line 2
+  points to it.
+- Disclosure on every plan: model plan for a risk profile, not personal advice; investment advice to clients is
+  SECP-licensed (NBFC investment advisory); AMCs follow SECP Circular 06 of 2022 (suitability, risk categories).
+- Self-test `plan_tests` (profile 4.25/4.25 -> Growth, short horizon -> Conservative, cautious wins, horizon caps, loss
+  cut 70% -> 45%, projection 2,395.08, model sector cap + rounding + keep, trim 2,000 shares). Sample: lab.yml
+  input `sample-plan`; local `PORTFOLIO=sample-plan python -m pipeline portfolio --dry-run` -> out/plan.
 
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.

@@ -30,6 +30,7 @@ HELP = ("<b>Commands</b> (only this chat can use them)\n"
         "<b>/portfolio</b> then one holding per line (FFC 500 @ 450, MEBL 800, OGDC 20%, cash 100000), or send the "
         "broker's CSV / Excel file: full portfolio review, 8 pages (about 6-8 minutes). <b>/portfolio</b> alone "
         "repeats the last one\n"
+        "<b>/plan</b>: an investment plan for your goal, time and risk (send /plan to get the questions)\n"
         "<b>/levels</b>: last night's Research Lab levels with live prices\n"
         "<b>/status</b>: is everything running, today's numbers\n"
         "<b>/help</b>: this list")
@@ -191,6 +192,35 @@ def respond(text: str, state, cfg: dict, now: datetime) -> str:
         return status(state, now)
     if cmd in ("levels", "level", "zones"):
         return levels(now)
+    if cmd.split("\n")[0] in ("plan", "invest", "build"):
+        from .pf import encrypt, profile
+        body = re.sub(r"^/?\s*(plan|invest|build)(@\w+)?", "", text.strip(), flags=re.I).strip()
+        if ":" not in body:
+            return "<b>Investment plan</b>\n" + esc(profile.HELP)
+        a, hold, _ = profile.parse(body)
+        if not a.get("amount") and not hold:
+            return "Please give the amount to invest (amount: 1000000).\n\n" + esc(profile.HELP)
+        day = f"{now:%Y-%m-%d}"
+        used = state.data.get("tg_dispatch") or {}
+        if used.get("d") != day:
+            used = {"d": day, "n": 0}
+        if used["n"] >= int((cfg.get("commands") or {}).get("max_per_day", 12)):
+            return "Today's limit of on-request runs is used up. Tomorrow again."
+        try:
+            enc = encrypt("/plan\n" + body)
+        except Exception as e:  # noqa: BLE001
+            log.warning("plan encryption failed: %s", type(e).__name__)
+            return "Could not prepare the plan here (encryption unavailable). Try again later."
+        ok, why = dispatch("lab.yml", {"command": "lab", "portfolio": "enc:" + enc})
+        if not ok:
+            return f"Could not start it: {esc(why)}. Try again in a few minutes."
+        used["n"] += 1
+        state.data["tg_dispatch"] = used
+        prof = profile.score(a)
+        log.info("owner command: plan")
+        return (f"Building your investment plan ({esc(prof['name'].lower())} profile, {prof['years']:g} years"
+                + (", with a switch plan for your holdings" if hold else "") + "): risk profile, asset mix, stock list, "
+                "projection and a full risk check. It arrives here in about 6-10 minutes.")
     if cmd.split("\n")[0] in ("portfolio", "pf", "folio", "holdings"):
         day = f"{now:%Y-%m-%d}"
         used = state.data.get("tg_dispatch") or {}

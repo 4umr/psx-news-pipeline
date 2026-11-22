@@ -17,6 +17,7 @@ import subprocess
 from ..common import ROOT, log, now_pkt
 
 SAVED = ROOT / "state" / "lab" / "portfolio.enc"
+PLAN_SAVED = ROOT / "state" / "lab" / "plan.enc"
 # made-up example (lab.yml input 'sample'): shows what the review looks like without sending real holdings
 SAMPLE = ("FFC 500 @ 450\nMEBL 800 @ 300\nOGDC 1000 @ 220\nLUCK 300\nSYS 1500 @ 140\nHUBC 1000\nSTCL 20000 @ 7\n"
           "cash 100000")
@@ -62,6 +63,9 @@ def _source(text: str | None) -> tuple[str | None, str]:
     if text:
         return text, "given"
     env = (os.getenv("PORTFOLIO") or "").strip()
+    if env == "sample-plan":
+        from .profile import TEMPLATE
+        return TEMPLATE.replace("amount: 1000000", "amount: 200000") + "\nholdings:\n" + SAMPLE, "sample"
     if env == "sample":
         return SAMPLE, "sample"
     if env.startswith("enc:"):
@@ -95,6 +99,8 @@ def run(cfg: dict, text: str | None = None, dry: bool = False) -> bool:
         say("Portfolio review: " + ("no saved portfolio yet. Send it first, e.g.\n/portfolio\nFFC 500 @ 450\nMEBL 800\ncash 100000"
                                     if how == "none saved" else "please send the holdings through the bot (they travel encrypted)."))
         return False
+    if re.match(r"^\s*/?plan\b", text, re.I):
+        return _plan(cfg, s, say, text, how, dry)
     hold, cash, mode, probs = holdings.parse(text)
     if not hold or mode == "mixed":
         say("Portfolio review: I could not read the holdings" + (f" ({'; '.join(probs[:3])})" if probs else "") +
@@ -112,6 +118,40 @@ def run(cfg: dict, text: str | None = None, dry: bool = False) -> bool:
             h.removeFilter(mask)
 
 
+def _plan(cfg, s, say, text, how, dry) -> bool:
+    """Investment plan (pf/plan.py). The client's own holdings are masked in the log like a review's."""
+    from . import holdings, plan, profile
+    _, hold_text, _ = profile.parse(text)
+    mask = _Mask([h["sym"] for h in holdings.parse(hold_text)[0]] if hold_text else [])
+    for h in logging.getLogger().handlers:
+        h.addFilter(mask)
+    log.info("investment plan requested (%s)", how)
+    try:
+        ok = plan.run(cfg, text, s, say, dry)
+    finally:
+        for h in logging.getLogger().handlers:
+            h.removeFilter(mask)
+    if ok and how == "bot":   # the profile is reused by later /portfolio reviews (loss limit, style)
+        try:
+            PLAN_SAVED.parent.mkdir(parents=True, exist_ok=True)
+            PLAN_SAVED.write_text(encrypt(text), encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            log.warning("plan: not saved (%s)", type(e).__name__)
+    return ok
+
+
+def saved_profile() -> dict | None:
+    """The client profile of the last plan (for /portfolio suggestions), if one was made."""
+    if not PLAN_SAVED.exists():
+        return None
+    try:
+        from . import profile
+        a, _, _ = profile.parse(decrypt(PLAN_SAVED.read_text(encoding="utf-8")))
+        return profile.score(a)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _review(cfg, s, say, hold, cash, mode, probs, text, how, dry) -> bool:
     import json
 
@@ -125,7 +165,7 @@ def _review(cfg, s, say, hold, cash, mode, probs, text, how, dry) -> bool:
         except (OSError, ValueError):
             state = None
     D = data.load([h["sym"] for h in hold], cfg, state)
-    R = engine.analyse(hold, cash, mode, D, cfg)
+    R = engine.analyse(hold, cash, mode, D, cfg, saved_profile())
     if R.get("error"):
         say(f"Portfolio review: {R['error']}.")
         return False

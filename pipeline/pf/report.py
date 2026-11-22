@@ -11,7 +11,7 @@ import pandas as pd
 from .. import note
 from ..note import BOTTOM, DOWN, GOLD, GREEN, INK, LIGHT, M, MUTED, RULE, UP, W, Page, px, wrap
 
-PAGES = 8
+PAGES = 9
 CW = W - 2 * M                       # content width
 COL = (CW - 40) // 2                 # half column
 STATUS = {"pass": ("OK", UP), "watch": ("Watch", GOLD), "breach": ("Exceeded", DOWN), "info": ("Info", MUTED)}
@@ -20,6 +20,8 @@ STATUS = {"pass": ("OK", UP), "watch": ("Watch", GOLD), "breach": ("Exceeded", D
 def pc(x, d=1, sign=False) -> str:
     if x is None or x != x:
         return "-"
+    if abs(x) * 100 < 0.5 * 10 ** -d:
+        x = 0.0
     return f"{x * 100:+.{d}f}%" if sign else f"{x * 100:.{d}f}%"
 
 
@@ -638,12 +640,69 @@ def page8(R: dict, meta: dict) -> Page:
     return p
 
 
+ACTION_COL = {"Trim": GOLD, "Replace": DOWN, "Review": DOWN, "Add": UP, "Rebalance": GOLD, "Reduce slowly": GOLD}
+
+
+def page9(R: dict, meta: dict) -> Page:
+    p = Page(9, PAGES, meta)
+    y = _title(p, R, "Style check and suggested changes")
+    ex = R.get("exposure") or {}
+    style = ex.get("style", "Core growth")
+    from .select import TESTED
+    t = TESTED[style]
+    y = p.para(M, y + 6, f"Each holding is placed among today's 120 most-traded PSX stocks on the inputs that were tested on "
+               f"PSX 2010-2026 ({'earnings growth, momentum and steadiness' if style == 'Core growth' else 'earnings growth, steadiness and dividend yield'}). "
+               f"The 20 best-scored stocks, rebuilt every 3 months, beat the market by {t['excess'] * 100:.1f}% a year "
+               f"(better in {t['years']} years) with a worst fall of {t['mdd'] * 100:.0f}% against {t['umdd'] * 100:.0f}%. "
+               "Percentiles: 100 = best of the 120, 50 = average.", CW, size=7.8, color=MUTED) + 4
+    rows, cols = [], []
+    for e in ex.get("rows") or []:
+        if not e.get("in"):
+            rows.append([e["sym"], "-", "-", "-", "-", "outside the 120 most traded", ""])
+            cols.append(None)
+            continue
+        f = lambda v: "-" if v != v else f"{v * 100:.0f}"  # noqa: E731
+        sc = e["score"]
+        verdict = "top 30%" if sc >= 0.70 else "bottom 30%" if sc < 0.30 else "middle"
+        rows.append([e["sym"], f(e["gro"]), f(e["mom"]), f(e["lowvol"]), f(e["dy"]), f(sc), verdict])
+        cols.append([None, None, None, None, None, UP if sc >= 0.7 else DOWN if sc < 0.3 else None,
+                     UP if sc >= 0.7 else DOWN if sc < 0.3 else None])
+    a = ex.get("avg") or {}
+    if a:
+        g = lambda k: f"{a.get(k, 0) * 100:.0f}"  # noqa: E731
+        rows.append(["Portfolio", g("gro"), g("mom"), g("lowvol"), g("dy"), g("score"),
+                     f"covers {ex.get('covered', 0) * 100:.0f}% of the stocks' value"])
+        cols.append([GREEN] * 7)
+    if rows:
+        y = p.table(M, y, [120, 140, 130, 140, 130, 140, CW - 800], rows,
+                    header=["Stock", "Earnings growth", "Momentum", "Steadiness", "Div. yield", style, "Verdict"],
+                    size=7.6, colors=cols, max_y=820, align=["left"] + ["right"] * 5 + ["left"])
+    y = p.section(M, y + 4, CW, "Suggested changes")
+    adv = R.get("advice") or []
+    if adv:
+        rows = [[a_["action"], a_["sym"], a_["detail"], a_["why"], a_["evidence"]] for a_ in adv[:14]]
+        cols = [[ACTION_COL.get(a_["action"]), None, None, None, MUTED] for a_ in adv[:14]]
+        y = p.table(M, y, [100, 110, 270, 260, CW - 740], rows, header=["Action", "Stock", "Change", "Why", "Evidence"],
+                    size=7.4, colors=cols, max_y=BOTTOM - 170, align=["left"] * 5)
+    else:
+        y = p.para(M, y, "No change needed by the rules and tests used here.", CW, size=9)
+    p.para(M, max(y + 6, BOTTOM - 150),
+           "How these suggestions are made: limits first (fund yardsticks, risk share), then quality, then the tested score "
+           "(a holding in the bottom 30% is matched with the best-scored stock of the same sector that is in the top 30%), "
+           "then diversification and, when your plan is known (/plan), your loss limit. Scores use prices and results "
+           "available today only. Sales of shares bought from July 2024 carry 15% capital gains tax for filers; a loss can "
+           "be set off against gains on listed shares and carried forward 3 years. These are model suggestions from public "
+           "data and tested rules, not personal investment advice; past results do not guarantee future results.",
+           CW, size=7, color=MUTED, lead=1.35)
+    return p
+
+
 def build(R: dict, meta: dict) -> tuple[list[bytes], bytes]:
     meta = {"band": "PORTFOLIO REVIEW  |  PRIVATE", "tag": "Prepared on request",
             "foot": "PAKISTAN INVESTORS  |  Private portfolio review, for information only, not investment advice. Methods on page 8.",
             **meta}
     pages = []
-    for f in (page1, page2, page3, page4, page5, page6, page7, page8):
+    for f in (page1, page2, page3, page4, page5, page6, page7, page8, page9):
         pages.append(f(R, meta))
     return note._finish(pages, "Portfolio review")
 
@@ -662,7 +721,7 @@ def summary_text(R: dict, meta: dict) -> str:
         lines += ["", f"Not included (no price or history found): {esc(', '.join(P['missing']))}"]
     if P["notes"]:
         lines += ["", "<i>" + esc("; ".join(P["notes"])) + "</i>"]
-    lines += ["", "<i>Full 8-page report in the PDF. For information only, not investment advice.</i>"]
+    lines += ["", "<i>Full 9-page report in the PDF. For information only, not investment advice.</i>"]
     return "\n".join(lines)
 
 
