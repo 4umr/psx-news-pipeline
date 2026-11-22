@@ -27,6 +27,10 @@ on:
         description: "Any stock(s) to analyse now, e.g. STCL or STCL,LUCK (leave empty for the daily run)"
         required: false
         default: ""
+      portfolio:
+        description: "Portfolio review: filled in by the bot (encrypted). 'saved' = the last one again, 'sample' = a made-up example"
+        required: false
+        default: ""
 
 # (renamed 2026-11-12: run #3 got stuck 'queued' in the old group on GitHub's side and could not be cancelled)
 concurrency:
@@ -97,9 +101,12 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TZ: Asia/Karachi
           SYMBOL: ${{ inputs.symbol }}
+          PORTFOLIO: ${{ inputs.portfolio }}
         run: |
           SYMBOL=$(printf '%s' "$SYMBOL" | tr -cd 'A-Za-z0-9,')
-          if [ -n "$SYMBOL" ]; then
+          if [ -n "$PORTFOLIO" ]; then
+            python -m pipeline portfolio
+          elif [ -n "$SYMBOL" ]; then
             python -m pipeline lab --analyse "$SYMBOL"
           else
             python -m pipeline ${{ inputs.command || 'lab' }}

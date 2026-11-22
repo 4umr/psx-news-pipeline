@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import re
 from datetime import datetime
+from functools import lru_cache
 
 import matplotlib
 
@@ -57,21 +58,30 @@ def px(size: float) -> float:
     return size * DPI / 72
 
 
+@lru_cache(maxsize=20000)
+def _w1(s: str, bold: bool) -> float:
+    """Width of a string at 10 pt (cached; widths scale linearly with the font size)."""
+    return TextPath((0, 0), s, size=10, prop=_fp(bold)).get_extents().width * DPI / 72 * 1.04 if s else 0.0
+
+
 def text_w(s: str, size: float, bold: bool = False) -> float:
     if not s:
         return 0.0
-    return TextPath((0, 0), s, size=size, prop=_fp(bold)).get_extents().width * DPI / 72 * 1.04
+    return _w1(s, bold) * size / 10
 
 
 def wrap(s: str, width: float, size: float, bold: bool = False) -> list[str]:
-    words, lines, cur = clean(str(s)).split(), [], ""
+    """Greedy word wrap. A line's width = its words' widths + the spaces (each word measured once and cached;
+    measuring every growing line made long pages take minutes)."""
+    words, lines, cur, cur_w = clean(str(s)).split(), [], "", 0.0
+    sp = text_w("a a", size, bold) - text_w("aa", size, bold)
     for w in words:
-        t = f"{cur} {w}".strip()
-        if cur and text_w(t, size, bold) > width:
+        ww = text_w(w, size, bold)
+        if cur and cur_w + sp + ww > width:
             lines.append(cur)
-            cur = w
+            cur, cur_w = w, ww
         else:
-            cur = t
+            cur, cur_w = (f"{cur} {w}", cur_w + sp + ww) if cur else (w, ww)
     if cur:
         lines.append(cur)
     return lines
@@ -221,7 +231,7 @@ class Page:
         m = self.meta
         self.rect(0, 0, W, 64, GREEN)
         self.text(M, 42, "PAKISTAN INVESTORS", 15, "white", bold=True)
-        self.text(W - M, 40, "EQUITY RESEARCH  |  COMPANY PROFILE", 9, "#e8dcc0", bold=True, ha="right")
+        self.text(W - M, 40, m.get("band", "EQUITY RESEARCH  |  COMPANY PROFILE"), 9, "#e8dcc0", bold=True, ha="right")
         self.rect(0, 64, W, 4, GOLD)
         self.text(M, 96, m["date_long"], 9, MUTED)
         self.text(W - M, 96, m["tag"], 9, MUTED, ha="right")
@@ -230,8 +240,8 @@ class Page:
     def _footer(self):
         y = H - 58
         self.rule(M, y, W - M, color=GREEN, lw=1)
-        self.text(M, y + 22, "PAKISTAN INVESTORS  |  For information only, not investment advice. "
-                  f"Please read the disclosures on page {self.total}.", 7.5, MUTED)
+        self.text(M, y + 22, self.meta.get("foot") or ("PAKISTAN INVESTORS  |  For information only, not investment advice. "
+                  f"Please read the disclosures on page {self.total}."), 7.5, MUTED)
         self.text(W - M, y + 22, f"Page {self.n} of {self.total}", 7.5, MUTED, ha="right")
 
     def png(self) -> bytes:

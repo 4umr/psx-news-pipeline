@@ -322,6 +322,87 @@ def levels_tests() -> list[str]:
     return bad
 
 
+def portfolio_tests() -> list[str]:
+    """Portfolio review formulas against hand-worked numbers (pipeline/pf)."""
+    import numpy as np
+    import pandas as pd
+
+    from .pf import data, holdings, metrics as mt, optimize, stress
+    bad = []
+
+    def ok(name, cond):
+        if not cond:
+            bad.append(name)
+
+    ok("CAGR: +10% then -5% over 2 sessions, 2 a year = 4.5%", _close(mt.cagr([0.10, -0.05], 2), 0.045))
+    r = pd.Series([0.10, -0.20, 0.05, 0.20], index=pd.date_range("2026-01-01", periods=4))
+    dd = mt.max_drawdown(r)
+    ok("max drawdown 1.10 -> 0.88 = -20%, regained on day 4", _close(dd["depth"], -0.2) and dd["recovered"] == r.index[3])
+    ok("Ulcer index = sqrt(mean([0, .2, .16, 0]^2)) = 0.1281", _close(mt.ulcer(r), math.sqrt((0.04 + 0.0256) / 4)))
+    ok("Sharpe: mean 2%, sd 1% -> 2.0", _close(mt.sharpe([0.01, 0.03, 0.02], [0, 0, 0], 1), 2.0))
+    ok("Sortino: mean 0.5%, downside dev sqrt(0.0005/4) -> 0.4472",
+       _close(mt.sortino([0.02, -0.01, 0.03, -0.02], [0] * 4, 1), 0.44721))
+    ok("Omega: gains 5% / losses 3% = 1.667", _close(mt.omega([0.02, -0.01, 0.03, -0.02], [0] * 4), 0.05 / 0.03))
+    ok("normal VaR 95% of sd 1% = 1.645%", _close(mt.var_normal(0.01, 0.95), 0.0164485))
+    ok("normal ES 95% of sd 1% = 2.063%", _close(mt.es_normal(0.01, 0.95), 0.0206271))
+    ok("Cornish-Fisher = normal when skew 0 and kurtosis 0", _close(mt.var_cf(0.01, 0, 0, 0.99), mt.var_normal(0.01, 0.99)))
+    ok("Cornish-Fisher larger with fat tails", mt.var_cf(0.01, 0, 6, 0.99) > mt.var_normal(0.01, 0.99))
+    ok("historical VaR 95% of -0.1%..-10% = 9.505%", _close(mt.var_hist(-np.arange(1, 101) / 1000, 0.95), 0.09505))
+    cov = np.array([[0.04, 0.0], [0.0, 0.01]])
+    rc = mt.risk_contrib(np.array([0.5, 0.5]), cov)
+    ok("risk contributions 80% / 20%, add up to volatility 11.18%",
+       _close(rc["sigma"], 0.111803) and _close(rc["pct"][0], 0.8) and _close(rc["cr"].sum(), rc["sigma"]))
+    ok("diversification ratio 0.15 / 0.1118 = 1.342", _close(mt.div_ratio(np.array([0.5, 0.5]), cov), 1.341641))
+    ok("effective bets: two equal uncorrelated = 2", _close(mt.enb(np.array([0.5, 0.5]), np.eye(2) * 0.04), 2.0))
+    ok("HHI of 50/30/20 = 0.38", _close(mt.hhi([0.5, 0.3, 0.2]), 0.38))
+    ok("active share 0.5", _close(mt.active_share({"A": 0.6, "B": 0.4}, {"A": 0.5, "C": 0.5}), 0.5))
+    ok("Blume beta 1.5 -> 1.335", _close(mt.blume(1.5), 1.335))
+    ok("days to sell Rs 1m at 20% of Rs 2m a day = 2.5", _close(mt.liquidity_days(1e6, 2e6), 2.5))
+    rng = np.random.default_rng(3)
+    X = rng.normal(0, 0.01, (300, 4))
+    S, delta = mt.shrink_cov(X)
+    ok("Ledoit-Wolf keeps the variances and shrinks 0-1",
+       0 <= delta <= 1 and np.allclose(np.diag(S), X.var(axis=0)) and np.all(np.linalg.eigvalsh(S) > 0))
+    w = optimize.erc(cov)
+    ok("equal risk contribution on 20% / 10% vols = 1/3, 2/3", _close(w[0], 1 / 3) and _close(w[1], 2 / 3))
+    mv = optimize.min_variance(cov, 1.0)
+    ok("minimum variance 20% / 80% (inverse variance)", _close(mv[0], 0.2, 1e-2) and _close(mv[1], 0.8, 1e-2))
+    idx = pd.Series([100, 120, 90, 95, 125, 100, 130], index=pd.date_range("2026-01-05", periods=7, freq="B"), dtype=float)
+    ep = stress.episodes(idx, 0.15)
+    ok("two falls found: -25% and -20%", len(ep) == 2 and _close(ep[0]["depth"], -0.25) and _close(ep[1]["depth"], -0.2))
+    fm = {"keys": ["mkt", "usd"], "cov": np.array([[1.0, 0.5], [0.5, 1.0]]),
+          "B": {"X": {"mkt": 1.0, "usd": 0.2, "resid": 0.0}}}
+    sc = stress.scenario(fm, {"X": 1.0}, {"mkt": -0.30}, {})
+    ok("correlated shock: market -30% -> rupee factor -15% -> stock -33%",
+       _close(sc["factors"]["usd"], -0.15) and _close(sc["ret"], -0.33))
+    paths = stress.bootstrap(np.full(50, 0.001), 20, paths=10)
+    ok("bootstrap of a constant return = 1.001^20", _close(paths[0, -1], 1.001 ** 20, 1e-9))
+    d = pd.to_datetime(["2026-01-05", "2026-01-06", "2026-01-07"])
+    adj = pd.DataFrame({"date": d, "c": [100.0, 95.0, 96.0], "exf": [1.0, 0.95, 1.0]})
+    tr, px, ev = data.split_series(adj, [{"ex": d[1], "div": 50.0, "bonus": 0.0, "right": 0.0}], 10.0)
+    ok("Rs 5 dividend: total return adjusts (95), price return does not (100)",
+       _close(tr.iloc[0], 95.0) and _close(px.iloc[0], 100.0) and ev[0]["kind"] == "dividend")
+    adj2 = pd.DataFrame({"date": d, "c": [100.0, 50.0, 51.0], "exf": [1.0, 0.5, 1.0]})
+    tr2, px2, _ = data.split_series(adj2, [], 10.0)
+    ok("2-for-1 split adjusts both series", _close(tr2.iloc[0], 50.0) and _close(px2.iloc[0], 50.0))
+    rfd = data.rf_daily(pd.DatetimeIndex(["2026-05-04", "2026-10-27"]), 250, data.POLICY)
+    ok("risk-free in force: 11.5% in May 2026, 12% after 26 Oct 2026",
+       _close(rfd.iloc[0], 1.115 ** (1 / 250) - 1, 1e-6) and _close(rfd.iloc[1], 1.12 ** (1 / 250) - 1, 1e-6))
+    cyc = data.policy_cycles([("a", 10.0), ("b", 12.0), ("c", 14.0), ("d", 13.0), ("e", 9.0)])
+    ok("rate cycles: hikes 10->14, cuts 14->9", [(c["kind"], c["from"], c["to"]) for c in cyc] ==
+       [("hikes", 10.0, 14.0), ("cuts", 14.0, 9.0)])
+    ci = data.clean_index(pd.Series([64515.0, 78824.0, 64237.0], index=pd.to_datetime(["2024-01-05", "2024-01-08", "2024-01-09"])))
+    ok("one-day spike removed from the index", len(ci) == 2)
+    h, cash, mode, probs = holdings.parse("/portfolio\nFFC 500 @ 450\nmebl 800\nFFC 500 @ 550\ncash 100,000")
+    ok("holdings parsed: 2 stocks, FFC 1000 at average 500, cash 100,000",
+       len(h) == 2 and mode == "shares" and _close(h[0]["qty"], 1000) and _close(h[0]["cost"], 500) and _close(cash, 1e5))
+    h, cash, mode, probs = holdings.parse("FFC 20%, OGDC 30%, cash 50%")
+    ok("weights parsed", mode == "weights" and len(h) == 2 and _close(cash, 0.5))
+    ok("CSV export read", holdings.from_table([["Symbol", "Quantity", "Avg Cost"], ["FFC", "1,000", "450.5"],
+                                               ["TOTAL", "", ""]]) == "FFC 1000 @ 450.5")
+    return bad
+
+
 def session_tests() -> list[str]:
     """Which session the live data is about (the 13 / 19 Nov 2026 'PSX closed today' mistake, the 09:15
     pre-open 'stocks moving sharply' card), replayed with the real numbers of 18-20 Nov 2026."""
@@ -451,7 +532,8 @@ def run(with_live: bool = True) -> list[str]:
     logging.disable(logging.INFO)
     try:
         bad = [f"formula: {x}" for x in formulas()] + [f"scoring: {x}" for x in scoring()] + \
-            [f"levels: {x}" for x in levels_tests()] + [f"session: {x}" for x in session_tests()]
+            [f"levels: {x}" for x in levels_tests()] + [f"session: {x}" for x in session_tests()] + \
+            [f"portfolio: {x}" for x in portfolio_tests()]
     finally:
         logging.disable(logging.NOTSET)
     if with_live:

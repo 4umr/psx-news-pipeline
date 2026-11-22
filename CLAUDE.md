@@ -18,7 +18,8 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
 
 ## Code map (`pipeline/`)
 - `__main__.py` CLI: `python -m pipeline run|loop|brief <name>|test [--admin-only]|chats|about [--dry-run]`.
-- Owner commands from his phone: send a ticker (STCL), /note X, /levels, /status, /help to the bot chat (`commands.py`).
+- Owner commands from his phone: send a ticker (STCL), /note X, /portfolio + holdings (or a CSV/Excel file), /levels,
+  /status, /help to the bot chat (`commands.py`).
   `--dry-run` writes messages to `out/preview.txt` and cards to `out/*.png` (no Telegram).
 - `runner.py` one pass: collect → watchers → news scoring → send. Every component wrapped in `_safe()`; state always
   saved in `finally`; component-error / source-health alerts to admin after 3 consecutive failures; daily 23:45 report.
@@ -532,6 +533,51 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   movers again: in the first minutes the view's stock rows still show the previous session and 'agreed' with the
   stale table. Fixed: `scs.activity_is_today` is False before 16:00 on weekdays; `stock_moves` drops any quote
   showing exactly yesterday's close and move (self-test replays the 09:17 case).
+
+## Portfolio review (built 2026-11-22) - `pipeline/pf/`, private, on request
+- Umer: "complete all-in-one portfolio analysis, professional industry-grade formulas, test on all financial rules,
+  past and future bad times". Research notes and every method + source: `docs/portfolio-review.md`.
+- Use: bot chat `/portfolio` + one holding per line (`FFC 500 @ 450`, `MEBL 800`, `OGDC 20%`, `FFC Rs 250000`,
+  `cash 100000`; shares, percentages OR rupees, not mixed), or send the broker's CSV / Excel (symbol + quantity
+  columns, cost optional; `holdings.from_table`). `/portfolio` alone = the last one again. lab.yml input
+  `portfolio`: `enc:<...>` (from the bot), `saved`, `sample` (made-up 7-stock example). Local:
+  `python -m pipeline portfolio --file x.csv --dry-run` -> out/portfolio (8 PNG + PDF + summary.txt).
+- PRIVACY: commands.py checks the holdings, ENCRYPTS them (`pf.encrypt`, openssl AES-256 PBKDF2, key = bot token)
+  and dispatches lab.yml; lab.yml prints step env in its public log, so plain holdings are refused. The last
+  portfolio is saved encrypted in state/lab/portfolio.enc (Lab cache + encrypted lab-data branch). `_Mask` log
+  filter replaces every holding symbol with *** during a review. Report goes to the admin chat only.
+- Data (`pf/data.py`, ~5 requests a stock, ~2.5 min for 7 stocks): scstrade prices since 2008 per holding (two
+  chunks; 5000-row limit), KSE-100 index since 2008 (`clean_index` drops weekend rows and one-day spikes: 7 Jan
+  2024 Sunday 78,824), payouts with ex-dates (`bm_bc_exp`) -> `split_series`: TOTAL return (prices.adjust 'ac')
+  and PRICE return (dividend factors matched to announced DPS = div% x face value removed; unmatched >= 0.95 =
+  dividend). Price return is what is compared with the KSE-100 (a price index). Risk-free = SBP policy rate in
+  force each day (`POLICY` table 2007-2026 + state snap sbp.policy_rate; 26 Oct 2026 hike to 12%). Macro factors
+  USD/PKR + Brent from yfinance (monthly). KMI All Share members (psx.index_members KMIALLSHR), tier
+  (ta.universe), KSE-100 weights (IndexWeightCur).
+- Engine (`pf/engine.py`): today's holdings at today's weights, rebalanced daily, from the youngest holding's
+  listing. Windows 1y/3y/5y/all; calendar years. Formulas in `pf/metrics.py` (docstring lists sources): CAGR,
+  vol, Sharpe/Sortino/Calmar/Ulcer/Martin/Omega, CAPM beta/Jensen alpha/Treynor/TE/IR, Morningstar capture +
+  batting, VaR hist/normal/Cornish-Fisher/EWMA 0.94, ES, Kupiec + Basel zone, Euler risk contributions,
+  Ledoit-Wolf 2003 constant-correlation shrinkage, diversification ratio, Meucci ENB, HHI, active share, Blume beta.
+  Stress (`pf/stress.py`): KSE-100 falls >= 15% + NAMED (COVID, 2021-23 slide inside longer falls), buy-and-hold
+  from the top with beta proxies for unlisted stocks (coverage shown), worst days, SBP cycles (>= 3 points),
+  monthly 3-factor regression + correlated shocks (conditional expectation), Monte Carlo stationary bootstrap
+  10,000 paths (normal = re-centred on CAPM rf 10y PIB + beta x 5%; crisis = bear-market days only).
+  Fundamentals (`pf/fund.py`, underdog.verify): P/E (checked TTM), P/B, yield, ROE, debt, both fair values,
+  harmonic portfolio P/E, dividend income after 15% WHT, CGT 15%. Rules (`pf/rules.py`, 13 checks with sources:
+  SECP fund limits 10%/15% stock, 30%/35% sector, UCITS 5/10/40, >= 15 stocks, eff. N >= 10, risk share <= 20%,
+  illiquid <= 15% (SEC 22e-4), vol <= 1.25x, VaR backtest, crisis loss <= 1.2x, corr > 0.8, quality, Shariah).
+  Alternatives (`pf/optimize.py`, scipy): equal weight, min variance, ERC (Spinu), max diversification.
+- Report (`pf/report.py`, note.Page with header 'PORTFOLIO REVIEW | PRIVATE'): 1 summary + findings + rule check +
+  growth chart; 2 holdings/sectors/concentration/liquidity/calendar years; 3 statistics table + drawdown chart;
+  4 VaR table + risk vs weight + diversification + correlation heatmap; 5 history stress; 6 scenarios + factor
+  sensitivities + Monte Carlo fan; 7 fundamentals/income/tax/bond yield/events/Lab levels; 8 rule book with
+  numbered sources, alternatives, methods, disclosure. note.wrap now measures each word once (cached): pages
+  render in ~2 s instead of ~25 s (Stock of the Day benefits too).
+- Self-test `portfolio_tests` (in every Lab run): 30 hand-worked checks (CAGR, drawdown, Ulcer, Sharpe, Sortino,
+  Omega, VaR/ES/CF, risk contributions, DR, ENB, HHI, active share, LW, ERC 1/3-2/3, min variance 20/80,
+  episodes, correlated shock -33%, bootstrap, dividend vs split series, policy rate in force, cycles, spike
+  cleaning, parsing, CSV).
 
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.

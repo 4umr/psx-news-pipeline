@@ -8,6 +8,7 @@
   python -m pipeline test                send a test message to Telegram
   python -m pipeline chats               list chats the bot can see (find channel id)
   python -m pipeline about               post the "About this channel" message (to pin)
+  python -m pipeline portfolio --file holdings.csv --dry-run   portfolio review into out/portfolio
 """
 from __future__ import annotations
 
@@ -59,6 +60,9 @@ def main() -> None:
     lb.add_argument("--analyse", default="", help="any stock(s), comma-separated: full analysis now, always sent")
     lb.add_argument("--morning", action="store_true", help="pre-open message: last night's levels + what is new")
     sub.add_parser("selftest", help="check every Research Lab formula and the data sources")
+    pf = sub.add_parser("portfolio", help="portfolio review (holdings from --file, or the PORTFOLIO value the bot sends)")
+    pf.add_argument("--file", default="", help="holdings: text, CSV or Excel file")
+    pf.add_argument("--dry-run", action="store_true", help="write the report to out/portfolio instead of sending")
     rv = sub.add_parser("review", help="replay recent important headlines through the main-channel editor")
     rv.add_argument("--hours", type=float, default=36)
     so = sub.add_parser("sotd", help="Stock of the Day: pick today's company, build the report, post it")
@@ -81,6 +85,15 @@ def main() -> None:
         syms = on_demand or [x.strip().upper() for x in args.symbols.split(",") if x.strip()]
         lab(load_config(), args.dry_run, args.force, syms or None, only=bool(on_demand))
         return
+    if args.cmd == "portfolio":
+        from pathlib import Path
+
+        from .pf import holdings, run as portfolio
+        text = None
+        if args.file:
+            f = Path(args.file)
+            text = holdings.from_file(f.name, f.read_bytes())
+        sys.exit(0 if portfolio(load_config(), text, args.dry_run) else 1)
     if args.cmd == "selftest":
         from .selftest import run as selftest
         sys.exit(1 if selftest() else 0)

@@ -3,8 +3,9 @@ used from the phone without opening GitHub:
 
   STCL   or   /analyse STCL,LUCK     Research Lab card(s) for any stock now (starts lab.yml, about 3-6 minutes)
   /note FABL                         Stock of the Day note preview for that company, to this chat only
+  /portfolio + holdings, or a CSV / Excel file from the broker: full portfolio review, 8 pages (lab.yml)
   /levels                            last night's Research Lab levels with live prices
-  /status                            is everything running? today's numbers
+  /status                           is everything running? today's numbers
   /help                              this list
 
 Messages from anyone else are ignored: never answered and never logged (Actions logs are public). Checked at
@@ -26,6 +27,9 @@ _OFFSET: dict = {"next": None}   # next update id; also in state 'tg_offset' so 
 HELP = ("<b>Commands</b> (only this chat can use them)\n"
         "<b>STCL</b> or <b>/analyse STCL,LUCK</b>: Research Lab card for any stock, now (about 3-6 minutes)\n"
         "<b>/note FABL</b>: Stock of the Day note preview for that company, to this chat only (about 5 minutes)\n"
+        "<b>/portfolio</b> then one holding per line (FFC 500 @ 450, MEBL 800, OGDC 20%, cash 100000), or send the "
+        "broker's CSV / Excel file: full portfolio review, 8 pages (about 6-8 minutes). <b>/portfolio</b> alone "
+        "repeats the last one\n"
         "<b>/levels</b>: last night's Research Lab levels with live prices\n"
         "<b>/status</b>: is everything running, today's numbers\n"
         "<b>/help</b>: this list")
@@ -89,7 +93,15 @@ def handle(state, sender, cfg: dict, now: datetime) -> int:
             continue
         if time.time() - m.get("date", 0) > 1800:
             continue  # sent while the loop was down: too old to act on
-        text = (m.get("text") or "").strip()
+        text = (m.get("text") or m.get("caption") or "").strip()
+        if m.get("document"):
+            got = _document(m["document"])
+            if got is None:
+                sender.send_admin("I could not read that file. Send a CSV or Excel file with symbol and quantity "
+                                  "columns (cost optional), or type the holdings after /portfolio.")
+                n += 1
+                continue
+            text = "/portfolio\n" + got
         if not text:
             continue
         try:
@@ -102,6 +114,59 @@ def handle(state, sender, cfg: dict, now: datetime) -> int:
             n += 1
     _OFFSET["next"] = state.data.get("tg_offset") or 0
     return n
+
+
+def _document(doc: dict) -> str | None:
+    """A holdings file sent to the bot (CSV, TXT, XLSX; at most 1 MB) -> holdings text."""
+    from .pf import holdings
+    name = doc.get("file_name") or "file"
+    if (doc.get("file_size") or 0) > 1_000_000 or not name.lower().endswith((".csv", ".txt", ".xlsx", ".xlsm")):
+        return None
+    f = _api("getFile", file_id=doc.get("file_id"))
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not f or not f.get("file_path") or not token:
+        return None
+    try:
+        r = http().get(f"https://api.telegram.org/file/bot{token}/{f['file_path']}", timeout=30)
+        r.raise_for_status()
+        return holdings.from_file(name, r.content) or None
+    except Exception as e:  # noqa: BLE001
+        log.warning("document download failed: %s", type(e).__name__)
+        return None
+
+
+def _portfolio(arg: str, used: dict) -> str:
+    """Check the holdings here (quick reply on mistakes), then start the review with them ENCRYPTED."""
+    from .pf import encrypt, holdings
+    if not arg.strip():
+        ok, why = dispatch("lab.yml", {"command": "lab", "portfolio": "saved"})
+        if ok:
+            used["n"] += 1
+        return ("Reviewing your last portfolio again: the report arrives here in about 6-8 minutes."
+                if ok else f"Could not start it: {esc(why)}.")
+    hold, cash, mode, probs = holdings.parse(arg)
+    if not hold or mode == "mixed":
+        return ("I could not read the holdings" + (f" ({esc('; '.join(probs[:3]))})" if probs else "") +
+                ". Send <b>/portfolio</b> and then one holding per line, for example:\nFFC 500 @ 450\nMEBL 800\n"
+                "OGDC 1000 @ 220\ncash 100000\n(or percentages: FFC 20%, ...; or the broker's CSV / Excel file)")
+    known = _known()
+    unknown = [h["sym"] for h in hold if known and h["sym"] not in known]
+    if unknown:
+        return f"Not PSX symbols I can find: {esc(', '.join(unknown[:8]))}. Please check and send again."
+    if len(hold) > 60:
+        return "That is more than 60 holdings; please send the largest 60."
+    try:
+        enc = encrypt(arg)
+    except Exception as e:  # noqa: BLE001
+        log.warning("portfolio encryption failed: %s", type(e).__name__)
+        return "Could not prepare the review here (encryption unavailable). Try again later."
+    ok, why = dispatch("lab.yml", {"command": "lab", "portfolio": "enc:" + enc})
+    if not ok:
+        return f"Could not start it: {esc(why)}. Try again in a few minutes."
+    used["n"] += 1
+    note = f" ({len(probs)} line{'s' if len(probs) > 1 else ''} skipped: {esc(probs[0])})" if probs else ""
+    return (f"Reviewing your portfolio of {len(hold)} stocks{' plus cash' if cash else ''}{note}: performance, risk, "
+            "stress tests, fundamentals and the rule check. The 8-page report arrives here in about 6-8 minutes.")
 
 
 def _symbols(arg: str) -> list[str]:
@@ -126,6 +191,19 @@ def respond(text: str, state, cfg: dict, now: datetime) -> str:
         return status(state, now)
     if cmd in ("levels", "level", "zones"):
         return levels(now)
+    if cmd.split("\n")[0] in ("portfolio", "pf", "folio", "holdings"):
+        day = f"{now:%Y-%m-%d}"
+        used = state.data.get("tg_dispatch") or {}
+        if used.get("d") != day:
+            used = {"d": day, "n": 0}
+        cap = int((cfg.get("commands") or {}).get("max_per_day", 12))
+        if used["n"] >= cap:
+            return f"Today's limit of {cap} on-request runs is used up. Tomorrow again."
+        body = re.sub(r"^/?\s*(portfolio|pf|folio|holdings)(@\w+)?", "", text.strip(), flags=re.I)
+        reply = _portfolio(body, used)
+        state.data["tg_dispatch"] = used
+        log.info("owner command: portfolio")
+        return reply
     if cmd in ("analyse", "analyze", "a", "lab", "stock"):
         syms, what = _symbols(arg), "lab"
     elif cmd in ("note", "sotd"):
