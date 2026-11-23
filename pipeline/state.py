@@ -10,6 +10,7 @@ from .common import ROOT
 STATE_PATH = ROOT / "state" / "state.json"
 SEEN_TTL = 7 * 86400        # remember sent items for 7 days
 TITLE_TTL = 48 * 3600       # fuzzy-dedupe titles over 48h
+PRIVATE = ("level_log", "level_alerts", "price_checks", "tg_dispatch", "tg_offset")
 
 
 class State:
@@ -24,6 +25,9 @@ class State:
                     break
                 except (json.JSONDecodeError, OSError):
                     continue
+        self._blob = self.data.pop("_private", None)
+        if self._blob:
+            self._unseal()
         self.is_new = not self.data
         self.data.setdefault("seen", {})
         self.data.setdefault("titles", [])
@@ -45,8 +49,15 @@ class State:
     def titles(self) -> list:
         return self.data["titles"]
 
-    def add_title(self, tokens: list[str], topic: str = "") -> None:
-        self.data["titles"].append([tokens, int(time.time()), topic])
+    def add_title(self, tokens: list[str], topic: str = "", weak: bool = False) -> None:
+        """weak = seen only from a source that is not on the trusted list: it must not stop the trusted version of
+        the same story later (23 Nov 2026: 'IMF approves $497 mln loan' came first from Yeni Safak, and every later
+        trusted report was dropped as a duplicate of it, so the channel never carried it)."""
+        self.data["titles"].append([tokens, int(time.time()), topic] + ([1] if weak else []))
+
+    def strong_titles(self) -> list:
+        """Titles from trusted / official sources only (what a trusted item is de-duplicated against)."""
+        return [t for t in self.data["titles"] if not (len(t) > 3 and t[3])]
 
     # --- snapshots / flags ------------------------------------------
     def snap(self, name: str, default=None):
@@ -63,6 +74,33 @@ class State:
 
     def add_headline(self, item: dict) -> None:
         self.data["headlines"].append(item)
+
+    # --- private part ------------------------------------------------
+    # The state file is backed up to the PUBLIC 'state' branch. The Research Lab's level alerts (which stock hit its
+    # buy zone, target or fails-below line), the prices logged for them and the owner's command counter are private
+    # research, so they are stored encrypted inside the file (openssl AES-256, key = the bot token, as the Lab and
+    # swing backups). Without the key (a local test) they stay as they are.
+    def _unseal(self) -> None:
+        try:
+            from .pf import decrypt
+            self.data.update(json.loads(decrypt(self._blob)))
+            self._blob = None
+        except Exception:  # noqa: BLE001  no key here: keep the sealed copy so it is not lost on the next save
+            pass
+
+    def _sealed(self, d: dict) -> dict:
+        import os
+        priv = {k: d[k] for k in PRIVATE if k in d}
+        if not os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
+            return d if not self._blob else {**d, "_private": self._blob}
+        out = {k: v for k, v in d.items() if k not in PRIVATE}
+        try:
+            from .pf import encrypt
+            out["_private"] = encrypt(json.dumps(priv, ensure_ascii=False, separators=(",", ":")))
+        except Exception:  # noqa: BLE001  never write them in the clear: keep the last sealed copy instead
+            if self._blob:
+                out["_private"] = self._blob
+        return out
 
     def save(self) -> None:
         now = time.time()
@@ -81,5 +119,5 @@ class State:
             except OSError:
                 pass
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(d, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        tmp.write_text(json.dumps(self._sealed(d), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         tmp.replace(self.path)

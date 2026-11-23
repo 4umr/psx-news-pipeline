@@ -41,10 +41,13 @@ def _news_alerts(items: list[NewsItem], state: State, cfg: dict) -> tuple[list[N
         if it.topic in global_topics and it.score < cfg["min_score_instant"] and recent_topics.get(it.topic, 0) >= cap:
             continue
         toks = title_tokens(it.title)
-        if is_duplicate(toks, state.titles, it.topic):
+        weak = not editor.trusted(it, cfg)
+        # a trusted report is only a duplicate of an earlier TRUSTED one; a weak site's earlier version of the same
+        # story must not block it (see State.add_title)
+        if is_duplicate(toks, state.titles if weak else state.strong_titles(), it.topic):
             continue
         recent_topics[it.topic] = recent_topics.get(it.topic, 0) + 1
-        state.add_title(toks, it.topic)
+        state.add_title(toks, it.topic, weak)
         state.add_headline({"t": it.title, "u": it.url, "s": it.source, "sc": it.score,
                             "l": it.label, "topic": it.topic, "ts": int(time.time())})
         picked.append(it)
@@ -65,6 +68,49 @@ def _news_alerts(items: list[NewsItem], state: State, cfg: dict) -> tuple[list[N
     if cfg.get("news_mode", "instant") == "instant":
         return instant, digest[:60]  # overflow is queued and posted over the next runs
     return instant, digest[: cfg["max_digest_items"]]
+
+
+CORRO_RETRY_MIN = (20, 45, 90, 180, 360)   # minutes after first sight at which to search again
+
+
+def _corroboration_retries(state: State, cfg: dict, now: datetime) -> list[NewsItem]:
+    """Queued important stories (score >= editor.corroborate_min_score) that only an untrusted site had: search
+    Google News again for a trusted report at 20, 45, 90, 180 and 360 minutes. Found -> the trusted article goes
+    through the normal editor + AI checks (unless a trusted feed already brought it). Not found in 6 hours -> it
+    is listed in the daily report (corro_missed), so a miss is visible instead of silent."""
+    q = state.data.get("corro_queue") or []
+    out, keep = [], []
+    t_now = time.time()
+    for r in q:
+        age = (t_now - r["first"]) / 60
+        n = r.get("n", 1)
+        if age > CORRO_RETRY_MIN[-1] + 30 or n > len(CORRO_RETRY_MIN):
+            missed = state.data.setdefault("corro_missed", [])
+            missed.append({"t": r["t"], "s": r["s"], "ts": r["first"]})
+            state.data["corro_missed"] = missed[-30:]
+            continue
+        if age < CORRO_RETRY_MIN[n - 1]:
+            keep.append(r)
+            continue
+        it = NewsItem(title=r["t"], url=r["u"], source=r["s"], summary=r.get("sm", ""), pk=True,
+                      published=datetime.fromtimestamp(r["pub"], tz=now.tzinfo) if r.get("pub") else None)
+        it.score, it.topic, it.label = r["sc"], r["topic"], r["l"]
+        alt = editor.corroborate(it, cfg, state)
+        r["n"] = n + 1
+        if not alt:
+            keep.append(r)
+            continue
+        toks = title_tokens(alt.title)
+        if is_duplicate(toks, state.strong_titles(), it.topic):
+            log.info("corroboration: a trusted report of '%s' already came in", r["t"][:60])
+            continue
+        state.add_title(toks, it.topic, False)
+        alt.score, alt.topic, alt.label = r["sc"], r["topic"], r["l"]
+        alt.published = it.published
+        log.info("corroborated later by %s: %s", alt.source, alt.title[:80])
+        out.append(alt)
+    state.data["corro_queue"] = keep
+    return out
 
 
 # ---------------------------------------------------------------- formatting
@@ -778,6 +824,9 @@ def _run(cfg: dict, state: State, sender: Sender, now: datetime, errors: list, f
             back.score, back.topic, back.label = r["sc"], r["topic"], r["l"]
             tries[back.title], firsts[back.title] = r["n"], r["first"]
             instant.insert(0, back)
+    # Important stories seen only on untrusted sites: look again for a trusted report over the next 6 hours
+    for back in S("corroboration retries", _corroboration_retries, state, cfg, now, default=[]) or []:
+        instant.insert(0, back)
     if instant and not ctx_text and analysis.available(cfg):
         ctx_text = S("market context", context.build, state, view_now, mk, default="") or ""
 

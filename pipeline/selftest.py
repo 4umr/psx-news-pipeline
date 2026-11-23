@@ -222,13 +222,26 @@ def levels_tests() -> list[str]:
                                           {"date": "2026-11-12", "kind": "warning", "r5": -3.0}]})
     ok("scan record: asset-backed 2, average +0.5%, 50% right; warnings 1, 100% right",
        "asset-backed 2, average +0.5% vs KSE-100, 50% right" in rec and "warnings 1, average -3.0% vs KSE-100, 100% right" in rec)
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+    from datetime import timezone as _tz
+    from unittest import mock as _mock
+
     from .sources import scs as _scs
     v20 = [{"company_code": f"S{i}", "CurrentPrice": 101.0, "LDCP": 100.0} for i in range(20)]
-    ok("all-stock table still yesterday's (shows the previous close) -> not today",
-       _scs.activity_is_today([{"company_code": f"S{i}", "trading_close": 100.0} for i in range(20)], v20) is False)
-    ok("all-stock table updated after the close -> today",
-       _scs.activity_is_today([{"company_code": f"S{i}", "trading_close": 101.0} for i in range(20)], v20) is True)
-    ok("too few moving stocks to tell -> unknown", _scs.activity_is_today([], v20[:5]) is None)
+    # the check depends on the clock (before 16:00 on a weekday it is never today's): pin the time, so the test
+    # gives the same answer whenever it runs (23 Nov 2026: it failed during market hours and would have stopped
+    # every on-request Lab run before 16:00)
+    _pkt = _tz(_td(hours=5))
+    with _mock.patch("pipeline.common.now_pkt", return_value=_dt(2026, 11, 20, 18, 0, tzinfo=_pkt)):
+        ok("all-stock table still yesterday's (shows the previous close) -> not today",
+           _scs.activity_is_today([{"company_code": f"S{i}", "trading_close": 100.0} for i in range(20)], v20) is False)
+        ok("all-stock table updated after the close -> today",
+           _scs.activity_is_today([{"company_code": f"S{i}", "trading_close": 101.0} for i in range(20)], v20) is True)
+        ok("too few moving stocks to tell -> unknown", _scs.activity_is_today([], v20[:5]) is None)
+    with _mock.patch("pipeline.common.now_pkt", return_value=_dt(2026, 11, 20, 9, 17, tzinfo=_pkt)):
+        ok("before 16:00 on a weekday the end-of-day table is never today's (20 Nov 09:17 case)",
+           _scs.activity_is_today([{"company_code": f"S{i}", "trading_close": 101.0} for i in range(20)], v20) is False)
     from . import levelwatch as lw
     buy = {"side": "buy", "zone": (98.0, 100.94), "risk": 93.1, "r1": 104.0, "r2": 110.0}
     ok("level alert: inside the buy zone at 100", [e for e, _ in lw.events(buy, 100.0)] == ["in_zone"])
@@ -463,6 +476,76 @@ def plan_tests() -> list[str]:
     return bad
 
 
+def edge_tests() -> list[str]:
+    """23 Nov 2026 fixes: trusted news not blocked by a weak site's earlier copy, corroboration retries, one global
+    alert per move, private state sealed, model portfolio arithmetic."""
+    import os
+    import tempfile
+    import time as _t
+    from datetime import datetime, timezone
+    from pathlib import Path
+    from unittest import mock
+
+    from . import editor, modelpf, runner, watchers
+    from .common import NewsItem
+    from .scoring import is_duplicate, title_tokens
+    from .state import State
+    bad = []
+
+    def ok(name, cond):
+        if not cond:
+            bad.append(name)
+
+    st = State(Path(tempfile.mkdtemp()) / "s.json")
+    st.add_title(title_tokens("IMF approves $497 mln loan for Pakistan after bailout review"), "imf", weak=True)
+    t2 = title_tokens("IMF approves $497 million loan tranche for Pakistan after review")
+    ok("a trusted report is not a duplicate of a weak site's copy", not is_duplicate(t2, st.strong_titles(), "imf"))
+    ok("a weak site's second copy still is", is_duplicate(t2, st.titles, "imf"))
+    now = datetime.now(timezone.utc)
+    st.data["corro_queue"] = [
+        {"t": "IMF approves $497 mln loan for Pakistan", "u": "u1", "s": "Yeni Safak", "sc": 9, "topic": "imf",
+         "l": "IMF", "n": 1, "pub": None, "first": int(_t.time()) - 25 * 60},
+        {"t": "Old story", "u": "u2", "s": "X", "sc": 9, "topic": "imf", "l": "IMF", "n": 3, "pub": None,
+         "first": int(_t.time()) - 7 * 3600}]
+    alt = NewsItem(title="IMF board approves $497m for Pakistan", url="u3", source="Reuters", published=None,
+                   summary="", pk=True)
+    with mock.patch.object(editor, "corroborate", return_value=alt):
+        out = runner._corroboration_retries(st, {}, now)
+    ok("retry at 20+ minutes finds the trusted report and feeds it to the editor",
+       len(out) == 1 and out[0].source == "Reuters" and out[0].topic == "imf")
+    ok("a story with no trusted report after 6 hours is listed as missed, not kept forever",
+       st.data["corro_queue"] == [] and st.data.get("corro_missed", [{}])[-1].get("t") == "Old story")
+    cfg = {"global_markets": {"BZ=F": ("Brent oil", "$", 2.5)}}
+    n1 = len(watchers.global_moves({"BZ=F": {"pct": -3.3, "date": "2026-11-20", "last": 88.99}}, st, cfg))
+    n2 = len(watchers.global_moves({"BZ=F": {"pct": -3.7, "date": "2026-11-23", "last": 89.18}}, st, cfg))
+    n3 = len(watchers.global_moves({"BZ=F": {"pct": -6.0, "date": "2026-11-24", "last": 85.00}}, st, cfg))
+    ok("one alert per oil move; again only when the fall grows by another threshold", (n1, n2, n3) == (1, 0, 1))
+    units, nav, turn = modelpf.rebalance(1.0, ["A", "B"], {"A": 10.0, "B": 20.0}, None)
+    ok("model portfolio: first purchase costs 0.4%", _close(nav, 0.996) and _close(units["A"], 0.0498))
+    v = modelpf.value(units, {"A": 20.0, "B": 20.0})
+    ok("A doubles -> value 1.494", _close(v, 1.494))
+    u2, nav2, turn2 = modelpf.rebalance(v, ["A", "C"], {"A": 20.0, "B": 20.0, "C": 5.0}, units)
+    ok("switch B -> C: traded 100% of value, cost 0.4%, turnover 50%", _close(nav2, 1.494 * 0.996) and _close(turn2, 0.5))
+    key = os.environ.get("TELEGRAM_BOT_TOKEN")
+    try:
+        os.environ["TELEGRAM_BOT_TOKEN"] = "selftest-key"
+        p = Path(tempfile.mkdtemp()) / "state.json"
+        s1 = State(p)
+        s1.data["level_log"] = [{"sym": "FFC"}]
+        s1.save()
+        raw = p.read_text(encoding="utf-8")
+        ok("private research alerts are encrypted in the public state file", "level_log" not in raw and "_private" in raw)
+        ok("and read back with the key", State(p).data.get("level_log") == [{"sym": "FFC"}])
+    except Exception as e:  # noqa: BLE001  (openssl missing locally)
+        bad.append(f"state sealing could not run ({type(e).__name__})")
+    finally:
+        if key is None:
+            os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+        else:
+            os.environ["TELEGRAM_BOT_TOKEN"] = key
+    return bad
+
+
 def session_tests() -> list[str]:
     """Which session the live data is about (the 13 / 19 Nov 2026 'PSX closed today' mistake, the 09:15
     pre-open 'stocks moving sharply' card), replayed with the real numbers of 18-20 Nov 2026."""
@@ -593,7 +676,7 @@ def run(with_live: bool = True) -> list[str]:
     try:
         bad = [f"formula: {x}" for x in formulas()] + [f"scoring: {x}" for x in scoring()] + \
             [f"levels: {x}" for x in levels_tests()] + [f"session: {x}" for x in session_tests()] + \
-            [f"portfolio: {x}" for x in portfolio_tests()] + [f"plan: {x}" for x in plan_tests()]
+            [f"portfolio: {x}" for x in portfolio_tests()] + [f"plan: {x}" for x in plan_tests()] + [f"edge: {x}" for x in edge_tests()]
     finally:
         logging.disable(logging.NOTSET)
     if with_live:

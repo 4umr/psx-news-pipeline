@@ -59,6 +59,11 @@ def problems(state, cfg: dict, now: datetime) -> list[str]:
                 and str(r.get("why", "")).startswith("AI unavailable"))
     if no_ai >= 3:
         out.append(f"{no_ai} important news items could not be read by the AI today (Gemini busy or failing).")
+    missed = [m for m in state.data.get("corro_missed", []) if m.get("ts", 0) >= start - 6 * 3600]
+    if missed:
+        out.append(f"{len(missed)} important stor{'y' if len(missed) == 1 else 'ies'} seen only on untrusted sites "
+                   "found no trusted report within 6 hours (kept off the channel; check them in the bot chat): "
+                   + "; ".join(f"'{m['t'][:70]}' ({m['s']})" for m in missed[:3]))
     return out
 
 

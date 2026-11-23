@@ -594,6 +594,12 @@ def scan(cfg: dict, dry: bool = False, force: bool = False) -> None:
         if off:
             text += "\n\n<b>Rules switched off</b>\n" + "\n".join(esc(x) for x in off)
         s.send_admin(text)
+    try:  # live paper test of the model portfolios that tested best (modelpf.py)
+        from . import modelpf
+        modelpf.run(df, sess, s, force)
+    except Exception as e:  # noqa: BLE001
+        log.exception("swing: model portfolios failed")
+        notes.append(f"Model portfolio update failed today ({type(e).__name__}).")
     if notes:
         s.send_admin("<b>Swing scanner check</b>\n" + "\n".join(esc(n) for n in notes))
     st["last_scan"] = f"{sess:%Y-%m-%d}"

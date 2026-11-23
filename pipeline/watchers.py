@@ -1462,7 +1462,15 @@ def global_moves(mk: dict, state: State, cfg: dict) -> list[Alert]:
         k = f"g:{sym}:{d['date']}"
         if state.flag(k):
             continue
+        # The same move came three times (Brent -3.3% Fri 13:40, -3.7% Mon 04:31, -3.0% Mon 12:00; gold Mon 06:33 and
+        # 10:14): futures' daily bar date rolls overnight, so the date key alone re-alerts the same fall. One alert
+        # per market per 18 hours unless the move has grown by another full threshold.
+        last = (state.data.setdefault("g_last", {})).get(sym)
+        if last and time.time() - last["ts"] < 18 * 3600 and not (
+                (d["pct"] > 0) == (last["pct"] > 0) and abs(d["pct"]) >= abs(last["pct"]) + th):
+            continue
         state.set_flag(k)
+        state.data["g_last"][sym] = {"ts": int(time.time()), "pct": float(d["pct"])}
         val = f"{unit}{d['last']:,.2f}" if unit == "$" else f"{d['last']:,.2f}{unit if unit == '%' else ''}"
         alerts.append(Alert(
             header("🌐", f"{name} {fmt_pct(d['pct'], 1)}", "Global market move") + "\n"

@@ -149,7 +149,7 @@ def corroborate(it: NewsItem, cfg: dict, state, days: int = 2) -> NewsItem | Non
     log_ = state.data.setdefault("corroborate", [])
     now = _t.time()
     log_[:] = [x for x in log_ if now - x < 3600]
-    if len(log_) >= int(ed.get("corroborate_per_hour", 6)):
+    if len(log_) >= int(ed.get("corroborate_per_hour", 12)):
         return None
     log_.append(now)
     words = _words(it.title)
@@ -219,10 +219,21 @@ def before_ai(it: NewsItem, state, cfg: dict, view: list[dict]) -> str:
     """Checks that need no AI. '' = continue, else the reason to keep it off the main channel."""
     ed = _cfg(cfg)
     if not trusted(it, cfg):
-        alt = corroborate(it, cfg, state) if it.score >= int(ed.get("corroborate_min_score", 9)) else None
+        important = it.score >= int(ed.get("corroborate_min_score", 9))
+        alt = corroborate(it, cfg, state) if important else None
         if not alt:
+            if important:   # trusted outlets often report 30-120 minutes later: look again (runner)
+                q = state.data.setdefault("corro_queue", [])
+                if not any(r["t"] == it.title for r in q) and len(q) < 20:
+                    q.append({"t": it.title, "u": it.url, "s": it.source, "sm": (it.summary or "")[:300],
+                              "sc": it.score, "topic": it.topic, "l": it.label, "n": 1,
+                              "pub": int(it.published.timestamp()) if it.published else None,
+                              "first": int(__import__("time").time())})
+                return "source not on the trusted list (looking for a trusted report for 6 hours)"
             return "source not on the trusted list"
         log.info("corroborated by %s: %s", alt.source, alt.title[:80])
+        from .scoring import title_tokens
+        state.add_title(title_tokens(alt.title), it.topic, False)
         it.title, it.url, it.source = alt.title, alt.url, alt.source
     if r := official_covered(it, state, cfg):
         return r

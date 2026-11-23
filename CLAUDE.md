@@ -618,6 +618,39 @@ channel 24/7. Runs on **GitHub Actions** (public repo `4umr/psx-news-pipeline`, 
   cut 70% -> 45%, projection 2,395.08, model sector cap + rounding + keep, trim 2,000 shares). Sample: lab.yml
   input `sample-plan`; local `PORTFOLIO=sample-plan python -m pipeline portfolio --dry-run` -> out/plan.
 
+## System audit 2026-11-23 (Umer: "check the whole system, weaknesses, what stops us getting an edge")
+- Evidence: last 100 workflow runs all green (19-23 Nov), no component errors, all 21 feeds fresh, ~690 passes per
+  weekday, news median delay 8 min from publication, 33 of 236 news items posted (93 kept as untrusted source).
+- BIGGEST MISS: 'IMF approves $497 mln loan for Pakistan' (Sun 22 Nov 17:06) never reached the channel. It came
+  first from Yeni Safak (untrusted), and `_news_alerts` de-duplicated BEFORE the trust check, so every later
+  trusted report of the same story was silently dropped as a duplicate. Fix: `State.add_title(..., weak)` marks
+  titles from untrusted sources; a trusted item is only de-duplicated against `state.strong_titles()`.
+  Plus `editor.before_ai` queues important untrusted stories (score >= corroborate_min_score 9) in `corro_queue`
+  and `runner._corroboration_retries` searches Google News again at 20/45/90/180/360 min (cap 12 searches/h);
+  found -> the trusted article goes through the normal editor + AI; not found -> `corro_missed` -> 23:45 audit line.
+- Repeated global alerts (Brent -3.3% Fri, -3.7% and -3.0% Mon; gold twice Mon): futures' daily bar date rolls, so
+  the date key re-alerted the same move. `watchers.global_moves`: one alert per market per 18 h unless the move grew
+  by another full threshold (state `g_last`).
+- PRIVACY: the state file is backed up to the PUBLIC `state` branch and held the Research Lab's level alerts (buy
+  zone / target / fails-below hits), their price log and command counters. `State._sealed` / `_unseal`: keys in
+  `state.PRIVATE` (level_log, level_alerts, price_checks, tg_dispatch, tg_offset) are stored encrypted in `_private`
+  (pf.encrypt, key = bot token); without the key nothing is written in the clear (old sealed copy kept).
+- Self-test bug from 20 Nov: `scs.activity_is_today` returns False before 16:00 on weekdays, so two level tests failed
+  whenever the self-test ran in market hours, which stops on-request Lab runs (`lab.run` runs the self-test first).
+  The tests now pin the clock (mock pipeline.common.now_pkt) and a test covers the before-16:00 rule.
+- EDGE: `modelpf.py` = live forward test (paper) of the two portfolios that tested best ("Core growth", "Core
+  defensive", pf/select.py): 20 stocks, equal weight, rebuilt every 63 sessions, 0.4% cost a side, value from
+  adjusted closes every session, benchmarks KSE-100 and the equal-weight liquid universe. State
+  state/model_pf.json (swing cache + encrypted swing-data). Runs at the end of `swing.scan`; private message on
+  start / rebuild days and Fridays (holdings with return since entry, week, since start, next rebuild). First
+  start: the swing scan of 23 Nov 2026. Judge after 2-3 rebuilds, not weeks.
+- Self-test `edge_tests`: weak-vs-trusted dedupe, retry finds a trusted report at 25 min, 6-hour expiry ->
+  missed, oil alerts 1/0/1, model portfolio cost 0.996 / value 1.494 / switch cost + 50% turnover, state sealing.
+- Known limits, not fixed: the repo is public (code and research docs can be copied; a private repo would not have
+  the free minutes the always-on loop needs); back-tests use only stocks listed today (survivorship flatters
+  equal-weight results); results expectations coverage is thin (1 preview stored); `analog_stats.json` still
+  built with the old EPS parser.
+
 ## Main-channel editor (built 2026-11-11) — AI tuning from the first live day
 - Evidence (10 Nov 2026, from `state.json` headlines + raw run logs): 14 news posts on the channel, ~4 worth it.
   Failures: same event from 2-3 outlets (petrol cut BR+ARY, Saudi fund BR+Minute Mirror), weak sites (Investify,
